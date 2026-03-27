@@ -1,8 +1,8 @@
-"""Data fetcher for stock market data using yfinance."""
+"""Data fetcher for stock market data using yfinance with incremental updates."""
 import time
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Callable
+from typing import Dict, List, Optional, Callable, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -16,28 +16,31 @@ logger = logging.getLogger(__name__)
 
 
 class DataFetcher:
-    """Fetch stock data from yfinance with rate limiting and retries."""
+    """Fetch stock data from yfinance with incremental updates and caching."""
 
     def __init__(
         self,
         db: Optional[Database] = None,
         max_workers: int = 2,
         request_delay: float = 0.5,
-        max_retries: int = 3
+        max_retries: int = 3,
+        max_history_days: int = 150
     ):
         """
         Initialize data fetcher.
 
         Args:
             db: Database instance for caching
-            max_workers: Max concurrent threads (default 2 for 2C2G VPS)
+            max_workers: Max concurrent threads
             request_delay: Delay between requests in seconds
             max_retries: Max retry attempts for failed requests
+            max_history_days: Maximum days of history to keep (150 trading days)
         """
         self.db = db or Database()
         self.max_workers = max_workers
         self.request_delay = request_delay
         self.max_retries = max_retries
+        self.max_history_days = max_history_days
         self._last_request_time = 0
 
     def _rate_limited_request(self, func: Callable, *args, **kwargs):
@@ -54,7 +57,7 @@ class DataFetcher:
             except Exception as e:
                 logger.warning(f"Request failed (attempt {attempt + 1}/{self.max_retries}): {e}")
                 if attempt < self.max_retries - 1:
-                    wait_time = (2 ** attempt) * self.request_delay  # Exponential backoff
+                    wait_time = (2 ** attempt) * self.request_delay
                     logger.info(f"Retrying in {wait_time:.1f}s...")
                     time.sleep(wait_time)
                 else:
@@ -62,62 +65,215 @@ class DataFetcher:
 
         return None
 
-    def fetch_stock_data(
-        self,
-        symbol: str,
-        period: str = "6mo",
-        interval: str = "1d"
-    ) -> Optional[pd.DataFrame]:
+    def _get_cached_data(self, symbol: str) -> Tuple[Optional[pd.DataFrame], Optional[datetime.date]]:
         """
-        Fetch historical data for a single stock.
-
-        Args:
-            symbol: Stock symbol (e.g., 'AAPL')
-            period: Data period (1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd, max)
-            interval: Data interval (1m, 2m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 5d, 1wk, 1mo, 3mo)
+        Get cached data from database and return latest date.
 
         Returns:
-            DataFrame with OHLCV data or None if failed
+            Tuple of (DataFrame or None, latest_date or None)
+        """
+        try:
+            conn = self.db.get_connection()
+            cursor = conn.execute(
+                "SELECT date, open, high, low, close, volume FROM market_data WHERE symbol = ? ORDER BY date",
+                (symbol,)
+            )
+            rows = cursor.fetchall()
+
+            if not rows:
+                return None, None
+
+            # Convert to DataFrame
+            df = pd.DataFrame(rows, columns=['date', 'open', 'high', 'low', 'close', 'volume'])
+            df['date'] = pd.to_datetime(df['date'])
+            df.set_index('date', inplace=True)
+
+            # Get latest date
+            latest_date = df.index.max().date()
+
+            logger.debug(f"Cached data for {symbol}: {len(df)} rows, latest {latest_date}")
+            return df, latest_date
+
+        except Exception as e:
+            logger.debug(f"No cached data for {symbol}: {e}")
+            return None, None
+
+    def _fetch_incremental(
+        self,
+        symbol: str,
+        cached_df: Optional[pd.DataFrame],
+        latest_cached_date: Optional[datetime.date]
+    ) -> Optional[pd.DataFrame]:
+        """
+        Fetch incremental data for a symbol.
+
+        If we have cached data, only fetch from the day after latest date.
+        Otherwise fetch full history.
         """
         try:
             ticker = yf.Ticker(symbol)
+
+            if cached_df is not None and latest_cached_date is not None:
+                # Calculate days needed (buffer of 3 days for weekends/holidays)
+                today = datetime.now().date()
+                days_needed = (today - latest_cached_date).days + 3
+
+                if days_needed <= 0:
+                    logger.debug(f"{symbol}: cache up to date")
+                    return cached_df
+
+                # Fetch only needed period
+                period = f"{max(days_needed, 5)}d"  # Minimum 5 days
+                logger.debug(f"{symbol}: fetching incremental {period} (latest cached: {latest_cached_date})")
+            else:
+                # No cache, fetch full history
+                period = "7mo"  # 7 months to ensure 150 trading days
+                logger.debug(f"{symbol}: no cache, fetching full {period}")
+
             df = self._rate_limited_request(
                 ticker.history,
                 period=period,
-                interval=interval,
+                interval="1d",
                 auto_adjust=True
             )
 
             if df is None or df.empty:
-                logger.warning(f"No data returned for {symbol}")
-                return None
+                return cached_df  # Return cached data if fetch fails
 
             # Standardize column names
             df.columns = [c.lower().replace(' ', '_') for c in df.columns]
-
-            # Remove timezone info from index
             df.index = df.index.tz_localize(None) if df.index.tz else df.index
 
-            logger.debug(f"Fetched {len(df)} rows for {symbol}")
+            # Merge with cached data if exists
+            if cached_df is not None:
+                # Remove overlapping dates from cached data
+                cached_df = cached_df[cached_df.index < df.index.min()]
+                # Concatenate
+                df = pd.concat([cached_df, df])
+
+            # Keep only last max_history_days
+            if len(df) > self.max_history_days:
+                df = df.tail(self.max_history_days)
+
+            logger.debug(f"{symbol}: merged data has {len(df)} rows")
             return df
 
         except Exception as e:
             logger.error(f"Failed to fetch {symbol}: {e}")
-            return None
+            return cached_df  # Return cached data on error
+
+    def fetch_stock_data(
+        self,
+        symbol: str,
+        period: str = "6mo",
+        interval: str = "1d",
+        use_cache: bool = True
+    ) -> Optional[pd.DataFrame]:
+        """
+        Fetch historical data with incremental update support.
+
+        Args:
+            symbol: Stock symbol
+            period: Data period (ignored if use_cache=True with existing data)
+            interval: Data interval
+            use_cache: Whether to use cached data
+
+        Returns:
+            DataFrame with OHLCV data or None if failed
+        """
+        if use_cache:
+            # Try to get cached data
+            cached_df, latest_date = self._get_cached_data(symbol)
+
+            # Fetch incremental data
+            df = self._fetch_incremental(symbol, cached_df, latest_date)
+
+            if df is not None and not df.empty:
+                # Save to database (incremental rows only)
+                self._save_to_db(symbol, df, incremental=True)
+                return df
+
+            return cached_df  # Return cached if incremental fails
+        else:
+            # Bypass cache, fetch directly
+            try:
+                ticker = yf.Ticker(symbol)
+                df = self._rate_limited_request(
+                    ticker.history,
+                    period=period,
+                    interval=interval,
+                    auto_adjust=True
+                )
+
+                if df is None or df.empty:
+                    return None
+
+                df.columns = [c.lower().replace(' ', '_') for c in df.columns]
+                df.index = df.index.tz_localize(None) if df.index.tz else df.index
+
+                self._save_to_db(symbol, df)
+                return df
+
+            except Exception as e:
+                logger.error(f"Failed to fetch {symbol}: {e}")
+                return None
+
+    def _save_to_db(self, symbol: str, df: pd.DataFrame, incremental: bool = True):
+        """Save fetched data to database."""
+        try:
+            if incremental:
+                # Check latest date in database
+                conn = self.db.get_connection()
+                cursor = conn.execute(
+                    "SELECT MAX(date) FROM market_data WHERE symbol = ?",
+                    (symbol,)
+                )
+                result = cursor.fetchone()
+                latest_db_date = result[0] if result and result[0] else None
+
+                # Filter only new rows
+                if latest_db_date:
+                    df_to_save = df[df.index > latest_db_date]
+                else:
+                    df_to_save = df
+            else:
+                df_to_save = df
+
+            saved_count = 0
+            for date, row in df_to_save.iterrows():
+                date_str = date.strftime('%Y-%m-%d') if isinstance(date, pd.Timestamp) else str(date)[:10]
+
+                self.db.save_market_data(symbol, {
+                    'date': date_str,
+                    'open': float(row['open']),
+                    'high': float(row['high']),
+                    'low': float(row['low']),
+                    'close': float(row['close']),
+                    'volume': int(row['volume'])
+                })
+                saved_count += 1
+
+            if saved_count > 0:
+                logger.debug(f"Saved {saved_count} new rows for {symbol}")
+
+        except Exception as e:
+            logger.error(f"Error saving {symbol} to database: {e}")
 
     def fetch_multiple(
         self,
         symbols: List[str],
         period: str = "6mo",
-        interval: str = "1d"
+        interval: str = "1d",
+        use_cache: bool = True
     ) -> Dict[str, pd.DataFrame]:
         """
-        Fetch data for multiple stocks with parallel processing.
+        Fetch data for multiple stocks with incremental updates.
 
         Args:
             symbols: List of stock symbols
-            period: Data period
+            period: Data period (for non-cached fetches)
             interval: Data interval
+            use_cache: Whether to use cached data
 
         Returns:
             Dict mapping symbol to DataFrame
@@ -125,24 +281,20 @@ class DataFetcher:
         results = {}
         failed_symbols = []
 
-        logger.info(f"Fetching data for {len(symbols)} symbols with {self.max_workers} workers")
+        logger.info(f"Fetching data for {len(symbols)} symbols (cache enabled: {use_cache})")
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            # Submit all tasks
             future_to_symbol = {
-                executor.submit(self.fetch_stock_data, sym, period, interval): sym
+                executor.submit(self.fetch_stock_data, sym, period, interval, use_cache): sym
                 for sym in symbols
             }
 
-            # Collect results
             for future in as_completed(future_to_symbol):
                 symbol = future_to_symbol[future]
                 try:
                     df = future.result()
                     if df is not None and not df.empty:
                         results[symbol] = df
-                        # Save to database
-                        self._save_to_db(symbol, df)
                     else:
                         failed_symbols.append(symbol)
                 except Exception as e:
@@ -155,42 +307,26 @@ class DataFetcher:
 
         return results
 
-    def _save_to_db(self, symbol: str, df: pd.DataFrame):
-        """Save fetched data to database."""
-        try:
-            for date, row in df.iterrows():
-                # Handle both Timestamp and string dates
-                if isinstance(date, pd.Timestamp):
-                    date_str = date.strftime('%Y-%m-%d')
-                else:
-                    date_str = str(date)[:10]
+    def download_batch(
+        self,
+        symbols: List[str],
+        period: str = "6mo",
+        interval: str = "1d",
+        use_cache: bool = True
+    ) -> Dict[str, pd.DataFrame]:
+        """
+        Download data using incremental updates.
 
-                self.db.save_market_data(symbol, {
-                    'date': date_str,
-                    'open': float(row['open']),
-                    'high': float(row['high']),
-                    'low': float(row['low']),
-                    'close': float(row['close']),
-                    'volume': int(row['volume'])
-                })
-        except Exception as e:
-            logger.error(f"Error saving {symbol} to database: {e}")
+        This method uses fetch_multiple internally which supports caching.
+        """
+        return self.fetch_multiple(symbols, period, interval, use_cache)
 
     def fetch_earnings_calendar(
         self,
         symbols: Optional[List[str]] = None,
         days_ahead: int = 7
     ) -> Dict[str, datetime]:
-        """
-        Fetch earnings calendar for symbols.
-
-        Args:
-            symbols: List of symbols (if None, uses active stocks from DB)
-            days_ahead: Number of days to look ahead
-
-        Returns:
-            Dict mapping symbol to earnings date
-        """
+        """Fetch earnings calendar for symbols."""
         if symbols is None:
             symbols = self.db.get_active_stocks()
 
@@ -204,14 +340,12 @@ class DataFetcher:
                 calendar = self._rate_limited_request(lambda: ticker.calendar)
 
                 if calendar is not None and not calendar.empty:
-                    # Parse earnings date
                     earnings_date = calendar.index[0] if hasattr(calendar.index[0], 'date') else calendar.index[0]
                     if isinstance(earnings_date, pd.Timestamp):
                         earnings_date = earnings_date.date()
                     elif isinstance(earnings_date, datetime):
                         earnings_date = earnings_date.date()
 
-                    # Check if within range
                     if today <= earnings_date <= end_date:
                         earnings[symbol] = earnings_date
                         logger.debug(f"{symbol} earnings on {earnings_date}")
@@ -224,73 +358,6 @@ class DataFetcher:
 
         logger.info(f"Found {len(earnings)} earnings in next {days_ahead} days")
         return earnings
-
-    def download_batch(
-        self,
-        symbols: List[str],
-        period: str = "6mo",
-        interval: str = "1d"
-    ) -> Dict[str, pd.DataFrame]:
-        """
-        Download data using yfinance.download for batch efficiency.
-
-        Args:
-            symbols: List of stock symbols
-            period: Data period
-            interval: Data interval
-
-        Returns:
-            Dict mapping symbol to DataFrame
-        """
-        if not symbols:
-            return {}
-
-        try:
-            # Use yfinance.download with threads=False for VPS stability
-            data = yf.download(
-                tickers=symbols,
-                period=period,
-                interval=interval,
-                group_by='ticker',
-                auto_adjust=True,
-                prepost=False,
-                threads=False,  # Disable parallel in yfinance, we handle our own
-                progress=True
-            )
-
-            results = {}
-
-            if len(symbols) == 1:
-                # Single symbol returns different structure
-                symbol = symbols[0]
-                df = data.copy()
-                df.columns = [c.lower().replace(' ', '_') for c in df.columns]
-                df.index = df.index.tz_localize(None) if df.index.tz else df.index
-                if not df.empty:
-                    results[symbol] = df
-                    self._save_to_db(symbol, df)
-            else:
-                # Multiple symbols
-                for symbol in symbols:
-                    try:
-                        if symbol in data.columns.levels[0]:
-                            df = data[symbol].copy()
-                            df.columns = [c.lower().replace(' ', '_') for c in df.columns]
-                            df.index = df.index.tz_localize(None) if df.index.tz else df.index
-                            df = df.dropna()
-
-                            if not df.empty:
-                                results[symbol] = df
-                                self._save_to_db(symbol, df)
-                    except Exception as e:
-                        logger.warning(f"Error processing {symbol}: {e}")
-
-            logger.info(f"Batch download complete: {len(results)}/{len(symbols)} symbols")
-            return results
-
-        except Exception as e:
-            logger.error(f"Batch download failed: {e}")
-            return {}
 
     def get_sp500_symbols(self) -> List[str]:
         """Fetch S&P 500 symbols from Wikipedia."""
@@ -311,7 +378,6 @@ class DataFetcher:
             url = "https://en.wikipedia.org/wiki/NASDAQ-100"
             tables = pd.read_html(url)
 
-            # Find the table with NASDAQ-100 components
             for table in tables:
                 if 'Ticker' in table.columns or 'Symbol' in table.columns:
                     col_name = 'Ticker' if 'Ticker' in table.columns else 'Symbol'
