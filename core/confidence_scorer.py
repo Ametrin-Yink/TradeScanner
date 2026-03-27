@@ -128,6 +128,11 @@ class ConfidenceScorer:
         score = 12.5  # Start neutral
 
         rsi = indicators.get('rsi', 50)
+        # Ensure rsi is a number, not a dict
+        if isinstance(rsi, dict):
+            rsi = rsi.get('rsi', 50)
+        if not isinstance(rsi, (int, float)):
+            rsi = 50
 
         # RSI-based scoring (strategy-dependent)
         if strategy in ['Momentum', 'EP']:
@@ -151,6 +156,11 @@ class ConfidenceScorer:
 
         # Trend strength (ADR)
         adr = indicators.get('adr', {}).get('adr_pct', 0.02)
+        if isinstance(adr, dict):
+            adr = adr.get('adr_pct', 0.02)
+        if not isinstance(adr, (int, float)):
+            adr = 0.02
+
         if adr >= 0.04:  # High volatility
             score += 6.5
         elif adr >= 0.025:
