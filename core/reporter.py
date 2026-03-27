@@ -151,6 +151,14 @@ class ReportGenerator:
         for i, opp in enumerate(opportunities[:10], 1):
             rrr = (opp.take_profit - opp.entry_price) / (opp.entry_price - opp.stop_loss) if opp.entry_price != opp.stop_loss else 0
 
+            # Determine confidence color class
+            if opp.confidence >= 70:
+                conf_class = "confidence-high"
+            elif opp.confidence >= 50:
+                conf_class = "confidence-medium"
+            else:
+                conf_class = "confidence-low"
+
             chart_html = ""
             if opp.symbol in chart_paths:
                 chart_relative_path = chart_paths[opp.symbol]
@@ -165,7 +173,7 @@ class ReportGenerator:
                     <span class="rank">#{i}</span>
                     <span class="symbol">{opp.symbol}</span>
                     <span class="strategy">{opp.strategy}</span>
-                    <span class="confidence">{opp.confidence}% confidence</span>
+                    <span class="confidence {conf_class}">{opp.confidence}%</span>
                 </div>
                 <div class="opp-details">
                     <div class="trade-levels">
@@ -175,7 +183,7 @@ class ReportGenerator:
                         <span class="level rrr">R/R: {rrr:.1f}x</span>
                     </div>
                     <div class="ai-analysis">
-                        <h4>AI Analysis</h4>
+                        <h4>Analysis</h4>
                         <p><strong>Reasoning:</strong> {opp.ai_reasoning}</p>
                         <p><strong>Catalyst:</strong> {opp.catalyst}</p>
                         <p><strong>Risks:</strong> {risk_badges}</p>
@@ -222,81 +230,233 @@ class ReportGenerator:
     <style>
         * {{ box-sizing: border-box; margin: 0; padding: 0; }}
         body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #f5f5f5;
-            color: #333;
-            line-height: 1.6;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            background: #f8f9fa;
+            color: #212529;
+            line-height: 1.5;
+            font-size: 14px;
         }}
-        .container {{ max-width: 1200px; margin: 0 auto; padding: 20px; }}
+        .container {{ max-width: 1400px; margin: 0 auto; padding: 16px; }}
         header {{
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: #1a1a2e;
             color: white;
-            padding: 30px;
-            border-radius: 10px;
-            margin-bottom: 30px;
+            padding: 20px 24px;
+            margin-bottom: 20px;
+            border-bottom: 3px solid #16213e;
         }}
-        header h1 {{ margin-bottom: 10px; }}
-        .meta {{ opacity: 0.9; font-size: 14px; }}
+        header h1 {{
+            margin-bottom: 8px;
+            font-size: 24px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+        }}
+        .meta {{
+            opacity: 0.8;
+            font-size: 13px;
+            color: #a0a0a0;
+        }}
         .sentiment {{
             display: inline-block;
-            padding: 8px 16px;
-            border-radius: 20px;
+            padding: 4px 12px;
+            border-radius: 4px;
             color: white;
-            font-weight: bold;
-            margin-top: 10px;
+            font-weight: 600;
+            margin-top: 8px;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
             background: {sentiment_color};
         }}
         .stats {{
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-            gap: 15px;
-            margin-bottom: 30px;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 12px;
+            margin-bottom: 24px;
         }}
         .stat-box {{
             background: white;
-            padding: 20px;
-            border-radius: 8px;
+            padding: 16px;
+            border-radius: 4px;
             text-align: center;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            border: 1px solid #dee2e6;
         }}
-        .stat-value {{ font-size: 28px; font-weight: bold; color: #667eea; }}
-        .stat-label {{ font-size: 12px; color: #666; text-transform: uppercase; }}
+        .stat-value {{ font-size: 24px; font-weight: 700; color: #1a1a2e; }}
+        .stat-label {{ font-size: 11px; color: #6c757d; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 4px; }}
+        .section-title {{
+            font-size: 16px;
+            font-weight: 600;
+            margin: 24px 0 12px 0;
+            color: #1a1a2e;
+            border-bottom: 2px solid #dee2e6;
+            padding-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }}
         .opportunity {{
             background: white;
-            border-radius: 10px;
-            padding: 20px;
-            margin-bottom: 20px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            border-radius: 4px;
+            padding: 16px;
+            margin-bottom: 12px;
+            border: 1px solid #dee2e6;
+            border-left: 4px solid #1a1a2e;
         }}
         .opp-header {{
             display: flex;
             align-items: center;
-            gap: 15px;
-            margin-bottom: 15px;
-            padding-bottom: 15px;
-            border-bottom: 2px solid #f0f0f0;
+            gap: 12px;
+            margin-bottom: 12px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid #e9ecef;
         }}
         .rank {{
-            font-size: 24px;
-            font-weight: bold;
-            color: #667eea;
-            width: 40px;
+            font-size: 18px;
+            font-weight: 700;
+            color: #1a1a2e;
+            width: 32px;
+            text-align: center;
         }}
-        .symbol {{ font-size: 24px; font-weight: bold; }}
+        .symbol {{ font-size: 20px; font-weight: 700; color: #1a1a2e; }}
         .strategy {{
-            background: #e3f2fd;
-            color: #1976d2;
-            padding: 4px 12px;
-            border-radius: 12px;
-            font-size: 12px;
+            background: #e9ecef;
+            color: #495057;
+            padding: 2px 8px;
+            border-radius: 3px;
+            font-size: 11px;
             font-weight: 600;
+            text-transform: uppercase;
         }}
         .confidence {{
             margin-left: auto;
-            color: #28a745;
+            font-weight: 700;
+            font-size: 16px;
+        }}
+        .confidence-high {{ color: #198754; }}
+        .confidence-medium {{ color: #fd7e14; }}
+        .confidence-low {{ color: #dc3545; }}
+        .trade-levels {{
+            display: flex;
+            gap: 8px;
+            margin-bottom: 12px;
+            flex-wrap: wrap;
+        }}
+        .level {{
+            padding: 4px 10px;
+            border-radius: 3px;
+            font-size: 12px;
             font-weight: 600;
         }}
-        .trade-levels {{
+        .entry {{ background: #d1ecf1; color: #0c5460; }}
+        .stop {{ background: #f8d7da; color: #721c24; }}
+        .target {{ background: #d4edda; color: #155724; }}
+        .rrr {{ background: #fff3cd; color: #856404; }}
+        .ai-analysis {{
+            background: #f8f9fa;
+            padding: 12px;
+            border-radius: 4px;
+            margin-top: 12px;
+            border: 1px solid #e9ecef;
+        }}
+        .ai-analysis h4 {{
+            margin-bottom: 8px;
+            color: #1a1a2e;
+            font-size: 13px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }}
+        .ai-analysis p {{ margin-bottom: 6px; font-size: 13px; line-height: 1.5; }}
+        .badge {{
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 10px;
+            background: #e9ecef;
+            color: #495057;
+            margin-right: 4px;
+            margin-bottom: 4px;
+        }}
+        .badge-risk {{ background: #f8d7da; color: #721c24; }}
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+            border: 1px solid #dee2e6;
+            font-size: 13px;
+        }}
+        th, td {{ padding: 10px 12px; text-align: left; border-bottom: 1px solid #dee2e6; }}
+        th {{ background: #1a1a2e; color: white; font-weight: 600; font-size: 12px; text-transform: uppercase; }}
+        tr:hover {{ background: #f8f9fa; }}
+        .fail-symbols {{
+            background: #f8f9fa;
+            padding: 12px;
+            border-radius: 4px;
+            color: #6c757d;
+            font-size: 13px;
+            border: 1px solid #dee2e6;
+        }}
+        iframe {{ border-radius: 4px; border: 1px solid #dee2e6; margin-top: 12px; }}
+        footer {{ margin-top: 32px; padding-top: 16px; border-top: 1px solid #dee2e6; text-align: center; color: #6c757d; font-size: 11px; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Trade Scanner Report</h1>
+            <div class="meta">
+                Date: {scan_date} | Time: {scan_time} ET | Scanned: {total_stocks} stocks
+            </div>
+            <div class="sentiment">Sentiment: {market_sentiment.upper()}</div>
+        </header>
+
+        <div class="stats">
+            <div class="stat-box">
+                <div class="stat-value">{total_stocks}</div>
+                <div class="stat-label">Scanned</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-value">{success_count}</div>
+                <div class="stat-label">Success</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-value">{fail_count}</div>
+                <div class="stat-label">Failed</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-value">{len(opportunities[:10])}</div>
+                <div class="stat-label">Top Picks</div>
+            </div>
+        </div>
+
+        <h2 class="section-title">Top 10 Opportunities</h2>
+        {top_section}
+
+        <h2 class="section-title">Additional Candidates (11-40)</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Symbol</th>
+                    <th>Strategy</th>
+                    <th>Entry</th>
+                    <th>Confidence</th>
+                    <th>Key Signals</th>
+                </tr>
+            </thead>
+            <tbody>
+                {runners_section}
+            </tbody>
+        </table>
+
+        <h2 class="section-title">Failed Symbols</h2>
+        <div class="fail-symbols">
+            {fail_section}
+        </div>
+
+        <footer>
+            <p>Trade Scanner v1.0 | Generated on {scan_date} {scan_time}</p>
+            <p>For informational purposes only. Not financial advice.</p>
+        </footer>
+    </div>
+</body>
+</html>"""
             display: flex;
             gap: 15px;
             margin-bottom: 15px;
