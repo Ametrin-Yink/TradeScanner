@@ -232,7 +232,8 @@ class MemoryOptimizedScanner:
                 total_stocks=len(symbols),
                 success_count=len(symbols),  # Simplified
                 fail_count=0,
-                fail_symbols=[]
+                fail_symbols=[],
+                sentiment_result=sentiment_result
             )
 
             # Save scan result

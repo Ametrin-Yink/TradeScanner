@@ -34,7 +34,8 @@ class ReportGenerator:
         success_count: int,
         fail_count: int,
         fail_symbols: List[str],
-        all_candidates: List = None
+        all_candidates: List = None,
+        sentiment_result: Dict = None
     ) -> str:
         """
         Generate full HTML report.
@@ -46,6 +47,8 @@ class ReportGenerator:
             success_count: Successfully fetched stocks
             fail_count: Failed stocks
             fail_symbols: List of failed symbols
+            all_candidates: List of all candidates
+            sentiment_result: Full sentiment analysis result with reasoning
 
         Returns:
             Path to generated report
@@ -61,6 +64,7 @@ class ReportGenerator:
             opportunities=opportunities,
             all_candidates=all_candidates or [],
             market_sentiment=market_sentiment,
+            sentiment_result=sentiment_result or {},
             scan_date=scan_date,
             scan_time=scan_time,
             total_stocks=total_stocks,
@@ -126,6 +130,7 @@ class ReportGenerator:
         opportunities: List[AnalyzedOpportunity],
         all_candidates: List,
         market_sentiment: str,
+        sentiment_result: Dict,
         scan_date: str,
         scan_time: str,
         total_stocks: int,
@@ -135,6 +140,18 @@ class ReportGenerator:
         chart_paths: Dict[str, str]
     ) -> str:
         """Build HTML report content."""
+
+        # Extract sentiment details
+        sentiment_reasoning = sentiment_result.get('reasoning', '')
+        sentiment_factors = sentiment_result.get('key_factors', [])
+        sentiment_confidence = sentiment_result.get('confidence', 50)
+
+        # Format sentiment details
+        sentiment_factors_html = ""
+        if sentiment_factors:
+            sentiment_factors_html = '<div class="sentiment-factors">' + ''.join([f'<span class="factor">{f}</span>' for f in sentiment_factors[:5]]) + '</div>'
+
+        sentiment_reasoning_html = f'<div class="sentiment-reasoning">{sentiment_reasoning}</div>' if sentiment_reasoning else ""
 
         sentiment_color = {
             'bullish': '#28a745',
@@ -266,21 +283,38 @@ class ReportGenerator:
             letter-spacing: 0.5px;
             background: {sentiment_color};
         }}
-        .stats {{
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-            gap: 12px;
-            margin-bottom: 24px;
-        }}
-        .stat-box {{
-            background: white;
-            padding: 16px;
+        .sentiment-details {{
+            background: rgba(255,255,255,0.1);
+            padding: 12px 16px;
             border-radius: 4px;
-            text-align: center;
-            border: 1px solid #dee2e6;
+            margin-top: 12px;
+            font-size: 13px;
+            line-height: 1.5;
         }}
-        .stat-value {{ font-size: 24px; font-weight: 700; color: #1a1a2e; }}
-        .stat-label {{ font-size: 11px; color: #6c757d; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 4px; }}
+        .sentiment-reasoning {{
+            color: #e0e0e0;
+            margin-bottom: 8px;
+        }}
+        .sentiment-factors {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 8px;
+        }}
+        .sentiment-factors .factor {{
+            background: rgba(255,255,255,0.15);
+            padding: 2px 8px;
+            border-radius: 3px;
+            font-size: 11px;
+            color: #f0f0f0;
+        }}
+        .stats-compact {{
+            font-size: 12px;
+            color: #6c757d;
+            margin-bottom: 16px;
+            padding: 8px 0;
+            border-bottom: 1px solid #dee2e6;
+        }}
         .section-title {{
             font-size: 16px;
             font-weight: 600;
@@ -428,26 +462,13 @@ class ReportGenerator:
             <div class="meta">
                 Date: {scan_date} | Time: {scan_time} ET | Scanned: {total_stocks} stocks
             </div>
-            <div class="sentiment">Sentiment: {market_sentiment.upper()}</div>
+            <div class="sentiment">Sentiment: {market_sentiment.upper()} ({sentiment_confidence}% confidence)</div>
+            {sentiment_reasoning_html}
+            {sentiment_factors_html}
         </header>
 
-        <div class="stats">
-            <div class="stat-box">
-                <div class="stat-value">{total_stocks}</div>
-                <div class="stat-label">Scanned</div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-value">{success_count}</div>
-                <div class="stat-label">Success</div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-value">{fail_count}</div>
-                <div class="stat-label">Failed</div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-value">{len(opportunities[:10])}</div>
-                <div class="stat-label">Top Picks</div>
-            </div>
+        <div class="stats-compact">
+            Scanned: {total_stocks} | Success: {success_count} | Failed: {fail_count} | Top Picks: {len(opportunities[:10])}
         </div>
 
         <h2 class="section-title">Top 10 Opportunities</h2>

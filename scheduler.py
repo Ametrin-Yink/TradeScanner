@@ -140,7 +140,8 @@ class TradeScanner:
                 total_stocks=len(symbols),
                 success_count=len(market_data),
                 fail_count=len(fail_symbols),
-                fail_symbols=fail_symbols
+                fail_symbols=fail_symbols,
+                sentiment_result=sentiment_result
             )
 
             # Save scan result
