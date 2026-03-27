@@ -10,7 +10,8 @@ from data.db import Database
 from core.fetcher import DataFetcher
 from core.screener import StrategyScreener
 from core.market_analyzer import MarketAnalyzer
-from core.selector import CandidateSelector
+from core.selector import CandidateSelector, select_and_score_candidates
+from core.ai_confidence_scorer import ScoredCandidate
 from core.analyzer import OpportunityAnalyzer
 from core.reporter import ReportGenerator
 
@@ -114,14 +115,19 @@ class TradeScanner:
                 logger.warning("No candidates found")
                 return None
 
-            # Step 3: Select top 10
-            logger.info("Step 3/5: Selecting top 10 opportunities...")
-            top_10 = self.selector.select_top_10(candidates, market_sentiment)
-            logger.info(f"Selected {len(top_10)} top opportunities")
+            # Step 3: Select and score top 10 with AI
+            logger.info("Step 3/5: AI scoring and selecting top 10 opportunities...")
+            top_10_scored = self.selector.select_top_10(candidates, market_sentiment)
+            logger.info(f"Selected {len(top_10_scored)} top opportunities")
+
+            # Log confidence summary
+            if top_10_scored:
+                confidences = [c.confidence for c in top_10_scored]
+                logger.info(f"Confidence range: {min(confidences)}-{max(confidences)}%, avg: {sum(confidences)/len(confidences):.1f}%")
 
             # Step 4: Deep analysis
             logger.info("Step 4/5: Running deep AI analysis...")
-            analyzed = self.opportunity_analyzer.analyze_all(top_10, market_sentiment)
+            analyzed = self.opportunity_analyzer.analyze_all(top_10_scored, market_sentiment)
             logger.info(f"Analyzed {len(analyzed)} opportunities")
 
             # Step 5: Generate report
