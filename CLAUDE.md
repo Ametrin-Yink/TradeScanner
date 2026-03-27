@@ -53,3 +53,21 @@ Automated US stock trading opportunity scanner based on strategies in `Strategy_
 - This session uses kimi-k2.5 model
 - Subagents inherit parent model automatically - do not specify model parameter
 - All API keys are in `config/secrets.json` (already configured with DashScope and Tavily)
+- **API Key Access:** Secrets.json uses nested JSON - use `settings.get_secret('dashscope.api_key')` not `settings.get_secret('dashscope_api_key')`
+
+## Server Deployment
+
+- **Port:** Cloud security group only allows 80, 443, 22, 19801 - use 19801 for Flask server
+- **Background:** Use `nohup python ... &` to keep server running after SSH disconnect
+- **Path Issues:** Always set `sys.path.insert(0, '/home/admin/Projects/TradeChanceScreen')` when running api/server.py directly
+
+## Data Sources
+
+- **Stock Lists:** Wikipedia blocks scraping (403) - use Slickcharts (slickcharts.com/sp500, /nasdaq100, /dowjones) for reliable stock lists
+- **yfinance:** Use `yfinance.download(threads=False)` for VPS stability, batch requests for 500+ stocks
+- **Charts:** Set `matplotlib.use('Agg')` before importing pyplot for headless servers
+
+## Testing
+
+- **Full Scan:** 518 stocks takes ~11 minutes, generates 10-15 candidates typically
+- **Server:** Check `ss -tlnp | grep 19801` to verify Flask is listening
