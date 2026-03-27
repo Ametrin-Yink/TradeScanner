@@ -147,11 +147,10 @@ Sentiment definitions:
             payload = {
                 "model": self.model,
                 "messages": [
-                    {"role": "system", "content": "You are a market analyst specializing in sentiment analysis."},
+                    {"role": "system", "content": "You are a market analyst specializing in sentiment analysis. Return valid JSON only, no markdown, no explanation."},
                     {"role": "user", "content": prompt}
                 ],
-                "temperature": 0.3,
-                "response_format": {"type": "json_object"}
+                "temperature": 0.3
             }
 
             response = requests.post(url, headers=headers, json=payload, timeout=60)
@@ -160,8 +159,24 @@ Sentiment definitions:
             data = response.json()
             content = data['choices'][0]['message']['content']
 
-            # Parse JSON response
-            result = json.loads(content)
+            # Extract JSON from response
+            import re
+            json_match = re.search(r'\{.*\}', content, re.DOTALL)
+            if json_match:
+                result = json.loads(json_match.group())
+            else:
+                result = json.loads(content)
+
+            # Ensure result is a dict with required keys
+            if not isinstance(result, dict):
+                logger.warning(f"AI returned non-dict type: {type(result)}, using fallback")
+                return {
+                    'sentiment': 'neutral',
+                    'confidence': 50,
+                    'reasoning': 'Invalid response format',
+                    'key_factors': []
+                }
+
             logger.info(f"AI sentiment analysis: {result.get('sentiment')} (confidence: {result.get('confidence')})")
             return result
 

@@ -70,6 +70,11 @@ class OpportunityAnalyzer:
         # AI analysis
         ai_analysis = self._call_ai_analysis(match, df, news, market_sentiment)
 
+        # Ensure ai_analysis is a dict
+        if not isinstance(ai_analysis, dict):
+            logger.warning(f"AI analysis returned non-dict type for {match.symbol}, using fallback")
+            ai_analysis = self._fallback_analysis(match)
+
         return AnalyzedOpportunity(
             symbol=match.symbol,
             strategy=match.strategy,
@@ -80,10 +85,10 @@ class OpportunityAnalyzer:
             match_reasons=match.match_reasons,
             ai_reasoning=ai_analysis.get('reasoning', ''),
             catalyst=ai_analysis.get('catalyst', ''),
-            risk_factors=ai_analysis.get('risk_factors', []),
-            position_size=ai_analysis.get('position_size', 'normal'),
-            time_frame=ai_analysis.get('time_frame', 'short-term'),
-            alternative_scenario=ai_analysis.get('alternative_scenario', '')
+            risk_factors=ai_analysis.get('risk_factors', []) if isinstance(ai_analysis.get('risk_factors'), list) else [],
+            position_size=ai_analysis.get('position_size', 'normal') if isinstance(ai_analysis.get('position_size'), str) else 'normal',
+            time_frame=ai_analysis.get('time_frame', 'short-term') if isinstance(ai_analysis.get('time_frame'), str) else 'short-term',
+            alternative_scenario=ai_analysis.get('alternative_scenario', '') if isinstance(ai_analysis.get('alternative_scenario'), str) else ''
         )
 
     def analyze_all(
@@ -213,11 +218,10 @@ Provide analysis in JSON format:
             payload = {
                 "model": self.model,
                 "messages": [
-                    {"role": "system", "content": "You are an expert technical analyst. Provide concise, actionable trading analysis."},
+                    {"role": "system", "content": "You are an expert technical analyst. Provide concise, actionable trading analysis. Return valid JSON only, no markdown."},
                     {"role": "user", "content": prompt}
                 ],
-                "temperature": 0.4,
-                "response_format": {"type": "json_object"}
+                "temperature": 0.4
             }
 
             response = requests.post(url, headers=headers, json=payload, timeout=60)
@@ -225,7 +229,14 @@ Provide analysis in JSON format:
 
             data = response.json()
             content = data['choices'][0]['message']['content']
-            result = json.loads(content)
+
+            # Extract JSON from response
+            import re
+            json_match = re.search(r'\{.*\}', content, re.DOTALL)
+            if json_match:
+                result = json.loads(json_match.group())
+            else:
+                result = json.loads(content)
 
             logger.info(f"AI analysis complete for {match.symbol}")
             return result

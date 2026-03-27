@@ -180,11 +180,10 @@ Return your selection as JSON:
             payload = {
                 "model": self.model,
                 "messages": [
-                    {"role": "system", "content": "You are an expert stock trader. Select the best opportunities based on technical analysis and market conditions."},
+                    {"role": "system", "content": "You are an expert stock trader. Select the best opportunities based on technical analysis and market conditions. Return valid JSON only, no markdown."},
                     {"role": "user", "content": prompt}
                 ],
-                "temperature": 0.4,
-                "response_format": {"type": "json_object"}
+                "temperature": 0.4
             }
 
             response = requests.post(url, headers=headers, json=payload, timeout=120)
@@ -192,7 +191,14 @@ Return your selection as JSON:
 
             data = response.json()
             content = data['choices'][0]['message']['content']
-            result = json.loads(content)
+
+            # Extract JSON from response
+            import re
+            json_match = re.search(r'\{.*\}', content, re.DOTALL)
+            if json_match:
+                result = json.loads(json_match.group())
+            else:
+                result = json.loads(content)
 
             # Map AI selection back to StrategyMatch objects
             selected_symbols = [s['symbol'] for s in result.get('selected', [])]
