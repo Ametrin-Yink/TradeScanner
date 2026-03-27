@@ -116,10 +116,13 @@ Automated US stock trading opportunity scanner based on strategies in `Strategy_
 - Use dark header (#1a1a2e), clean borders, compact spacing
 - Color-code confidence: green (high), orange (medium), red (low)
 
-## Stock Data Handling
+## Stock Management
 
-- **Delisted stocks**: Maintain blacklist in `config/delisted.py`, filter during universe loading
-- WBA delisted March 2025 - check for others periodically
+- **Add Stock**: Insert into `stocks` table with `is_active = 1` - see `docs/STOCK_MANAGEMENT.md`
+- **Verify Ticker**: Use `yfinance.Ticker(symbol).info` to confirm validity before adding
+- **Soft Delete**: Set `is_active = 0` instead of DELETE to preserve history
+- **Bulk Add**: Use Python script to add multiple stocks at once
+- **Delisted**: Add to `config/delisted.py` blacklist, not database
 
 ## Report Generation
 
