@@ -60,6 +60,9 @@ Automated US stock trading opportunity scanner based on strategies in `Strategy_
 - **Port:** Cloud security group only allows 80, 443, 22, 19801 - use 19801 for Flask server
 - **Background:** Use `nohup python ... &` to keep server running after SSH disconnect
 - **Path Issues:** Always set `sys.path.insert(0, '/home/admin/Projects/TradeChanceScreen')` when running api/server.py directly
+- **Auto-Start:** Add to crontab: `@reboot sleep 10 && /path/to/venv/bin/python -c "..." &`
+- **Check Status:** `ss -tlnp | grep 19801` to verify server is listening
+- **Restart:** Kill old process, then use nohup to start new instance
 
 ## Data Sources
 
@@ -67,9 +70,25 @@ Automated US stock trading opportunity scanner based on strategies in `Strategy_
 - **yfinance:** Use `yfinance.download(threads=False)` for VPS stability, batch requests for 500+ stocks
 - **Charts:** Set `matplotlib.use('Agg')` before importing pyplot for headless servers
 
+## Memory Management
+
+- **Streaming Processing**: Process stocks in batches of 50 to limit peak memory usage
+- **Garbage Collection**: Call `gc.collect()` after each batch to free DataFrame memory
+- **Single Worker**: Use `max_workers=1` for fetcher to reduce concurrent memory pressure
+- **Keep 150 Trading Days**: Sufficient for swing trade analysis without excessive memory
+
+## Data Cache Strategy
+
+- **Existing Cache**: `market_data` table has 65k+ rows covering 523 stocks with 125 days history
+- **Incremental Updates**: Fetch only missing days (typically 1-2 days) instead of full 6 months
+- **Cache Check**: Query `SELECT MAX(date) FROM market_data WHERE symbol = ?` before fetching
+- **Merge Logic**: Combine cached data with new data, keep last 150 trading days
+
 ## Testing
 
-- **Full Scan:** 518 stocks takes ~11 minutes, generates 10-15 candidates typically
+- **Full Scan (Cached):** 517 stocks takes ~20-25 minutes (incremental update, ~2-3 min for data)
+- **Full Scan (First Run):** 517 stocks takes ~70-80 minutes (no cache, downloads full history)
+- **Typical Output:** 10-20 candidates from 8 strategies, AI selects top 10 with confidence scores
 - **Server:** Check `ss -tlnp | grep 19801` to verify Flask is listening
 
 ## AI API Compatibility
@@ -79,14 +98,17 @@ Automated US stock trading opportunity scanner based on strategies in `Strategy_
 
 ## Chart Generation
 
-- **Plotly > matplotlib**: Use Plotly for interactive web charts (zoom, pan, hover tooltips)
-- Generate HTML charts with `plotly.graph_objects` and embed via iframe
-- Serve charts via `/data/charts/<filename>` endpoint in Flask
+- **Static PNG Charts**: Use matplotlib with `matplotlib.use('Agg')` - no Chrome dependency
+- **Image Tag**: Use `<img src="...">` not `<iframe>` to avoid path/port issues
+- **Chart Size**: 350x500px, displayed beside Analysis section via flex layout
+- **Chart Path**: Return `../data/charts/{symbol}_{date}.png` from generator
 
 ## Confidence Scoring
 
-- Use dynamic scoring (0-100) based on: Risk/Reward (20%), Volume (15%), Technicals (25%), S/R Quality (20%), Trend (20%)
-- Avoid hardcoded confidence values (70%, 75%) - no differentiation
+- **AI-Powered Scoring**: Use AI to calculate 0-100 confidence with market-sentiment adaptive weights
+- **Batch Scoring**: Send 20 candidates per API call to minimize costs
+- **Score Range**: Expect 50-80% for good setups (vs previous 12-17% with rule-based)
+- **Include Reasoning**: AI returns confidence with explanation and key_factors/risk_factors
 
 ## UI Design Preferences
 
