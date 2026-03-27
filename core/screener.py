@@ -169,13 +169,27 @@ class StrategyScreener:
             # Target: 3x ATR above
             atr = ind.indicators.get('atr', {}).get('atr', current_price * 0.02)
 
+            entry_price = round(current_price, 2)
+            stop_loss = round(current_price - atr * 2, 2)
+            take_profit = round(current_price + atr * 3, 2)
+
+            # Calculate dynamic confidence
+            confidence = calculate_strategy_confidence(
+                strategy=StrategyType.EP.value,
+                df_data=df,
+                indicators=ind.indicators,
+                entry=entry_price,
+                stop=stop_loss,
+                target=take_profit
+            )
+
             matches.append(StrategyMatch(
                 symbol=symbol,
                 strategy=StrategyType.EP.value,
-                entry_price=round(current_price, 2),
-                stop_loss=round(current_price - atr * 2, 2),
-                take_profit=round(current_price + atr * 3, 2),
-                confidence=70,
+                entry_price=entry_price,
+                stop_loss=stop_loss,
+                take_profit=take_profit,
+                confidence=confidence,
                 match_reasons=[f"Earnings in {days_until} day(s)", f"ADR: {ind.indicators['adr']['adr_pct']:.1f}%"],
                 technical_snapshot={
                     'current_price': current_price,
@@ -235,13 +249,28 @@ class StrategyScreener:
 
             atr = ind.indicators.get('atr', {}).get('atr', current_price * 0.02)
 
+            entry_price = round(nearest_resistance, 2)
+            stop_loss = round(current_price - atr * 1.5, 2)
+            take_profit = round(nearest_resistance + atr * 2, 2)
+
+            # Calculate dynamic confidence
+            confidence = calculate_strategy_confidence(
+                strategy=StrategyType.MOMENTUM.value,
+                df_data=df,
+                indicators=ind.indicators,
+                entry=entry_price,
+                stop=stop_loss,
+                target=take_profit,
+                sr_levels={'resistance': resistances}
+            )
+
             matches.append(StrategyMatch(
                 symbol=symbol,
                 strategy=StrategyType.MOMENTUM.value,
-                entry_price=round(nearest_resistance, 2),  # Breakout entry
-                stop_loss=round(current_price - atr * 1.5, 2),
-                take_profit=round(nearest_resistance + atr * 2, 2),
-                confidence=75 if volume_spike else 65,
+                entry_price=entry_price,
+                stop_loss=stop_loss,
+                take_profit=take_profit,
+                confidence=confidence,
                 match_reasons=[
                     f"Near resistance ({distance_pct*100:.1f}%)",
                     f"Volume ratio: {volume_ratio:.1f}x"
@@ -297,13 +326,27 @@ class StrategyScreener:
             if ema8 <= ema21:
                 continue
 
+            entry_price = round(current_price, 2)
+            stop_loss = round(ema21 - atr, 2)
+            take_profit = round(ema8 + atr * 2, 2)
+
+            # Calculate dynamic confidence
+            confidence = calculate_strategy_confidence(
+                strategy=StrategyType.SHORYUKEN.value,
+                df_data=df,
+                indicators=ind.indicators,
+                entry=entry_price,
+                stop=stop_loss,
+                target=take_profit
+            )
+
             matches.append(StrategyMatch(
                 symbol=symbol,
                 strategy=StrategyType.SHORYUKEN.value,
-                entry_price=round(current_price, 2),
-                stop_loss=round(ema21 - atr, 2),
-                take_profit=round(ema8 + atr * 2, 2),
-                confidence=70,
+                entry_price=entry_price,
+                stop_loss=stop_loss,
+                take_profit=take_profit,
+                confidence=confidence,
                 match_reasons=[
                     f"Price {distance_to_ema8:.2f} from EMA8",
                     "Declining toward EMA support"
@@ -370,13 +413,27 @@ class StrategyScreener:
 
             atr = ind.indicators.get('atr', {}).get('atr', current_price * 0.02)
 
+            entry_price = round(current_price, 2)
+            stop_loss = round(ema50 - atr, 2)
+            take_profit = round(high_20d, 2)
+
+            # Calculate dynamic confidence
+            confidence = calculate_strategy_confidence(
+                strategy=StrategyType.PULLBACKS.value,
+                df_data=df,
+                indicators=ind.indicators,
+                entry=entry_price,
+                stop=stop_loss,
+                target=take_profit
+            )
+
             matches.append(StrategyMatch(
                 symbol=symbol,
                 strategy=StrategyType.PULLBACKS.value,
-                entry_price=round(current_price, 2),
-                stop_loss=round(ema50 - atr, 2),
-                take_profit=round(high_20d, 2),
-                confidence=75,
+                entry_price=entry_price,
+                stop_loss=stop_loss,
+                take_profit=take_profit,
+                confidence=confidence,
                 match_reasons=[
                     f"Pullback {pullback_pct:.1f}% from high",
                     "Above EMA50",
@@ -436,13 +493,28 @@ class StrategyScreener:
 
             atr = ind.indicators.get('atr', {}).get('atr', current_price * 0.02)
 
+            entry_price = round(current_price, 2)
+            stop_loss = round(nearest_support - atr, 2)
+            take_profit = round(current_price + atr * 2.5, 2)
+
+            # Calculate dynamic confidence
+            confidence = calculate_strategy_confidence(
+                strategy=StrategyType.UPTHRUST_REBOUND.value,
+                df_data=df,
+                indicators=ind.indicators,
+                entry=entry_price,
+                stop=stop_loss,
+                target=take_profit,
+                sr_levels={'support': supports}
+            )
+
             matches.append(StrategyMatch(
                 symbol=symbol,
                 strategy=StrategyType.UPTHRUST_REBOUND.value,
-                entry_price=round(current_price, 2),
-                stop_loss=round(nearest_support - atr, 2),
-                take_profit=round(current_price + atr * 2.5, 2),
-                confidence=70,
+                entry_price=entry_price,
+                stop_loss=stop_loss,
+                take_profit=take_profit,
+                confidence=confidence,
                 match_reasons=[
                     f"Near support ({distance_pct*100:.1f}%)",
                     f"Volume contraction ({volume_ratio:.1f}x)"
@@ -501,13 +573,28 @@ class StrategyScreener:
                     if distance_pct <= 0.03:  # Within 3%
                         atr = ind.indicators.get('atr', {}).get('atr', current_price * 0.02)
 
+                        entry_price = round(current_price, 2)
+                        stop_loss = round(level_price - atr, 2)
+                        take_profit = round(current_price + atr * 3, 2)
+
+                        # Calculate dynamic confidence
+                        confidence = calculate_strategy_confidence(
+                            strategy=StrategyType.RANGE_SUPPORT.value,
+                            df_data=df,
+                            indicators=ind.indicators,
+                            entry=entry_price,
+                            stop=stop_loss,
+                            target=take_profit,
+                            sr_levels=level_info
+                        )
+
                         matches.append(StrategyMatch(
                             symbol=symbol,
                             strategy=StrategyType.RANGE_SUPPORT.value,
-                            entry_price=round(current_price, 2),
-                            stop_loss=round(level_price - atr, 2),
-                            take_profit=round(current_price + atr * 3, 2),
-                            confidence=75,
+                            entry_price=entry_price,
+                            stop_loss=stop_loss,
+                            take_profit=take_profit,
+                            confidence=confidence,
                             match_reasons=[
                                 "Uptrend confirmed",
                                 f"Support tested {level_info['touches']} times",
@@ -574,13 +661,27 @@ class StrategyScreener:
 
             atr = ind.indicators.get('atr', {}).get('atr', current_price * 0.02)
 
+            entry_price = round(current_price, 2)
+            stop_loss = round(high_60d + atr, 2)
+            take_profit = round(current_price - atr * 3, 2)
+
+            # Calculate dynamic confidence
+            confidence = calculate_strategy_confidence(
+                strategy=StrategyType.DTSS.value,
+                df_data=df,
+                indicators=ind.indicators,
+                entry=entry_price,
+                stop=stop_loss,
+                target=take_profit
+            )
+
             matches.append(StrategyMatch(
                 symbol=symbol,
                 strategy=StrategyType.DTSS.value,
-                entry_price=round(current_price, 2),  # Short entry
-                stop_loss=round(high_60d + atr, 2),  # Stop above high
-                take_profit=round(current_price - atr * 3, 2),
-                confidence=70 if volume_spike else 60,
+                entry_price=entry_price,
+                stop_loss=stop_loss,
+                take_profit=take_profit,
+                confidence=confidence,
                 match_reasons=[
                     f"Near 60-day high ({distance_from_high*100:.1f}%)",
                     "Weakness detected",
@@ -640,13 +741,27 @@ class StrategyScreener:
             if gaps < 2:
                 continue
 
+            entry_price = round(current_price, 2)
+            stop_loss = round(current_price + atr * 2, 2)
+            take_profit = round(ema50, 2)
+
+            # Calculate dynamic confidence
+            confidence = calculate_strategy_confidence(
+                strategy=StrategyType.PARABOLIC.value,
+                df_data=df,
+                indicators=ind.indicators,
+                entry=entry_price,
+                stop=stop_loss,
+                target=take_profit
+            )
+
             matches.append(StrategyMatch(
                 symbol=symbol,
                 strategy=StrategyType.PARABOLIC.value,
-                entry_price=round(current_price, 2),  # Short entry
-                stop_loss=round(current_price + atr * 2, 2),
-                take_profit=round(ema50, 2),
-                confidence=80,
+                entry_price=entry_price,
+                stop_loss=stop_loss,
+                take_profit=take_profit,
+                confidence=confidence,
                 match_reasons=[
                     f"RSI: {rsi:.1f}",
                     f"Gaps in 5 days: {gaps}",
