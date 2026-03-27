@@ -7,14 +7,20 @@
 | 状态 | 数量 |
 |------|------|
 | 🔴 Critical (P0) | 0 |
-| 🟠 High (P1) | 0 |
-| 🟡 Medium (P2) | 2 |
+| 🟠 High (P1) | 1 |
+| 🟡 Medium (P2) | 1 |
 | 🟢 Low (P3) | 0 |
 | **总计** | **2** |
 
 ---
 
 ## 活跃Bug (Active Bugs)
+
+### 🟠 High Priority
+
+| ID | 标题 | 状态 | 创建日期 | 解决日期 | 备注 |
+|----|------|------|----------|----------|------|
+| [BUG-003](./BUG-003-chart-404-layout.md) | Plotly图表404错误及布局问题 | 🔄 In Progress | 2026-03-28 | - | 图表不显示，需要改为静态图片 |
 
 ### 🟡 Medium Priority
 

@@ -9,7 +9,7 @@ import pandas as pd
 
 from core.analyzer import AnalyzedOpportunity
 from core.fetcher import DataFetcher
-from core.plotly_charts import generate_plotly_chart
+from core.plotly_charts import generate_static_plotly_chart
 from config.settings import settings, REPORTS_DIR, CHARTS_DIR
 
 logger = logging.getLogger(__name__)
@@ -102,14 +102,14 @@ class ReportGenerator:
         return chart_paths
 
     def _generate_kline_chart(self, opp: AnalyzedOpportunity) -> Optional[str]:
-        """Generate Plotly interactive chart for a single stock."""
+        """Generate static PNG chart for a single stock."""
         df = self.fetcher.fetch_stock_data(opp.symbol, period="3mo", interval="1d")
 
         if df is None or len(df) < 20:
             return None
 
-        # Use Plotly to generate interactive chart
-        chart_path = generate_plotly_chart(
+        # Use static PNG chart (lighter, no 404 issues)
+        chart_path = generate_static_plotly_chart(
             symbol=opp.symbol,
             df=df,
             entry_price=opp.entry_price,
@@ -119,10 +119,7 @@ class ReportGenerator:
             output_dir=self.charts_dir
         )
 
-        if chart_path:
-            # Return URL path for iframe
-            return f"/data/charts/{Path(chart_path).name}"
-        return None
+        return chart_path
 
     def _build_html(
         self,
@@ -162,8 +159,8 @@ class ReportGenerator:
             chart_html = ""
             if opp.symbol in chart_paths:
                 chart_relative_path = chart_paths[opp.symbol]
-                # Use full URL for iframe
-                chart_html = f'<iframe src="{chart_relative_path}" width="100%" height="620" frameborder="0" style="border: 1px solid #ddd; border-radius: 4px; margin-top: 15px;"></iframe>'
+                # Use img tag for static PNG chart, positioned beside analysis
+                chart_html = f'<img src="{chart_relative_path}" alt="{opp.symbol} Chart" class="chart-image">'
 
             risk_badges = "".join([f'<span class="badge badge-risk">{r}</span>' for r in opp.risk_factors[:3]])
 
@@ -182,13 +179,15 @@ class ReportGenerator:
                         <span class="level target">Target: ${opp.take_profit:.2f}</span>
                         <span class="level rrr">R/R: {rrr:.1f}x</span>
                     </div>
-                    <div class="ai-analysis">
-                        <h4>Analysis</h4>
-                        <p><strong>Reasoning:</strong> {opp.ai_reasoning}</p>
-                        <p><strong>Catalyst:</strong> {opp.catalyst}</p>
-                        <p><strong>Risks:</strong> {risk_badges}</p>
+                    <div class="analysis-row">
+                        <div class="ai-analysis">
+                            <h4>Analysis</h4>
+                            <p><strong>Reasoning:</strong> {opp.ai_reasoning}</p>
+                            <p><strong>Catalyst:</strong> {opp.catalyst}</p>
+                            <p><strong>Risks:</strong> {risk_badges}</p>
+                        </div>
+                        {chart_html}
                     </div>
-                    {chart_html}
                 </div>
             </div>
             """
@@ -353,8 +352,33 @@ class ReportGenerator:
             background: #f8f9fa;
             padding: 12px;
             border-radius: 4px;
-            margin-top: 12px;
             border: 1px solid #e9ecef;
+            flex: 1;
+            min-width: 300px;
+        }}
+        .analysis-row {{
+            display: flex;
+            gap: 16px;
+            align-items: flex-start;
+            margin-top: 12px;
+        }}
+        .chart-image {{
+            width: 400px;
+            height: 300px;
+            object-fit: contain;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            background: white;
+        }}
+        @media (max-width: 900px) {{
+            .analysis-row {{
+                flex-direction: column;
+            }}
+            .chart-image {{
+                width: 100%;
+                height: auto;
+                max-height: 400px;
+            }}
         }}
         .ai-analysis h4 {{
             margin-bottom: 8px;

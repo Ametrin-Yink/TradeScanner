@@ -219,14 +219,15 @@ def generate_static_plotly_chart(
             row=2, col=1
         )
 
-        # Layout
+        # Layout - smaller size for side-by-side display
         fig.update_layout(
             title=f"{symbol} - {strategy}",
             xaxis_rangeslider_visible=False,
             template='plotly_white',
-            height=600,
-            width=900,
-            showlegend=False
+            height=350,
+            width=500,
+            showlegend=False,
+            margin=dict(l=40, r=40, t=40, b=40)
         )
 
         # Save as PNG
