@@ -71,3 +71,35 @@ Automated US stock trading opportunity scanner based on strategies in `Strategy_
 
 - **Full Scan:** 518 stocks takes ~11 minutes, generates 10-15 candidates typically
 - **Server:** Check `ss -tlnp | grep 19801` to verify Flask is listening
+
+## AI API Compatibility
+
+- **kimi-k2.5 via DashScope**: Does NOT support `response_format: {"type": "json_object"}` - use regex to extract JSON instead
+- Remove `response_format` parameter and parse JSON from response text with `re.search(r'\{.*\}', content, re.DOTALL)`
+
+## Chart Generation
+
+- **Plotly > matplotlib**: Use Plotly for interactive web charts (zoom, pan, hover tooltips)
+- Generate HTML charts with `plotly.graph_objects` and embed via iframe
+- Serve charts via `/data/charts/<filename>` endpoint in Flask
+
+## Confidence Scoring
+
+- Use dynamic scoring (0-100) based on: Risk/Reward (20%), Volume (15%), Technicals (25%), S/R Quality (20%), Trend (20%)
+- Avoid hardcoded confidence values (70%, 75%) - no differentiation
+
+## UI Design Preferences
+
+- **Financial/Professional style preferred** over "AI" style with gradients/emojis
+- Use dark header (#1a1a2e), clean borders, compact spacing
+- Color-code confidence: green (high), orange (medium), red (low)
+
+## Stock Data Handling
+
+- **Delisted stocks**: Maintain blacklist in `config/delisted.py`, filter during universe loading
+- WBA delisted March 2025 - check for others periodically
+
+## Report Generation
+
+- Pass `all_candidates` (40 items) separately from `opportunities` (10 analyzed) to show Additional Candidates (11-40)
+- Use symbol deduplication to avoid overlap between Top 10 and Additional sections
