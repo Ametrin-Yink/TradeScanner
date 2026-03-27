@@ -14,7 +14,7 @@ from matplotlib.patches import Rectangle
 
 from core.analyzer import AnalyzedOpportunity
 from core.fetcher import DataFetcher
-from config.settings import settings
+from config.settings import settings, REPORTS_DIR, CHARTS_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -25,8 +25,8 @@ class ReportGenerator:
     def __init__(self, fetcher: Optional[DataFetcher] = None):
         """Initialize report generator."""
         self.fetcher = fetcher or DataFetcher()
-        self.reports_dir = settings.REPORTS_DIR
-        self.charts_dir = settings.CHARTS_DIR
+        self.reports_dir = REPORTS_DIR
+        self.charts_dir = CHARTS_DIR
         self.max_reports = settings.get('report', {}).get('max_reports', 15)
         self.retention_days = settings.get('report', {}).get('retention_days', 15)
 
