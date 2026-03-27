@@ -76,6 +76,16 @@ class Settings:
         return self._settings.get(key, default)
 
     def get_secret(self, key: str) -> str | None:
+        """Get secret key supporting nested structure (e.g., 'tavily.api_key')."""
+        if '.' in key:
+            parts = key.split('.')
+            value = self._secrets.get(parts[0], {})
+            for part in parts[1:]:
+                if isinstance(value, dict):
+                    value = value.get(part)
+                else:
+                    return None
+            return value
         return self._secrets.get(key)
 
     def set(self, key: str, value):

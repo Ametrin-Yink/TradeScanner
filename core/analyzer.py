@@ -40,10 +40,10 @@ class OpportunityAnalyzer:
     def __init__(self, fetcher: Optional[DataFetcher] = None):
         """Initialize analyzer."""
         self.fetcher = fetcher or DataFetcher()
-        self.dashscope_api_key = settings.get_secret('dashscope_api_key')
-        self.tavily_api_key = settings.get_secret('tavily_api_key')
-        self.dashscope_base = settings.get('ai', {}).get('api_base', 'https://coding.dashscope.aliyuncs.com/v1')
-        self.model = settings.get('ai', {}).get('model', 'qwen-max')
+        self.dashscope_api_key = settings.get_secret('dashscope.api_key')
+        self.tavily_api_key = settings.get_secret('tavily.api_key')
+        self.dashscope_base = settings.get_secret('dashscope.api_base') or settings.get('ai', {}).get('api_base', 'https://coding.dashscope.aliyuncs.com/v1')
+        self.model = settings.get_secret('dashscope.model') or settings.get('ai', {}).get('model', 'qwen-max')
 
     def analyze_opportunity(
         self,

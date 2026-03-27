@@ -61,9 +61,9 @@ class CandidateSelector:
 
     def __init__(self):
         """Initialize with API configuration."""
-        self.dashscope_api_key = settings.get_secret('dashscope_api_key')
-        self.dashscope_base = settings.get('ai', {}).get('api_base', 'https://coding.dashscope.aliyuncs.com/v1')
-        self.model = settings.get('ai', {}).get('model', 'qwen-max')
+        self.dashscope_api_key = settings.get_secret('dashscope.api_key')
+        self.dashscope_base = settings.get_secret('dashscope.api_base') or settings.get('ai', {}).get('api_base', 'https://coding.dashscope.aliyuncs.com/v1')
+        self.model = settings.get_secret('dashscope.model') or settings.get('ai', {}).get('model', 'qwen-max')
 
     def select_top_10(
         self,
