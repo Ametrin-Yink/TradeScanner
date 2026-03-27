@@ -6,7 +6,7 @@ from typing import Optional
 
 from flask import Flask, jsonify, request
 
-from config.settings import settings
+from config.settings import settings, REPORTS_DIR
 from data.db import Database
 from core.fetcher import DataFetcher
 from core.screener import StrategyScreener
@@ -259,18 +259,16 @@ def get_history():
 def serve_report(filename):
     """Serve a report file."""
     from flask import send_from_directory
-    reports_dir = settings.REPORTS_DIR
-    return send_from_directory(reports_dir, filename)
+    return send_from_directory(REPORTS_DIR, filename)
 
 
 @app.route('/reports', methods=['GET'])
 def list_reports():
     """List available reports."""
     try:
-        reports_dir = settings.REPORTS_DIR
         reports = []
 
-        for report_file in sorted(reports_dir.glob('report_*.html'), reverse=True):
+        for report_file in sorted(REPORTS_DIR.glob('report_*.html'), reverse=True):
             stat = report_file.stat()
             reports.append({
                 'filename': report_file.name,
