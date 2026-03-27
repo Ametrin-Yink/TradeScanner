@@ -6,14 +6,10 @@ from datetime import datetime, timedelta
 from typing import List, Optional, Dict
 
 import pandas as pd
-import matplotlib
-matplotlib.use('Agg')  # Non-interactive backend
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-from matplotlib.patches import Rectangle
 
 from core.analyzer import AnalyzedOpportunity
 from core.fetcher import DataFetcher
+from core.plotly_charts import generate_plotly_chart
 from config.settings import settings, REPORTS_DIR, CHARTS_DIR
 
 logger = logging.getLogger(__name__)
@@ -104,86 +100,27 @@ class ReportGenerator:
         return chart_paths
 
     def _generate_kline_chart(self, opp: AnalyzedOpportunity) -> Optional[str]:
-        """Generate K-line chart for a single stock."""
+        """Generate Plotly interactive chart for a single stock."""
         df = self.fetcher.fetch_stock_data(opp.symbol, period="3mo", interval="1d")
 
         if df is None or len(df) < 20:
             return None
 
-        # Create figure
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8),
-                                        gridspec_kw={'height_ratios': [3, 1]})
+        # Use Plotly to generate interactive chart
+        chart_path = generate_plotly_chart(
+            symbol=opp.symbol,
+            df=df,
+            entry_price=opp.entry_price,
+            stop_loss=opp.stop_loss,
+            take_profit=opp.take_profit,
+            strategy=opp.strategy,
+            output_dir=self.charts_dir
+        )
 
-        # Use last 60 candles
-        df_plot = df.tail(60).copy()
-
-        # Plot candlesticks
-        for idx, (date, row) in enumerate(df_plot.iterrows()):
-            open_price = row['open']
-            high = row['high']
-            low = row['low']
-            close = row['close']
-
-            color = 'green' if close >= open_price else 'red'
-
-            # Body
-            height = abs(close - open_price)
-            bottom = min(open_price, close)
-            rect = Rectangle((idx - 0.4, bottom), 0.8, height,
-                           facecolor=color, edgecolor=color)
-            ax1.add_patch(rect)
-
-            # Wick
-            ax1.plot([idx, idx], [low, high], color=color, linewidth=0.5)
-
-        # Mark entry, stop, target
-        last_idx = len(df_plot) - 1
-        last_close = df_plot['close'].iloc[-1]
-
-        # Entry line
-        ax1.axhline(y=opp.entry_price, color='blue', linestyle='--',
-                   label=f'Entry: ${opp.entry_price:.2f}', linewidth=1.5)
-
-        # Stop loss line
-        ax1.axhline(y=opp.stop_loss, color='red', linestyle='--',
-                   label=f'Stop: ${opp.stop_loss:.2f}', linewidth=1.5)
-
-        # Target line
-        ax1.axhline(y=opp.take_profit, color='green', linestyle='--',
-                   label=f'Target: ${opp.take_profit:.2f}', linewidth=1.5)
-
-        # Current price marker
-        ax1.scatter([last_idx], [last_close], color='orange', s=100, zorder=5,
-                   label=f'Current: ${last_close:.2f}')
-
-        ax1.set_title(f"{opp.symbol} - {opp.strategy} Setup", fontsize=14, fontweight='bold')
-        ax1.set_ylabel('Price ($)')
-        ax1.legend(loc='upper left', fontsize=8)
-        ax1.grid(True, alpha=0.3)
-
-        # Volume
-        colors = ['green' if df_plot['close'].iloc[i] >= df_plot['open'].iloc[i]
-                  else 'red' for i in range(len(df_plot))]
-        ax2.bar(range(len(df_plot)), df_plot['volume'], color=colors, alpha=0.7)
-        ax2.set_ylabel('Volume')
-        ax2.set_xlabel('Date')
-        ax2.grid(True, alpha=0.3)
-
-        # Format x-axis
-        date_labels = [d.strftime('%m/%d') for d in df_plot.index[::10]]
-        ax2.set_xticks(range(0, len(df_plot), 10))
-        ax2.set_xticklabels(date_labels, rotation=45, ha='right')
-
-        plt.tight_layout()
-
-        # Save chart
-        chart_filename = f"{opp.symbol}_{datetime.now().strftime('%Y%m%d')}.png"
-        chart_path = self.charts_dir / chart_filename
-        plt.savefig(chart_path, dpi=100, bbox_inches='tight')
-        plt.close()
-
-        # Return relative path for HTML
-        return f"../data/charts/{chart_filename}"
+        if chart_path:
+            # Return URL path for iframe
+            return f"/data/charts/{Path(chart_path).name}"
+        return None
 
     def _build_html(
         self,
@@ -213,7 +150,9 @@ class ReportGenerator:
 
             chart_html = ""
             if opp.symbol in chart_paths:
-                chart_html = f'<img src="{chart_paths[opp.symbol]}" alt="{opp.symbol} chart" style="max-width:100%; margin-top:10px;">'
+                chart_relative_path = chart_paths[opp.symbol]
+                # Use full URL for iframe
+                chart_html = f'<iframe src="{chart_relative_path}" width="100%" height="620" frameborder="0" style="border: 1px solid #ddd; border-radius: 4px; margin-top: 15px;"></iframe>'
 
             risk_badges = "".join([f'<span class="badge badge-risk">{r}</span>' for r in opp.risk_factors[:3]])
 
@@ -484,6 +423,10 @@ class ReportGenerator:
             # Also cleanup charts older than retention_days
             cutoff = datetime.now() - timedelta(days=self.retention_days)
             for chart in self.charts_dir.glob('*.png'):
+                if datetime.fromtimestamp(chart.stat().st_mtime) < cutoff:
+                    chart.unlink()
+            # Cleanup Plotly HTML charts
+            for chart in self.charts_dir.glob('*.html'):
                 if datetime.fromtimestamp(chart.stat().st_mtime) < cutoff:
                     chart.unlink()
 

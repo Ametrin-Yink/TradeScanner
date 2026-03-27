@@ -6,7 +6,7 @@ from typing import Optional
 
 from flask import Flask, jsonify, request
 
-from config.settings import settings, REPORTS_DIR
+from config.settings import settings, REPORTS_DIR, CHARTS_DIR
 from data.db import Database
 from core.fetcher import DataFetcher
 from core.screener import StrategyScreener
@@ -260,6 +260,13 @@ def serve_report(filename):
     """Serve a report file."""
     from flask import send_from_directory
     return send_from_directory(REPORTS_DIR, filename)
+
+
+@app.route('/data/charts/<path:filename>')
+def serve_chart(filename):
+    """Serve a chart file."""
+    from flask import send_from_directory
+    return send_from_directory(CHARTS_DIR, filename)
 
 
 @app.route('/reports', methods=['GET'])
