@@ -33,7 +33,8 @@ class ReportGenerator:
         total_stocks: int,
         success_count: int,
         fail_count: int,
-        fail_symbols: List[str]
+        fail_symbols: List[str],
+        all_candidates: List = None
     ) -> str:
         """
         Generate full HTML report.
@@ -58,6 +59,7 @@ class ReportGenerator:
         # Build HTML
         html = self._build_html(
             opportunities=opportunities,
+            all_candidates=all_candidates or [],
             market_sentiment=market_sentiment,
             scan_date=scan_date,
             scan_time=scan_time,
@@ -125,6 +127,7 @@ class ReportGenerator:
     def _build_html(
         self,
         opportunities: List[AnalyzedOpportunity],
+        all_candidates: List,
         market_sentiment: str,
         scan_date: str,
         scan_time: str,
@@ -182,16 +185,28 @@ class ReportGenerator:
             </div>
             """
 
-        # Build runner-ups section (11-40)
+        # Build runner-ups section (11-40) from all_candidates, excluding top 10
+        # Get symbols in top 10 to exclude
+        top_symbols = {opp.symbol for opp in opportunities[:10]}
+
         runners_section = ""
-        for opp in opportunities[10:40]:
+        runner_count = 0
+        for cand in all_candidates:
+            if cand.symbol in top_symbols:
+                continue
+            if runner_count >= 30:  # Max 30 additional candidates
+                break
+            runner_count += 1
+
+            # Handle both AnalyzedOpportunity and StrategyMatch
+            match_reasons = getattr(cand, 'match_reasons', [])
             runners_section += f"""
             <tr>
-                <td>{opp.symbol}</td>
-                <td>{opp.strategy}</td>
-                <td>${opp.entry_price:.2f}</td>
-                <td>{opp.confidence}%</td>
-                <td>{', '.join(opp.match_reasons[:2])}</td>
+                <td>{cand.symbol}</td>
+                <td>{cand.strategy}</td>
+                <td>${cand.entry_price:.2f}</td>
+                <td>{cand.confidence}%</td>
+                <td>{', '.join(match_reasons[:2])}</td>
             </tr>
             """
 

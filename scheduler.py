@@ -128,7 +128,8 @@ class TradeScanner:
             logger.info("Step 5/5: Generating report...")
             fail_symbols = [s for s in symbols if s not in market_data]
             report_path = self.reporter.generate_report(
-                opportunities=analyzed,
+                opportunities=analyzed,  # Top 10 with full analysis
+                all_candidates=candidates,  # All 40 candidates
                 market_sentiment=market_sentiment,
                 total_stocks=len(symbols),
                 success_count=len(market_data),
