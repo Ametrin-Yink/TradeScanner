@@ -38,11 +38,23 @@
 
 **待完成**：将8个策略的硬编码confidence改为调用新系统
 
+### ✅ 5. 图表看不见 → Plotly交互式图表
+**问题**：matplotlib生成的PNG图表在网页上显示问题
+**解决**：
+1. 创建`core/plotly_charts.py` - 使用Plotly生成交互式HTML图表
+2. 修改`core/reporter.py` - 使用iframe嵌入图表
+3. 修改`api/server.py` - 添加`/data/charts/<filename>`路由
+4. 图表特性：
+   - 交互式缩放、平移
+   - 悬停显示详细数据
+   - 红绿蜡烛图配色
+   - 入场/止损/目标水平线
+
 ---
 
 ## 待完成的优化
 
-### 🔄 5. UI重新设计
+### 🔄 6. UI重新设计
 **需求**：
 - 更紧凑的布局
 - 减少"AI味道"（移除渐变背景、emoji等）
@@ -50,15 +62,10 @@
 
 **涉及文件**：`core/reporter.py`的CSS样式
 
-### 🔄 6. Additional Candidates (11-40) 不显示
+### 🔄 7. Additional Candidates (11-40) 不显示
 **问题**：报告中Additional Candidates表格为空
 **原因**：`opportunities`列表可能只包含10个股票
 **解决**：检查selector.py，确保返回40个候选
-
-### 🔄 7. 图表看不见
-**问题**：matplotlib生成的PNG图表在网页上显示问题
-**方案A**：修复PNG路径问题
-**方案B**：使用Plotly生成交互式HTML图表（推荐）
 
 ### 🔄 8. 迁移8个策略的confidence计算
 **工作量**：修改`core/screener.py`中的8个策略
