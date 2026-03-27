@@ -234,11 +234,9 @@ class ReportGenerator:
                     </div>
                     <div class="ai-analysis">
                         <h4>AI Analysis</h4>
-                        <p><strong>Reasoning:</strong> {opp.ai_reasoning[:300]}...</p>
+                        <p><strong>Reasoning:</strong> {opp.ai_reasoning}</p>
                         <p><strong>Catalyst:</strong> {opp.catalyst}</p>
                         <p><strong>Risks:</strong> {risk_badges}</p>
-                        <p><strong>Position Size:</strong> <span class="badge">{opp.position_size}</span>
-                           <strong>Time Frame:</strong> <span class="badge">{opp.time_frame}</span></p>
                     </div>
                     {chart_html}
                 </div>

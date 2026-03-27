@@ -11,6 +11,7 @@ import numpy as np
 from core.fetcher import DataFetcher
 from core.indicators import TechnicalIndicators, calculate_indicators_for_symbol
 from core.support_resistance import SupportResistanceCalculator
+from core.confidence_scorer import calculate_strategy_confidence
 from data.db import Database
 from config.settings import settings
 

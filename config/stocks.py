@@ -7,6 +7,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from config.settings import settings
+from config.delisted import filter_delisted
 from data.db import Database
 
 logger = logging.getLogger(__name__)
@@ -106,6 +107,10 @@ def load_stock_universe(db: Database = None, force_refresh: bool = False) -> lis
 
     # Combine and deduplicate
     all_symbols = list(set(sp500 + nasdaq100 + dow))
+
+    # Filter out delisted stocks
+    all_symbols = filter_delisted(all_symbols)
+    logger.info(f"Filtered out delisted stocks, {len(all_symbols)} remaining")
 
     # Clean symbols (remove any suffixes like BRK.B)
     cleaned = []
