@@ -281,3 +281,21 @@ Guidelines:
 Validate multiple files: `python3 -m py_compile file1.py file2.py ...`
 Exit code 0 = all valid
 Shows first error with line number
+
+## Testing
+
+Run all tests: `python -m pytest tests/ -v`
+Run specific test: `python -m pytest tests/test_screener.py -v`
+Run with coverage: `python -m pytest tests/ --cov=core --cov-report=html`
+
+## Common Errors
+
+**SQLite database locked**: Close any open SQLite browsers, or use WAL mode
+**yfinance rate limit**: Use cached data in `market_data` table, wait 1 hour
+**Port 19801 in use**: `lsof -ti:19801 | xargs kill -9` then restart server
+
+## Log Locations
+
+Application logs: `tail -f data/scanner.log`
+Database: `data/market_data.db`
+Reports: `web/reports/YYYY-MM-DD.html`
