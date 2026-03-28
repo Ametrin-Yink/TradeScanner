@@ -213,3 +213,45 @@ Before committing strategy changes:
 - 标准化EMA斜率: `(EMA21_today - EMA21_5d) / ATR14`
 - CLV: `(Close - Low) / (High - Low)`
 - 能量比: `突破幅度 / 平台振幅` (capped at 3.0)
+
+## Strategy Plugin Architecture
+
+All 8 strategies now use plugin pattern under `core/strategies/`:
+- `BaseStrategy` abstract class defines interface: `filter()`, `calculate_dimensions()`, `calculate_entry_exit()`, `build_match_reasons()`
+- `STRATEGY_REGISTRY` maps `StrategyType` enum to strategy classes
+- `create_strategy()` factory instantiates by type
+- Each strategy implements 4-dimensional 0-15 point scoring with linear interpolation
+
+## Linear Interpolation Scoring Pattern
+
+All strategies use linear interpolation for boundary values:
+```python
+score = X + (value - A) / (B - A) * (Y - X)  # value in [A,B] → score in [X,Y]
+```
+Example: RS > 0.3 → 3.0 pts, RS > 0.5 → 5.0 pts, at RS=0.4: 3.0 + (0.1/0.2)*2.0 = 4.0
+Never use step functions - always interpolate between boundaries.
+
+## SPY Market Data Requirement
+
+SPY is automatically added to stock universe in `config/stocks.py` for:
+- Market regime detection (SPY vs EMA200) in `core/screener.py`
+- RS resilience bonus calculation in `core/strategies/momentum.py`
+- Always fetch SPY data first in strategy `screen()` methods that need market context
+
+## Strategy Formula Documentation
+
+When modifying any scoring calculation, **同步更新 `策略描述.md`**:
+1. Update formula in "核心指标计算公式" section with mathematical notation
+2. Update strategy-specific scoring tables
+3. Add entry to 维护记录 table with date
+4. Test with isolated script before full scan
+
+## Refactoring Strategy Pattern
+
+For large refactoring (like strategy migration):
+1. Create isolated test script first (e.g., `test_strategy_a_v2.py`)
+2. Verify scoring matches expected outputs using cached data
+3. Create new plugin files alongside existing code
+4. Update registry and switch over
+5. Remove old code only after full scan passes
+6. Update 策略描述.md with any formula changes
