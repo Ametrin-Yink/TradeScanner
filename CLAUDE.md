@@ -132,3 +132,84 @@ Automated US stock trading opportunity scanner based on strategies in `Strategy_
 - Use symbol deduplication to avoid overlap between Top 10 and Additional sections
 - **Market Sentiment Section**: Display AI reasoning, key_factors, and confidence percentage
 - **Compact Stats**: Single line format: "Scanned: N | Success: N | Failed: N | Top Picks: N"
+
+## Strategy Scoring System
+
+All 8 strategies use unified 0-15 point scoring with 4 dimensions (3-4 points each):
+- **Tier S (13-15 pts)**: 20% position size - Exceptional setup with confirmation
+- **Tier A (10-12 pts)**: 10% position size - Qualified setup with minor concerns
+- **Tier B (7-9 pts)**: 5% position size - Marginal setup, reduced exposure
+- **Below 7**: Filter out - Insufficient edge
+
+Score dimensions vary by strategy (PQ/BS/VC/TC for VCP-EP, RS/SQ/VC/TC for Momentum, etc.)
+
+## Industry Data
+
+Sector/industry data from yfinance for sector rotation analysis:
+- `fetch_stock_info(symbol)` - Get sector, industry from Ticker.info
+- `fetch_batch_stock_info(symbols)` - Batch fetch with SQLite caching
+- **stock_info table**: symbol, sector, industry, updated_date
+- Use for sector resonance detection (+2 bonus when industry clusters active)
+
+## Strategy Development Testing
+
+When developing/upgrading strategies:
+- Create isolated test script (e.g., `test_strategy_a_v2.py`) before modifying screener.py
+- Use existing cache data (`market_data` table) for fast iteration (20-30 min vs 70-80 min)
+- Test with 5-10 known symbols before full scan
+- Check Feb 2026 data for extreme cases (tight platforms, volatility spikes)
+- Use `yfinance.Ticker(symbol).history(period="1d")` to verify live data availability
+
+## Dynamic Trailing Stops
+
+4-stage exit system based on price action:
+1. **Initial Stop**: Fixed stop-loss at entry (ATR-based or technical level)
+2. **Chandelier Exit**: 3× ATR(22) from highest high since entry (early trend phase)
+3. **21EMA Trail**: Switch to EMA21 when price extends > 2 ATR above it
+4. **10EMA Trail**: Final acceleration phase, tightest exit
+
+Use `calculate_chandelier_exit(df, atr_period=22, multiplier=3)` for trailing calculation
+
+## Technical Indicators
+
+New calculations in `core/indicators.py`:
+- `calculate_normalized_ema_slope(df, ema_period, window)` - Trend intensity (slope/ATR)
+- `detect_vcp_platform(df)` - 15-30 day platform with concentration metrics
+- `detect_squeeze(df)` - Volatility contraction (quantitative + qualitative)
+- `calculate_clv(df)` - Close Location Value (0 to 1, institutional footprint)
+- `calculate_volume_confirmation(df)` - Dry up (-50%) followed by surge (>2x)
+- `estimate_gap_impact(df, atr)` - ATR-based next-day gap estimation
+- `calculate_rs_score(df, benchmark)` - 3m(40%) + 6m(30%) + 12m(30%) weighted RS
+- `calculate_retracement_structure(df, ema_periods)` - Fibonacci pullback analysis
+
+## Strategy Documentation
+
+**策略描述.md** (`/home/admin/Projects/TradeChanceScreen/策略描述.md`) is the canonical documentation for all 8 trading strategies.
+
+**Critical Rule**: When modifying strategy logic in `core/screener.py` or scoring calculations in `core/indicators.py`, **you MUST同步更新 `策略描述.md`**.
+
+Documentation requirements:
+- All 8 strategies (A: VCP-EP, B: Momentum, C: Shoryuken, D: Pullbacks, E: U&R, F: RangeSupport, G: DTSS, H: Parabolic)
+- Unified 0-15 scoring system with 2 decimal precision
+- 4-dimensional scoring breakdown per strategy
+- Entry/exit rules and trailing stop logic
+- **Detailed calculation formulas** (RS评分, EMA斜率, CLV, 能量比, etc.)
+- Update the maintenance record table when making changes
+
+**Formula Sync Checklist**:
+When modifying any calculation in code, update these sections in `策略描述.md`:
+1. "核心指标计算公式" - Add/modify the formula with mathematical notation
+2. Strategy-specific scoring tables - Update if scoring logic changes
+3. 维护记录 - Log the change
+
+Before committing strategy changes:
+1. Update code in `core/screener.py` or `core/indicators.py`
+2. 同步更新 `策略描述.md` formulas and scoring tables
+3. Update the maintenance record at the bottom of `策略描述.md`
+4. Test with `test_strategies_abc.py` to verify scoring
+
+**Key Formulas Reference**:
+- RS评分: `0.4×R3m + 0.3×R6m + 0.3×R12m`
+- 标准化EMA斜率: `(EMA21_today - EMA21_5d) / ATR14`
+- CLV: `(Close - Low) / (High - Low)`
+- 能量比: `突破幅度 / 平台振幅` (capped at 3.0)

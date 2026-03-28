@@ -24,7 +24,7 @@ class DataFetcher:
         max_workers: int = 2,
         request_delay: float = 0.5,
         max_retries: int = 3,
-        max_history_days: int = 150
+        max_history_days: int = 252
     ):
         """
         Initialize data fetcher.
@@ -127,7 +127,7 @@ class DataFetcher:
                 logger.debug(f"{symbol}: fetching incremental {period} (latest cached: {latest_cached_date})")
             else:
                 # No cache, fetch full history
-                period = "7mo"  # 7 months to ensure 150 trading days
+                period = "13mo"  # 13 months to ensure 252 trading days
                 logger.debug(f"{symbol}: no cache, fetching full {period}")
 
             df = self._rate_limited_request(
@@ -406,3 +406,80 @@ class DataFetcher:
         except Exception as e:
             logger.error(f"Failed to fetch Dow Jones symbols: {e}")
             return []
+    def fetch_stock_info(self, symbol: str) -> Dict[str, str]:
+        """
+        Fetch stock info including sector and industry from yfinance.
+
+        Args:
+            symbol: Stock symbol
+
+        Returns:
+            Dict with sector and industry info
+        """
+        try:
+            ticker = yf.Ticker(symbol)
+            info = self._rate_limited_request(lambda: ticker.info)
+
+            if info:
+                return {
+                    'sector': info.get('sector', 'Unknown'),
+                    'industry': info.get('industry', 'Unknown'),
+                    'market_cap': info.get('marketCap', 0),
+                    'name': info.get('longName', symbol)
+                }
+        except Exception as e:
+            logger.debug(f"Could not fetch info for {symbol}: {e}")
+
+        return {'sector': 'Unknown', 'industry': 'Unknown', 'market_cap': 0, 'name': symbol}
+
+    def fetch_batch_stock_info(self, symbols: List[str]) -> Dict[str, Dict[str, str]]:
+        """
+        Fetch stock info for multiple symbols with caching.
+
+        Args:
+            symbols: List of stock symbols
+
+        Returns:
+            Dict mapping symbol to info dict
+        """
+        results = {}
+
+        # Check database cache first
+        try:
+            conn = self.db.get_connection()
+            placeholders = ','.join(['?' for _ in symbols])
+            cursor = conn.execute(
+                f"SELECT symbol, sector, industry FROM stock_info WHERE symbol IN ({placeholders})",
+                symbols
+            )
+            cached = {row[0]: {'sector': row[1], 'industry': row[2]} for row in cursor.fetchall()}
+            results.update(cached)
+        except Exception as e:
+            logger.debug(f"Could not fetch cached stock info: {e}")
+            cached = {}
+
+        # Fetch missing symbols
+        missing = [s for s in symbols if s not in cached]
+        for symbol in missing:
+            try:
+                info = self.fetch_stock_info(symbol)
+                results[symbol] = info
+
+                # Cache to database
+                try:
+                    conn = self.db.get_connection()
+                    conn.execute('''
+                        INSERT OR REPLACE INTO stock_info (symbol, sector, industry, updated_date)
+                        VALUES (?, ?, ?, date('now'))
+                    ''', (symbol, info.get('sector'), info.get('industry')))
+                    conn.commit()
+                except Exception as e:
+                    logger.debug(f"Could not cache stock info: {e}")
+
+                time.sleep(self.request_delay)
+            except Exception as e:
+                logger.warning(f"Failed to fetch info for {symbol}: {e}")
+                results[symbol] = {'sector': 'Unknown', 'industry': 'Unknown'}
+
+        return results
+

@@ -181,6 +181,21 @@ class ReportGenerator:
 
             risk_badges = "".join([f'<span class="badge badge-risk">{r}</span>' for r in opp.risk_factors[:3]])
 
+            # Get tier and position size from technical_snapshot if available
+            tier = getattr(opp, 'technical_snapshot', {}).get('tier', '')
+            position_pct = getattr(opp, 'technical_snapshot', {}).get('position_pct', 0)
+            score = getattr(opp, 'technical_snapshot', {}).get('score', 0) or getattr(opp, 'technical_snapshot', {}).get('total_score', 0)
+
+            tier_badge = ""
+            if tier:
+                tier_colors = {'S': '#28a745', 'A': '#17a2b8', 'B': '#fd7e14'}
+                tier_color = tier_colors.get(tier, '#6c757d')
+                tier_badge = f'<span class="badge" style="background:{tier_color};color:white;margin-left:8px;">Tier {tier} ({position_pct*100:.0f}%)</span>'
+
+            score_info = ""
+            if score:
+                score_info = f'<span class="badge" style="background:#6f42c1;color:white;margin-left:8px;">Score: {score:.0f}/15</span>'
+
             top_section += f"""
             <div class="opportunity">
                 <div class="opp-header">
@@ -188,6 +203,8 @@ class ReportGenerator:
                     <span class="symbol">{opp.symbol}</span>
                     <span class="strategy">{opp.strategy}</span>
                     <span class="confidence {conf_class}">{opp.confidence}%</span>
+                    {tier_badge}
+                    {score_info}
                 </div>
                 <div class="opp-details">
                     <div class="trade-levels">

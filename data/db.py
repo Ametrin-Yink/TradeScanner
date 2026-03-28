@@ -103,6 +103,13 @@ CREATE TABLE IF NOT EXISTS system_status (
     total_scans INTEGER DEFAULT 0,
     avg_scan_duration INTEGER
 );
+
+CREATE TABLE IF NOT EXISTS stock_info (
+    symbol TEXT PRIMARY KEY,
+    sector TEXT,
+    industry TEXT,
+    updated_date TEXT
+);
 """
 
 db = Database()
