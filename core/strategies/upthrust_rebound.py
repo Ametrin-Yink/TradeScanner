@@ -17,18 +17,121 @@ class UpthrustReboundStrategy(BaseStrategy):
     NAME = "U&R"
     STRATEGY_TYPE = StrategyType.UPTHRUST_REBOUND
     DESCRIPTION = "Upthrust and Rebound near support level with volume contraction"
-    DIMENSIONS = ['SR', 'VC', 'TC']
+    DIMENSIONS = ['SQ', 'VD', 'RB']
 
     PARAMS = {
         'min_dollar_volume': 50_000_000,
         'min_atr_pct': 0.015,
         'min_listing_days': 50,
-        'max_distance_from_support': 0.01,
-        'target_r_multiplier': 2.5,
+        'max_distance_from_support': 0.03,  # Relaxed from 1% to 3%
+        'target_r_multiplier': 2.0,  # Changed from 2.5 to 2.0
+        'support_tolerance_atr': 0.5,  # Support level ± 0.5 ATR
+        'volume_veto_threshold': 1.5,  # Volume > 1.5x MA20 for veto
+        'clv_veto_threshold': 0.3,  # CLV < 0.3 for veto
+        'sector_etfs': {  # Sector ETF mapping
+            'Technology': 'XLK',
+            'Financials': 'XLF',
+            'Energy': 'XLE',
+            'Industrials': 'XLI',
+            'Consumer Staples': 'XLP',
+            'Consumer Discretionary': 'XLY',
+            'Materials': 'XLB',
+            'Utilities': 'XLU',
+            'Health Care': 'XLV',
+            'Biotechnology': 'XBI',
+            'Semiconductors': 'SMH',
+            'Software': 'IGV',
+            'Transportation': 'IYT',
+        }
     }
 
+    def __init__(self, fetcher=None, db=None):
+        """Initialize with sector ETF data cache."""
+        super().__init__(fetcher=fetcher, db=db)
+        self.sector_etf_data = {}
+        self.stock_info = {}
+
+    def screen(self, symbols: List[str]) -> List[StrategyMatch]:
+        """
+        Screen all symbols with Phase 0 pre-filter.
+        - SPY > EMA200 (no rebound in downtrend)
+        - Support exists and within 3%
+        """
+        # Phase 0: Check SPY trend
+        logger.info("U&R: Phase 0 - Checking SPY trend...")
+        spy_df = self._get_data('SPY')
+        if spy_df is not None and len(spy_df) >= 200:
+            spy_current = spy_df['close'].iloc[-1]
+            spy_ema200 = spy_df['close'].ewm(span=200).mean().iloc[-1]
+
+            if spy_current <= spy_ema200:
+                logger.info("U&R: SPY below EMA200, skipping (no rebound in downtrend)")
+                return []
+
+        # Pre-filter by support existence and distance
+        prefiltered = []
+        logger.info("U&R: Phase 0.5 - Pre-filtering by support...")
+
+        for symbol in symbols:
+            try:
+                df = self._get_data(symbol)
+                if df is None or len(df) < self.PARAMS['min_listing_days']:
+                    continue
+
+                current_price = df['close'].iloc[-1]
+
+                # Calculate S/R with tolerance
+                calc = SupportResistanceCalculator(df)
+                sr_levels = calc.calculate_all()
+                supports = sr_levels.get('support', [])
+
+                if not supports:
+                    continue
+
+                # Find nearest support
+                supports_below = [s for s in supports if s < current_price]
+                if not supports_below:
+                    continue
+
+                nearest_support = max(supports_below)
+                distance_pct = (current_price - nearest_support) / current_price
+
+                # Relaxed threshold: < 3%
+                if distance_pct < self.PARAMS['max_distance_from_support']:
+                    prefiltered.append(symbol)
+
+            except Exception as e:
+                logger.debug(f"Error pre-filtering {symbol}: {e}")
+                continue
+
+        logger.info(f"U&R: {len(prefiltered)}/{len(symbols)} passed pre-filter")
+
+        # Load sector ETF data for comparison
+        self._load_sector_etf_data()
+
+        # Load stock info for sector alpha
+        try:
+            if self.fetcher:
+                self.stock_info = self.fetcher.fetch_batch_stock_info(prefiltered)
+        except Exception as e:
+            logger.warning(f"Could not load stock info: {e}")
+            self.stock_info = {}
+
+        # Use base class screen on pre-filtered symbols
+        return super().screen(prefiltered)
+
+    def _load_sector_etf_data(self):
+        """Load sector ETF data for Sector Alpha comparison."""
+        try:
+            for etf in self.PARAMS['sector_etfs'].values():
+                df = self._get_data(etf)
+                if df is not None and len(df) > 50:
+                    self.sector_etf_data[etf] = df
+        except Exception as e:
+            logger.warning(f"Could not load sector ETF data: {e}")
+
     def filter(self, symbol: str, df: pd.DataFrame) -> bool:
-        """Filter for U&R candidates."""
+        """Filter for U&R candidates with volume veto check."""
         if len(df) < self.PARAMS['min_listing_days']:
             return False
 
@@ -59,21 +162,34 @@ class UpthrustReboundStrategy(BaseStrategy):
         if distance_pct > self.PARAMS['max_distance_from_support']:
             return False
 
-        # Check volume contraction
+        # Defense 2: Volume Trap Veto (Falling Knife Detection)
         volume_data = ind.indicators.get('volume', {})
         volume_ratio = volume_data.get('volume_ratio', 1.0)
 
-        if volume_ratio > 0.8:
+        # Calculate CLV
+        today = df.iloc[-1]
+        clv = self._calculate_clv(today['close'], today['high'], today['low'])
+
+        # Veto if high volume with low CLV (accelerating decline)
+        if volume_ratio > self.PARAMS['volume_veto_threshold'] and clv < self.PARAMS['clv_veto_threshold']:
+            logger.debug(f"{symbol}: Volume trap veto (Vol:{volume_ratio:.2f}x, CLV:{clv:.2f})")
+            return False
+
+        # Check volume contraction (normal U&R requires dry volume)
+        if volume_ratio > 0.9:
             return False
 
         return True
 
+        return True
+
     def calculate_dimensions(self, symbol: str, df: pd.DataFrame) -> List[ScoringDimension]:
-        """Calculate 3-dimensional scoring."""
+        """Calculate 3-dimensional scoring with three expert defenses."""
         ind = TechnicalIndicators(df)
         ind.calculate_all()
 
         current_price = df['close'].iloc[-1]
+        atr = ind.indicators.get('atr', {}).get('atr', current_price * 0.02)
 
         calc = SupportResistanceCalculator(df)
         sr_levels = calc.calculate_all()
@@ -83,45 +199,332 @@ class UpthrustReboundStrategy(BaseStrategy):
         nearest_support = max(supports_below) if supports_below else current_price * 0.99
         distance_pct = abs(current_price - nearest_support) / current_price
 
+        # Get support touches and recency
+        support_touches = self._calculate_support_touches(df, nearest_support, atr)
+        recency_weight = self._calculate_recency_weight(support_touches['last_touch_days'])
+
+        # Volume and CLV data for veto check
         volume_data = ind.indicators.get('volume', {})
         volume_ratio = volume_data.get('volume_ratio', 1.0)
+        vol_ma20 = volume_data.get('vol_ma20', df['volume'].mean())
+
+        # Calculate CLV (Close Location Value)
+        today = df.iloc[-1]
+        clv = self._calculate_clv(today['close'], today['high'], today['low'])
+
+        # Defense 2: Volume Trap Veto
+        is_falling_knife = (volume_ratio > self.PARAMS['volume_veto_threshold'] and
+                           clv < self.PARAMS['clv_veto_threshold'])
+
+        # Defense 3: Sector Alpha Bonus
+        sector_alpha = self._calculate_sector_alpha(symbol, current_price, atr)
 
         dimensions = []
 
-        # Dimension 1: Support Quality (SR)
-        sr_score = self._calculate_sr(distance_pct, sr_levels)
+        # Dimension 1: Support Quality (SQ) - 6 points max
+        sq_score, sq_details = self._calculate_sq(
+            distance_pct, support_touches, recency_weight,
+            sector_alpha, atr, ind, df
+        )
         dimensions.append(ScoringDimension(
-            name='SR',
-            score=sr_score,
-            max_score=5.0,
-            details={
-                'nearest_support': nearest_support,
-                'distance_pct': distance_pct,
-                'num_supports': len(supports)
-            }
+            name='SQ',
+            score=sq_score,
+            max_score=6.0,
+            details=sq_details
         ))
 
-        # Dimension 2: Volume Contraction (VC)
-        vc_score = self._calculate_vc(volume_ratio)
+        # Dimension 2: Volume Dryness (VD) - 5 points max
+        # Veto: return empty if falling knife detected
+        if is_falling_knife:
+            logger.debug(f"{symbol}: Volume trap veto (Vol:{volume_ratio:.2f}x, CLV:{clv:.2f})")
+            return []
+
+        vd_score, vd_details = self._calculate_vd(volume_ratio, df)
         dimensions.append(ScoringDimension(
-            name='VC',
-            score=vc_score,
+            name='VD',
+            score=vd_score,
             max_score=5.0,
-            details={
-                'volume_ratio': volume_ratio
-            }
+            details=vd_details
         ))
 
-        # Dimension 3: Trend Context (TC)
-        tc_score = self._calculate_tc(ind, current_price)
+        # Dimension 3: Rebound Setup (RB) - 4 points max
+        rb_score, rb_details = self._calculate_rb(ind, df, clv)
         dimensions.append(ScoringDimension(
-            name='TC',
-            score=tc_score,
-            max_score=5.0,
-            details={}
+            name='RB',
+            score=rb_score,
+            max_score=4.0,
+            details=rb_details
         ))
 
         return dimensions
+
+    def _calculate_clv(self, close: float, high: float, low: float) -> float:
+        """Calculate Close Location Value (0 to 1)."""
+        if high > low:
+            return (close - low) / (high - low)
+        return 0.5
+
+    def _calculate_support_touches(self, df: pd.DataFrame, support_level: float, atr: float) -> Dict:
+        """Calculate support touches within tolerance (±0.5 ATR)."""
+        tolerance = atr * self.PARAMS['support_tolerance_atr']
+        touches = 0
+        last_touch_idx = None
+        bounce_strengths = []
+
+        # Look back 90 days (about 63 trading days)
+        lookback = min(63, len(df) - 1)
+
+        for i in range(1, lookback + 1):
+            idx = -(i + 1)
+            if idx < -len(df):
+                break
+
+            low = df['low'].iloc[idx]
+            close = df['close'].iloc[idx]
+            open_price = df['open'].iloc[idx]
+            prev_close = df['close'].iloc[idx - 1] if idx - 1 >= -len(df) else close
+
+            # Check if price touched support
+            if abs(low - support_level) <= tolerance or low <= support_level + tolerance:
+                touches += 1
+                last_touch_idx = i
+
+                # Calculate bounce strength (close vs open after touch)
+                if close > open_price:
+                    strength = (close - open_price) / open_price * 100
+                    bounce_strengths.append(min(strength, 5.0))  # Cap at 5%
+
+        avg_bounce = sum(bounce_strengths) / len(bounce_strengths) if bounce_strengths else 0
+
+        return {
+            'touches': touches,
+            'last_touch_days': last_touch_idx if last_touch_idx else 90,
+            'avg_bounce_strength': avg_bounce,
+            'bounce_count': len(bounce_strengths)
+        }
+
+    def _calculate_recency_weight(self, days_since_touch: int) -> float:
+        """Calculate recency weight with time decay."""
+        if days_since_touch <= 30:
+            return 1.0
+        elif days_since_touch <= 60:
+            return 0.7
+        elif days_since_touch <= 90:
+            return 0.5
+        else:
+            return 0.3
+
+    def _calculate_sector_alpha(self, symbol: str, current_price: float, atr: float) -> float:
+        """Check if sector ETF is also near support (Defense 3)."""
+        if not self.stock_info or symbol not in self.stock_info:
+            return 0.0
+
+        sector = self.stock_info.get(symbol, {}).get('sector', 'Unknown')
+        if sector == 'Unknown' or sector not in self.PARAMS['sector_etfs']:
+            return 0.0
+
+        etf_symbol = self.PARAMS['sector_etfs'][sector]
+        if etf_symbol not in self.sector_etf_data:
+            return 0.0
+
+        etf_df = self.sector_etf_data[etf_symbol]
+        if len(etf_df) < 20:
+            return 0.0
+
+        etf_price = etf_df['close'].iloc[-1]
+
+        # Calculate ETF support levels
+        calc = SupportResistanceCalculator(etf_df)
+        etf_sr = calc.calculate_all()
+        etf_supports = etf_sr.get('support', [])
+
+        if not etf_supports:
+            return 0.0
+
+        # Find nearest ETF support
+        etf_supports_below = [s for s in etf_supports if s < etf_price]
+        if not etf_supports_below:
+            return 0.0
+
+        nearest_etf_support = max(etf_supports_below)
+        etf_atr = atr  # Use same ATR scale for comparison
+        etf_distance = abs(etf_price - nearest_etf_support) / etf_price
+
+        # ETF within 3% of support = sector tailwind (+1 bonus)
+        if etf_distance < self.PARAMS['max_distance_from_support']:
+            return 1.0
+
+        return 0.0
+
+    def _calculate_sq(
+        self,
+        distance_pct: float,
+        support_touches: Dict,
+        recency_weight: float,
+        sector_alpha: float,
+        atr: float,
+        ind: TechnicalIndicators,
+        df: pd.DataFrame
+    ) -> Tuple[float, Dict]:
+        """
+        Support Quality (SQ) - 6 points max.
+        Touch frequency + Recency + Bounce strength + Distance + Sector Alpha.
+        """
+        details = {
+            'distance_pct': distance_pct,
+            'touches': support_touches['touches'],
+            'recency_weight': recency_weight,
+            'last_touch_days': support_touches['last_touch_days'],
+            'avg_bounce_strength': support_touches['avg_bounce_strength'],
+            'bounce_count': support_touches['bounce_count'],
+            'sector_alpha': sector_alpha
+        }
+
+        sq_score = 0.0
+
+        # 1. Touch frequency (0-1.5 pts)
+        touches = support_touches['touches']
+        if touches >= 3:
+            sq_score += 1.5
+        elif touches == 2:
+            sq_score += 1.0
+        elif touches == 1:
+            sq_score += 0.5
+
+        # 2. Recency weight applied to touch score
+        sq_score = round(sq_score * recency_weight, 2)
+
+        # 3. Bounce strength (0-1.5 pts)
+        avg_bounce = support_touches['avg_bounce_strength']
+        if avg_bounce >= 2.0:
+            sq_score += 1.5
+        elif avg_bounce >= 1.0:
+            sq_score += 1.0
+        elif avg_bounce > 0:
+            sq_score += 0.5
+
+        # 4. Support distance quality (0-1.5 pts)
+        if distance_pct < 0.005:
+            sq_score += 1.5
+        elif distance_pct < 0.01:
+            sq_score += 1.2
+        elif distance_pct < 0.02:
+            sq_score += 1.0
+        elif distance_pct < 0.03:
+            sq_score += 0.5
+
+        # 5. Sector Alpha bonus (0-1 pt)
+        sq_score += sector_alpha
+
+        return round(min(6.0, sq_score), 2), details
+
+    def _calculate_vd(self, volume_ratio: float, df: pd.DataFrame) -> Tuple[float, Dict]:
+        """
+        Volume Dryness (VD) - 5 points max.
+        Contraction degree + Contraction duration.
+        """
+        details = {
+            'volume_ratio': volume_ratio,
+            'contraction_days': 0,
+            'vd_dry_up': False
+        }
+
+        vd_score = 0.0
+
+        # Volume contraction degree (0-3 pts)
+        if volume_ratio < 0.5:
+            vd_score += 3.0
+            details['vd_dry_up'] = True
+        elif volume_ratio < 0.65:
+            vd_score += 2.5
+        elif volume_ratio < 0.8:
+            vd_score += 2.0
+        elif volume_ratio < 1.0:
+            vd_score += 1.0
+        else:
+            vd_score += 0.5
+
+        # Contraction duration bonus (0-2 pts)
+        contraction_days = 0
+        for i in range(1, min(10, len(df))):
+            idx = -(i + 1)
+            if idx < -len(df):
+                break
+            vol_ratio_hist = df['volume'].iloc[idx] / df['volume'].iloc[idx-20:idx].mean() if idx >= -len(df) + 20 else 1.0
+            if vol_ratio_hist < 0.8:
+                contraction_days += 1
+            else:
+                break
+
+        details['contraction_days'] = contraction_days
+
+        if contraction_days >= 3:
+            vd_score += 2.0
+        elif contraction_days == 2:
+            vd_score += 1.5
+        elif contraction_days == 1:
+            vd_score += 0.5
+
+        return round(min(5.0, vd_score), 2), details
+
+    def _calculate_rb(self, ind: TechnicalIndicators, df: pd.DataFrame, clv: float) -> Tuple[float, Dict]:
+        """
+        Rebound Setup (RB) - 4 points max.
+        Long lower shadow + CLV position + Prior day halt.
+        """
+        today = df.iloc[-1]
+        current_price = today['close']
+        high = today['high']
+        low = today['low']
+        open_price = today['open']
+
+        # Calculate shadow ratios
+        total_range = high - low
+        lower_shadow = min(open_price, current_price) - low if min(open_price, current_price) > low else 0
+        upper_shadow = high - max(open_price, current_price) if high > max(open_price, current_price) else 0
+
+        details = {
+            'clv': clv,
+            'lower_shadow_pct': 0,
+            'has_hammer': False,
+            'prior_halt': False
+        }
+
+        rb_score = 0.0
+
+        if total_range > 0:
+            lower_shadow_pct = lower_shadow / total_range
+            details['lower_shadow_pct'] = lower_shadow_pct
+
+            # 1. Long lower shadow (0-1.5 pts)
+            if lower_shadow_pct >= 0.6:
+                rb_score += 1.5
+                details['has_hammer'] = True
+            elif lower_shadow_pct >= 0.4:
+                rb_score += 1.0
+            elif lower_shadow_pct >= 0.3:
+                rb_score += 0.5
+
+        # 2. CLV position (0-1.5 pts) - higher is better
+        if clv >= 0.7:
+            rb_score += 1.5
+        elif clv >= 0.5:
+            rb_score += 1.0
+        elif clv >= 0.4:
+            rb_score += 0.5
+
+        # 3. Prior day halt pattern (0-1 pt)
+        if len(df) >= 2:
+            prev = df.iloc[-2]
+            prev_range = prev['high'] - prev['low']
+            if prev_range > 0:
+                prev_clv = (prev['close'] - prev['low']) / prev_range
+                # Prior day closed near low, today bouncing
+                if prev_clv < 0.3 and clv > 0.5:
+                    rb_score += 1.0
+                    details['prior_halt'] = True
+
+        return round(min(4.0, rb_score), 2), details
 
     def _calculate_sr(self, distance_pct: float, sr_levels: Dict) -> float:
         """Support Quality dimension (0-5)."""
@@ -222,7 +625,7 @@ class UpthrustReboundStrategy(BaseStrategy):
         nearest_support = max(supports_below) if supports_below else current_price * 0.98
 
         entry = round(current_price, 2)
-        stop = round(nearest_support - atr, 2)
+        stop = round(nearest_support - atr * 0.5, 2)  # Support minus 0.5 ATR buffer
         target = round(current_price + atr * self.PARAMS['target_r_multiplier'], 2)
 
         return entry, stop, target
@@ -236,19 +639,39 @@ class UpthrustReboundStrategy(BaseStrategy):
         tier: str
     ) -> List[str]:
         """Build human-readable match reasons."""
-        sr = next((d for d in dimensions if d.name == 'SR'), None)
-        vc = next((d for d in dimensions if d.name == 'VC'), None)
-        tc = next((d for d in dimensions if d.name == 'TC'), None)
+        sq = next((d for d in dimensions if d.name == 'SQ'), None)
+        vd = next((d for d in dimensions if d.name == 'VD'), None)
+        rb = next((d for d in dimensions if d.name == 'RB'), None)
 
         position_pct = self.calculate_position_pct(tier)
 
-        sr_details = sr.details if sr else {}
-        vc_details = vc.details if vc else {}
+        sq_details = sq.details if sq else {}
+        vd_details = vd.details if vd else {}
+        rb_details = rb.details if rb else {}
 
-        return [
+        reasons = [
             f"Score: {score:.2f}/15 (Tier {tier}-{position_pct*100:.0f}%)",
-            f"SR:{sr.score:.2f} VC:{vc.score:.2f} TC:{tc.score:.2f}",
-            f"Near support ({sr_details.get('distance_pct', 0)*100:.1f}%)",
-            f"Volume contraction ({vc_details.get('volume_ratio', 0):.1f}x)",
-            "U&R setup"
+            f"SQ:{sq.score:.2f} VD:{vd.score:.2f} RB:{rb.score:.2f}"
         ]
+
+        # SQ details
+        touches = sq_details.get('touches', 0)
+        recency_weight = sq_details.get('recency_weight', 0)
+        sector_alpha = sq_details.get('sector_alpha', 0)
+        if sector_alpha > 0:
+            reasons.append(f"Support x{touches} (w:{recency_weight}, +{sector_alpha}α)")
+        else:
+            reasons.append(f"Support x{touches} (w:{recency_weight})")
+
+        # VD details
+        vol_ratio = vd_details.get('volume_ratio', 0)
+        contraction_days = vd_details.get('contraction_days', 0)
+        reasons.append(f"Vol {vol_ratio:.1f}x, {contraction_days}d dry")
+
+        # RB details
+        if rb_details.get('has_hammer'):
+            reasons.append("Hammer candle + bounce")
+        if rb_details.get('prior_halt'):
+            reasons.append("Halt-rebound pattern")
+
+        return reasons
