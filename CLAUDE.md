@@ -255,3 +255,29 @@ For large refactoring (like strategy migration):
 4. Update registry and switch over
 5. Remove old code only after full scan passes
 6. Update 策略描述.md with any formula changes
+
+## File Corruption Recovery
+
+If code file contains garbage content (model output pollution):
+1. Find corruption start: `grep -n "garbage_text" file.py`
+2. Find where code resumes: `grep -n "expected_code" file.py`
+3. Extract clean parts: `head -N file.py > fixed.py && tail -n +M file.py >> fixed.py`
+4. Verify: `python3 -m py_compile fixed.py`
+5. Replace: `cp fixed.py file.py`
+
+## Strategy Pre-Filter Design
+
+Pre-filter vs Scoring trade-off:
+- **Pre-filter**: Hard cut before scoring (performance)
+- **Scoring dimension**: Soft threshold in 0-5 scale (flexibility)
+
+Guidelines:
+- Use pre-filter for expensive calculations (RS ranking, 52w high)
+- Relaxed thresholds: A<25%, B>75%, C price>EMA21
+- Keep filter logic in `screen()` method, scoring in `calculate_dimensions()`
+
+## Quick Syntax Check
+
+Validate multiple files: `python3 -m py_compile file1.py file2.py ...`
+Exit code 0 = all valid
+Shows first error with line number
