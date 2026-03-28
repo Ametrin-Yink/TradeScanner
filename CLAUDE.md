@@ -435,3 +435,45 @@ validator = ParameterValidator()
 is_valid, errors = validator.validate_params(strategy_params)
 ```
 
+## Python Package Imports
+
+When creating shared utility packages:
+- Place functions in `package/__init__.py` for `from package import func` syntax
+- Don't use separate `package.py` file alongside `package/` directory
+- Example: `core/scoring_utils/__init__.py` not `core/scoring_utils.py`
+
+## Quick Strategy Testing
+
+Test all strategies without full data:
+```bash
+python3 test_all_strategies.py
+```
+Validates: imports, attributes, methods, scoring_utils integration
+
+## Strategy Structure Checklist
+
+All strategies must define:
+- NAME: Short strategy identifier
+- STRATEGY_TYPE: StrategyType enum value
+- DESCRIPTION: Human-readable description
+- DIMENSIONS: List of dimension names (3-4 items)
+- PARAMS: Dict of strategy-specific thresholds
+
+All strategies must implement:
+- filter(symbol, df) -> bool
+- calculate_dimensions(symbol, df) -> List[ScoringDimension]
+- calculate_entry_exit(symbol, df, dimensions, score, tier) -> Tuple[float, float, float]
+- build_match_reasons(symbol, df, dimensions, score, tier) -> List[str]
+
+## Scoring Utils Usage
+
+Import shared calculations:
+```python
+from ..scoring_utils import calculate_clv, check_rsi_divergence
+```
+
+Available functions: calculate_clv, check_rsi_divergence, check_exhaustion_gap,
+calculate_test_interval, calculate_institutional_intensity, detect_market_direction,
+check_vix_filter, calculate_rs_score_weighted, calculate_volume_climax_score,
+calculate_normalized_ema_slope, calculate_linear_interpolation
+
