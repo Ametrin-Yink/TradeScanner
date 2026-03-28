@@ -412,10 +412,26 @@ Refactored duplicate functions:
 - `check_exhaustion_gap()` - extracted from DTSS
 - `calculate_institutional_intensity()` - extracted from DTSS
 
-### Phase 2 Planned (A-D Strategies)
+### Phase 2 Complete (A-D Strategies)
 
-Future extractions:
-- `calculate_rs_score()` - normalize across Momentum, VCP
-- `calculate_normalized_ema_slope()` - normalize across Shoryuken, Pullback
-- `calculate_volume_climax()` - normalize across strategies
+Additional utilities extracted to scoring_utils.py:
+- `calculate_normalized_ema_slope(df, ema_period, atr_period)` - EMA slope normalized by ATR
+- `calculate_linear_interpolation(value, min_val, max_val, min_score, max_score)` - Linear scoring
+- `calculate_rs_score_weighted(rs_3m, rs_6m, rs_12m)` - 0.4*R3m + 0.3*R6m + 0.3*R12m
+- `calculate_volume_climax_score(volume_ratio, thresholds)` - Volume climax detection
+
+### Phase 3 Complete (Configuration System)
+
+- `core/scoring_utils/` - Package with validation utilities
+- `core/scoring_utils/__init__.py` - Package initialization
+- `core/scoring_utils/validation.py` - ParameterValidator class
+- `config/strategy_config.yaml` - Strategy parameter templates
+
+Usage:
+```python
+from core.scoring_utils.validation import ParameterValidator
+
+validator = ParameterValidator()
+is_valid, errors = validator.validate_params(strategy_params)
+```
 
