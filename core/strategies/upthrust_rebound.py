@@ -1,4 +1,5 @@
 """Strategy E: Upthrust & Rebound (U&R) - Near support with volume contraction."""
+from ..scoring_utils import calculate_clv
 from typing import Dict, List, Optional, Tuple, Any
 import logging
 
@@ -168,7 +169,7 @@ class UpthrustReboundStrategy(BaseStrategy):
 
         # Calculate CLV
         today = df.iloc[-1]
-        clv = self._calculate_clv(today['close'], today['high'], today['low'])
+        clv = calculate_clv(today['close'], today['high'], today['low'])
 
         # Veto if high volume with low CLV (accelerating decline)
         if volume_ratio > self.PARAMS['volume_veto_threshold'] and clv < self.PARAMS['clv_veto_threshold']:
@@ -210,7 +211,7 @@ class UpthrustReboundStrategy(BaseStrategy):
 
         # Calculate CLV (Close Location Value)
         today = df.iloc[-1]
-        clv = self._calculate_clv(today['close'], today['high'], today['low'])
+        clv = calculate_clv(today['close'], today['high'], today['low'])
 
         # Defense 2: Volume Trap Veto
         is_falling_knife = (volume_ratio > self.PARAMS['volume_veto_threshold'] and
@@ -258,11 +259,6 @@ class UpthrustReboundStrategy(BaseStrategy):
 
         return dimensions
 
-    def _calculate_clv(self, close: float, high: float, low: float) -> float:
-        """Calculate Close Location Value (0 to 1)."""
-        if high > low:
-            return (close - low) / (high - low)
-        return 0.5
 
     def _calculate_support_touches(self, df: pd.DataFrame, support_level: float, atr: float) -> Dict:
         """Calculate support touches within tolerance (±0.5 ATR)."""

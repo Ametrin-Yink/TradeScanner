@@ -1,4 +1,5 @@
 """Strategy H: Parabolic/Capitulation v2.1 - Extreme reversal with expert suggestions."""
+from ..scoring_utils import calculate_clv, check_rsi_divergence
 from typing import Dict, List, Optional, Tuple, Any
 import logging
 
@@ -299,7 +300,7 @@ class ParabolicStrategy(BaseStrategy):
                 mo_score += max(0, (rsi - 70) / 10.0)
 
             # Expert suggestion B: RSI bearish divergence (core scoring)
-            if self._check_rsi_divergence(df, 'bearish'):
+            if check_rsi_divergence(df, 'bearish'):
                 mo_score += 2.0
                 details['rsi_divergence'] = True
 
@@ -315,7 +316,7 @@ class ParabolicStrategy(BaseStrategy):
                 mo_score += max(0, (30 - rsi) / 10.0)
 
             # Expert suggestion B: RSI bullish divergence (core scoring)
-            if self._check_rsi_divergence(df, 'bullish'):
+            if check_rsi_divergence(df, 'bullish'):
                 mo_score += 2.0
                 details['rsi_divergence'] = True
 
@@ -414,7 +415,7 @@ class ParabolicStrategy(BaseStrategy):
         volume_spike = volume_data.get('volume_spike', False)
 
         today = df.iloc[-1]
-        clv = self._calculate_clv(today['close'], today['high'], today['low'])
+        clv = calculate_clv(today['close'], today['high'], today['low'])
 
         details = {
             'volume_ratio': volume_ratio,
@@ -459,11 +460,6 @@ class ParabolicStrategy(BaseStrategy):
 
         return round(min(4.0, vc_score), 2), details
 
-    def _calculate_clv(self, close: float, high: float, low: float) -> float:
-        """Calculate Close Location Value."""
-        if high > low:
-            return (close - low) / (high - low)
-        return 0.5
 
     def calculate_entry_exit(
         self,

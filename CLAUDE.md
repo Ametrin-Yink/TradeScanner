@@ -362,3 +362,60 @@ When adding strategies, update these sections:
 1. Strategy section with dimensions, scoring tables, formulas
 2. 维护记录 table at bottom with date and changes
 3. Keep formulas in code blocks with Chinese labels
+
+## Scoring Utils Module
+
+To avoid duplicate code across strategies, use the shared `core/scoring_utils.py` module:
+
+### Available Functions
+
+```python
+from core.scoring_utils import (
+    calculate_clv,                    # CLV calculation
+    check_rsi_divergence,             # RSI divergence detection
+    check_exhaustion_gap,             # Exhaustion gap detection
+    calculate_test_interval,          # Test quality with interval
+    calculate_institutional_intensity, # (Vol/MA20) * |CLV-0.5|
+    detect_market_direction,          # SPY trend detection
+    check_vix_filter,                 # VIX risk filter
+    calculate_rs_score_weighted,      # 0.4*R3m + 0.3*R6m + 0.3*R12m
+    calculate_volume_climax_score,    # Volume climax scoring
+)
+```
+
+### When to Extract Functions
+
+**Extract to scoring_utils.py when:**
+- Same function appears in 2+ strategies
+- Calculation logic is identical (only thresholds differ)
+- Function is a "pure calculation" (no strategy-specific state)
+
+**Keep in strategy when:**
+- Strategy-specific thresholds/logic
+- Needs access to strategy state (PARAMS, etc.)
+- Different implementations across strategies
+
+### Refactoring Checklist
+
+When creating a new strategy:
+1. Check if calculation exists in `scoring_utils.py`
+2. If yes: import and use it
+3. If no: implement in strategy first
+4. If duplicated later: extract to `scoring_utils.py`
+
+### Phase 1 Complete (E/F/G Strategies)
+
+Refactored duplicate functions:
+- `calculate_clv()` - extracted from DTSS, Parabolic, UpthrustRebound
+- `check_rsi_divergence()` - extracted from DTSS, Parabolic
+- `calculate_test_interval()` - extracted from DTSS, RangeSupport
+- `check_exhaustion_gap()` - extracted from DTSS
+- `calculate_institutional_intensity()` - extracted from DTSS
+
+### Phase 2 Planned (A-D Strategies)
+
+Future extractions:
+- `calculate_rs_score()` - normalize across Momentum, VCP
+- `calculate_normalized_ema_slope()` - normalize across Shoryuken, Pullback
+- `calculate_volume_climax()` - normalize across strategies
+

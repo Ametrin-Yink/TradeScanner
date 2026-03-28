@@ -1,4 +1,5 @@
 """Strategy G: DTSS v2.1 - Distribution Top / Accumulation Bottom with expert suggestions."""
+from ..scoring_utils import calculate_clv, check_rsi_divergence, calculate_test_interval, calculate_institutional_intensity
 from typing import Dict, List, Optional, Tuple, Any
 import logging
 
@@ -399,7 +400,7 @@ class DTSSStrategy(BaseStrategy):
         rsi = rsi_data.get('rsi', 50)
 
         # Calculate RSI divergence
-        rsi_divergence = self._check_rsi_divergence(df, 'bearish')
+        rsi_divergence = check_rsi_divergence(df, 'bearish')
 
         details = {
             'side': 'unknown',
@@ -457,7 +458,7 @@ class DTSSStrategy(BaseStrategy):
         rsi = rsi_data.get('rsi', 50)
 
         # Calculate RSI divergence
-        rsi_divergence = self._check_rsi_divergence(df, 'bullish')
+        rsi_divergence = check_rsi_divergence(df, 'bullish')
 
         details = {
             'side': 'unknown',
@@ -552,7 +553,7 @@ class DTSSStrategy(BaseStrategy):
 
         # Calculate CLV for institutional intensity (Expert suggestion D)
         today = df.iloc[-1]
-        clv = self._calculate_clv(today['close'], today['high'], today['low'])
+        clv = calculate_clv(today['close'], today['high'], today['low'])
         institutional_intensity = volume_ratio * abs(clv - 0.5)
 
         # Check exhaustion gap (Expert suggestion C)
@@ -592,7 +593,7 @@ class DTSSStrategy(BaseStrategy):
 
         # Institutional intensity
         today = df.iloc[-1]
-        clv = self._calculate_clv(today['close'], today['high'], today['low'])
+        clv = calculate_clv(today['close'], today['high'], today['low'])
         institutional_intensity = volume_ratio * abs(clv - 0.5)
 
         # Exhaustion gap
@@ -625,11 +626,6 @@ class DTSSStrategy(BaseStrategy):
 
         return round(min(4.0, vc_score), 2), details
 
-    def _calculate_clv(self, close: float, high: float, low: float) -> float:
-        """Calculate Close Location Value."""
-        if high > low:
-            return (close - low) / (high - low)
-        return 0.5
 
     def _check_exhaustion_gap(self, df: pd.DataFrame, level: float, direction: str) -> bool:
         """
