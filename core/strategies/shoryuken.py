@@ -212,6 +212,26 @@ class ShoryukenStrategy(BaseStrategy):
         # Dimension 1: Trend Intensity (TI) - 0-5 points
         ti_data = ind.calculate_normalized_ema_slope(self.market_atr_median)
         ti_score = ti_data['score']
+
+        # Calculate EMA21 touch count (deduct for multiple touches)
+        ema21 = ind.indicators.get('ema', {}).get('ema21', 0)
+        touch_count = 0
+        if ema21 > 0:
+            # Count how many times price crossed below EMA21 in last 20 days
+            for i in range(min(20, len(df))):
+                idx = -(i+1)
+                if idx < -len(df):
+                    break
+                low = df['low'].iloc[idx]
+                close = df['close'].iloc[idx]
+                # Price touched or went below EMA21 but closed above
+                if low <= ema21 and close > ema21 * 0.99:
+                    touch_count += 1
+
+        # Deduct TI score for multiple touches (first touch is best)
+        touch_deduction = min(1.5, (touch_count - 1) * 0.5) if touch_count > 1 else 0
+        ti_score = max(0, ti_score - touch_deduction)
+
         dimensions.append(ScoringDimension(
             name='TI',
             score=ti_score,
@@ -221,7 +241,9 @@ class ShoryukenStrategy(BaseStrategy):
                 'slope_raw': ti_data.get('slope_raw', 0),
                 'ema21_today': ti_data.get('ema21_today', 0),
                 'ema21_t5': ti_data.get('ema21_t5', 0),
-                'atr14': ti_data.get('atr14', 0)
+                'atr14': ti_data.get('atr14', 0),
+                'ema21_touch_count': touch_count,
+                'touch_deduction': touch_deduction
             }
         ))
 

@@ -448,13 +448,30 @@ class MomentumStrategy(BaseStrategy):
             percentile = (below_count / len(all_rs_scores)) * 100
             item['rs_percentile'] = percentile
 
-        # Filter to top 15%
+        # Filter to top 25% (relaxed from 15%)
         rs_filtered = [
             s for s in rs_scores
             if s['rs_percentile'] >= self.PARAMS['rs_percentile_threshold']
         ]
 
-        logger.info(f"Momentum: {len(rs_filtered)}/{len(rs_scores)} symbols passed RS > 85 filter")
+        logger.info(f"Momentum: {len(rs_filtered)}/{len(rs_scores)} symbols passed RS > 75 filter")
+
+        # Phase 1.5: ADR > 3% filter (avoid low volatility false breakouts)
+        adr_filtered = []
+        for item in rs_filtered:
+            try:
+                df = item['df']
+                ind = TechnicalIndicators(df)
+                ind.calculate_all()
+                adr_pct = ind.indicators.get('adr', {}).get('adr_pct', 0)
+                if adr_pct and adr_pct > 0.03:  # ADR > 3%
+                    adr_filtered.append(item)
+            except Exception as e:
+                logger.debug(f"Error checking ADR for {item['symbol']}: {e}")
+                continue
+
+        logger.info(f"Momentum: {len(adr_filtered)}/{len(rs_filtered)} symbols passed ADR > 3% filter")
+        rs_filtered = adr_filtered
 
         # Phase 2 & 3: Use base class screen() on filtered symbols
         filtered_symbols = [s['symbol'] for s in rs_filtered]

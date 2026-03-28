@@ -69,9 +69,25 @@ class PullbacksStrategy(BaseStrategy):
         return True
 
     def calculate_dimensions(self, symbol: str, df: pd.DataFrame) -> List[ScoringDimension]:
-        """Calculate 3-dimensional scoring."""
+        """Calculate 3-dimensional scoring with CLV hard filter."""
         ind = TechnicalIndicators(df)
         ind.calculate_all()
+
+        # CLV Hard Filter: CLV < 0.4 indicates accelerating decline (not just pullback)
+        today = df.iloc[-1]
+        high = today['high']
+        low = today['low']
+        close = today['close']
+
+        if high > low:
+            clv = (close - low) / (high - low)
+        else:
+            clv = 0.5
+
+        if clv < 0.4:
+            # CLV too low - price closed near low, likely still falling
+            logger.debug(f"{symbol}: CLV {clv:.2f} < 0.4, filtering out (accelerating decline)")
+            return []
 
         current_price = df['close'].iloc[-1]
         price_metrics = ind.indicators.get('price_metrics', {})

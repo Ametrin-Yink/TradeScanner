@@ -299,8 +299,25 @@ Run with coverage: `python -m pytest tests/ --cov=core --cov-report=html`
 **yfinance rate limit**: Use cached data in `market_data` table, wait 1 hour
 **Port 19801 in use**: `lsof -ti:19801 | xargs kill -9` then restart server
 
-## Log Locations
+## Sector ETF Reference
 
-Application logs: `tail -f data/scanner.log`
-Database: `data/market_data.db`
-Reports: `web/reports/YYYY-MM-DD.html`
+Main sector ETFs for industry strength comparison:
+
+**Select Sector SPDR**:
+- XLK - Technology
+- XLF - Financials
+- XLE - Energy
+- XLI - Industrials
+- XLP - Consumer Staples
+- XLY - Consumer Discretionary
+- XLB - Materials
+- XLU - Utilities
+- XLV - Health Care
+
+**Industry ETFs**:
+- XBI - Biotech
+- SMH - Semiconductor
+- IGV - Software
+- IYT - Transportation
+
+Usage: Compare stock's sector to ETF performance for relative strength context.

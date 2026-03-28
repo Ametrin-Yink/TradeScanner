@@ -354,30 +354,68 @@ class VCPEPStrategy(BaseStrategy):
 
     def screen(self, symbols: List[str]) -> List[StrategyMatch]:
         """
-        Screen all symbols with Phase 0 pre-filter by 52-week high proximity.
-        Relaxed threshold: <25% from 52w high (vs <10% in main filter).
+        Screen all symbols with Phase 0 pre-filter.
+        - 52-week high proximity <25%
+        - RS > 80 percentile (avoid mediocre stocks that just follow market)
         """
         prefiltered = []
 
-        logger.info("VCP-EP: Phase 0 - Pre-filtering by 52-week high proximity...")
+        # Phase 0.1: Calculate RS for all symbols first
+        logger.info("VCP-EP: Phase 0.1 - Calculating RS scores...")
+        rs_scores = []
         for symbol in symbols:
             try:
                 df = self._get_data(symbol)
                 if df is None or len(df) < self.PARAMS['min_listing_days']:
                     continue
 
+                current_price = df['close'].iloc[-1]
+
+                # Calculate returns
+                price_3m = df['close'].iloc[-63] if len(df) >= 63 else df['close'].iloc[0]
+                price_6m = df['close'].iloc[-126] if len(df) >= 126 else df['close'].iloc[0]
+                price_12m = df['close'].iloc[-252] if len(df) >= 252 else df['close'].iloc[0]
+
+                ret_3m = (current_price - price_3m) / price_3m
+                ret_6m = (current_price - price_6m) / price_6m
+                ret_12m = (current_price - price_12m) / price_12m
+
+                # RS score
+                rs_raw = 0.4 * ret_3m + 0.3 * ret_6m + 0.3 * ret_12m
+                rs_scores.append({'symbol': symbol, 'rs': rs_raw, 'df': df})
+            except Exception as e:
+                logger.debug(f"Error calculating RS for {symbol}: {e}")
+                continue
+
+        # Calculate RS percentile
+        if not rs_scores:
+            return []
+
+        all_rs = [s['rs'] for s in rs_scores]
+        for item in rs_scores:
+            below = sum(1 for r in all_rs if r < item['rs'])
+            item['percentile'] = (below / len(all_rs)) * 100
+
+        # Phase 0.2: Pre-filter by 52w high and RS > 80
+        logger.info("VCP-EP: Phase 0.2 - Pre-filtering by 52w high and RS > 80...")
+        for item in rs_scores:
+            try:
+                if item['percentile'] < 80:  # RS > 80%
+                    continue
+
+                df = item['df']
                 ind = TechnicalIndicators(df)
                 metrics_52w = ind.calculate_52w_metrics()
 
                 # Relaxed pre-filter: <25% from 52w high
                 if metrics_52w['distance_from_high'] is not None:
                     if metrics_52w['distance_from_high'] < 0.25:
-                        prefiltered.append(symbol)
+                        prefiltered.append(item['symbol'])
             except Exception as e:
-                logger.debug(f"Error pre-filtering {symbol}: {e}")
+                logger.debug(f"Error pre-filtering {item['symbol']}: {e}")
                 continue
 
-        logger.info(f"VCP-EP: {len(prefiltered)}/{len(symbols)} passed 52w high pre-filter (<25%)")
+        logger.info(f"VCP-EP: {len(prefiltered)}/{len(symbols)} passed RS>80 + 52w high pre-filter")
 
         # Use base class screen on pre-filtered symbols
         return super().screen(prefiltered)
