@@ -81,6 +81,34 @@ class ShoryukenStrategy(BaseStrategy):
         logger.info(f"Shoryuken: Market ATR median = {self.market_atr_median:.2f}, "
                     f"Processing {len(symbol_data)} symbols")
 
+        # Phase 0.5: Pre-filter by EMA21 trend (price > EMA21 and slope > 0)
+        logger.info("Shoryuken: Phase 0.5 - Pre-filtering by EMA21 trend...")
+        prefiltered_symbols = []
+        for symbol, data in symbol_data.items():
+            try:
+                df = data['df']
+                ind = data['ind']
+
+                # Check price above EMA21
+                current_price = df['close'].iloc[-1]
+                ema21 = ind.indicators.get('ema', {}).get('ema21', 0)
+
+                # Check EMA21 slope (current vs 5 days ago)
+                ema21_5d_ago = df['close'].ewm(span=21).mean().iloc[-6] if len(df) >= 6 else ema21 * 0.99
+                ema_slope = ema21 - ema21_5d_ago if ema21 and ema21_5d_ago else 0
+
+                if current_price > ema21 and ema_slope > 0:
+                    prefiltered_symbols.append(symbol)
+                else:
+                    # Remove from symbol_data to skip processing
+                    del symbol_data[symbol]
+            except Exception as e:
+                logger.debug(f"Error pre-filtering {symbol}: {e}")
+                continue
+
+
+        logger.info(f"Shoryuken: {len(prefiltered_symbols)}/{len(symbol_data) + len(prefiltered_symbols)} passed EMA21 trend pre-filter")
+
         # Get industry data for sector bonus
         try:
             if self.fetcher:

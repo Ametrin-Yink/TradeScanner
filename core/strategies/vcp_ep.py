@@ -351,3 +351,33 @@ class VCPEPStrategy(BaseStrategy):
             f"Breakout +{bs.details.get('breakout_pct', 0)*100:.1f}% | Vol {vc.details.get('volume_ratio', 0):.1f}x",
             f"50EMA: {tc.details.get('ema50_distance', 0)*100:.1f}% | 52w: {tc.details.get('distance_from_52w_high', 0)*100:.1f}%"
         ]
+
+    def screen(self, symbols: List[str]) -> List[StrategyMatch]:
+        """
+        Screen all symbols with Phase 0 pre-filter by 52-week high proximity.
+        Relaxed threshold: <25% from 52w high (vs <10% in main filter).
+        """
+        prefiltered = []
+
+        logger.info("VCP-EP: Phase 0 - Pre-filtering by 52-week high proximity...")
+        for symbol in symbols:
+            try:
+                df = self._get_data(symbol)
+                if df is None or len(df) < self.PARAMS['min_listing_days']:
+                    continue
+
+                ind = TechnicalIndicators(df)
+                metrics_52w = ind.calculate_52w_metrics()
+
+                # Relaxed pre-filter: <25% from 52w high
+                if metrics_52w['distance_from_high'] is not None:
+                    if metrics_52w['distance_from_high'] < 0.25:
+                        prefiltered.append(symbol)
+            except Exception as e:
+                logger.debug(f"Error pre-filtering {symbol}: {e}")
+                continue
+
+        logger.info(f"VCP-EP: {len(prefiltered)}/{len(symbols)} passed 52w high pre-filter (<25%)")
+
+        # Use base class screen on pre-filtered symbols
+        return super().screen(prefiltered)

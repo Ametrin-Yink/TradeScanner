@@ -30,7 +30,7 @@ class MomentumStrategy(BaseStrategy):
 
     # Momentum Parameters
     PARAMS = {
-        'rs_percentile_threshold': 85,       # Top 15%
+        'rs_percentile_threshold': 75,       # Relaxed from 85% to 75% (top 25%)
         'require_200ema_uptrend': True,      # Long-term trend
         'max_distance_from_50d_high': 0.05,  # Within 5% of 50d high
         'squeeze_contraction': 0.80,         # Range < 80% of previous
