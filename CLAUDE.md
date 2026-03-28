@@ -243,6 +243,15 @@ SPY is automatically added to stock universe in `config/stocks.py` for:
 - RS resilience bonus calculation in `core/strategies/momentum.py`
 - Always fetch SPY data first in strategy `screen()` methods that need market context
 
+## Sector ETF Data
+
+Sector ETFs automatically loaded into universe for industry strength comparison:
+
+**Core Sectors**: XLK, XLF, XLE, XLI, XLP, XLY, XLB, XLU, XLV
+**Industries**: XBI, SMH, IGV, IYT
+
+Use for: Relative sector strength, industry rotation detection, group move confirmation.
+
 ## Strategy Formula Documentation
 
 When modifying any scoring calculation, **同步更新 `策略描述.md`**:

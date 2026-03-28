@@ -112,6 +112,25 @@ def load_stock_universe(db: Database = None, force_refresh: bool = False) -> lis
     market_etfs = ['SPY']
     all_symbols = list(set(all_symbols + market_etfs))
 
+    # Add sector ETFs for industry strength comparison
+    sector_etfs = [
+        'XLK',  # Technology
+        'XLF',  # Financials
+        'XLE',  # Energy
+        'XLI',  # Industrials
+        'XLP',  # Consumer Staples
+        'XLY',  # Consumer Discretionary
+        'XLB',  # Materials
+        'XLU',  # Utilities
+        'XLV',  # Health Care
+        'XBI',  # Biotech
+        'SMH',  # Semiconductor
+        'IGV',  # Software
+        'IYT',  # Transportation
+    ]
+    all_symbols = list(set(all_symbols + sector_etfs))
+    logger.info(f"Added {len(sector_etfs)} sector ETFs for industry strength comparison")
+
     # Filter out delisted stocks
     all_symbols = filter_delisted(all_symbols)
     logger.info(f"Filtered out delisted stocks, {len(all_symbols)} remaining")
