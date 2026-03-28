@@ -330,3 +330,35 @@ Main sector ETFs for industry strength comparison:
 - IYT - Transportation
 
 Usage: Compare stock's sector to ETF performance for relative strength context.
+
+## Strategy Development Workflow
+
+When developing/upgrading strategies (E/F/G v2.x pattern):
+1. **Document First**: Update `策略描述.md` with scoring tables before coding
+2. **Quick Syntax Check**: `python3 -m py_compile core/strategies/x.py`
+3. **Import Test**: `python3 -c "from core.strategies.x import Strategy; s = Strategy()"`
+4. **Commit**: Use detailed messages explaining dimensions and devil details
+
+## Bidirectional Strategy Pattern
+
+For strategies supporting long/short (e.g., Range, DTSS):
+- Phase 0: Detect market direction via `SPY >/< EMA50` or `SPY >/< open`
+- Store in `self.market_direction = 'long'/'short'/'neutral'`
+- Pre-filter: Check trend alignment before expensive calculations
+- Scoring: Adjust dimension logic based on direction (e.g., VC for short = relative weakness)
+
+## Devil Details Pattern
+
+Quality filters for reducing false signals:
+- **Width Constraint**: `Range_Width < 1.5×ATR` → veto (no profit space)
+- **Time Decay**: `Days_at_Level > 5` with minimal movement → exit signal
+- **Stability Filter**: Tests must be ≥3 days apart (prevent double counting)
+- **Profit Efficiency**: `R:R < 1.5` → score penalty (force good entry)
+- **Relative Weakness**: SPY up + stock flat = distribution signal
+
+## 策略描述.md Maintenance
+
+When adding strategies, update these sections:
+1. Strategy section with dimensions, scoring tables, formulas
+2. 维护记录 table at bottom with date and changes
+3. Keep formulas in code blocks with Chinese labels
