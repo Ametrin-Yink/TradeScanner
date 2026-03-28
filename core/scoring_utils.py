@@ -352,3 +352,71 @@ def calculate_volume_climax_score(volume_ratio: float,
         return 0.5 + (volume_ratio - 1.5) / (medium_threshold - 1.5) * 0.5
     else:
         return max(0, volume_ratio - 1.0)
+
+
+def calculate_normalized_ema_slope(df: pd.DataFrame, ema_period: int = 21,
+                                   atr_period: int = 14) -> Dict[str, any]:
+    """
+    Calculate normalized EMA slope (trend intensity).
+
+    Formula: (EMA_today - EMA_n_days_ago) / ATR
+
+    Args:
+        df: DataFrame with price data
+        ema_period: EMA period
+        atr_period: ATR period for normalization
+
+    Returns:
+        Dict with slope, normalized_slope, is_uptrend
+    """
+    if len(df) < ema_period + 5:
+        return {'slope': 0, 'normalized_slope': 0, 'is_uptrend': False}
+
+    try:
+        ema = df['close'].ewm(span=ema_period).mean()
+        ema_current = ema.iloc[-1]
+        ema_prev = ema.iloc[-6]  # 5 days ago
+
+        # Calculate ATR
+        high_low = df['high'] - df['low']
+        high_close = abs(df['high'] - df['close'].shift())
+        low_close = abs(df['low'] - df['close'].shift())
+        tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+        atr = tr.rolling(window=atr_period).mean().iloc[-1]
+
+        slope = (ema_current - ema_prev) / ema_prev
+        normalized_slope = slope / (atr / ema_current) if atr > 0 else 0
+
+        return {
+            'slope': slope,
+            'normalized_slope': normalized_slope,
+            'is_uptrend': slope > 0
+        }
+
+    except Exception:
+        return {'slope': 0, 'normalized_slope': 0, 'is_uptrend': False}
+
+
+def calculate_linear_interpolation(value: float, min_val: float, max_val: float,
+                                   min_score: float, max_score: float) -> float:
+    """
+    Calculate linear interpolation for scoring.
+
+    Formula: min_score + (value - min_val) / (max_val - min_val) * (max_score - min_score)
+
+    Args:
+        value: Current value
+        min_val: Minimum threshold value
+        max_val: Maximum threshold value
+        min_score: Score at min_val
+        max_score: Score at max_val
+
+    Returns:
+        Interpolated score
+    """
+    if value <= min_val:
+        return min_score
+    if value >= max_val:
+        return max_score
+
+    return min_score + (value - min_val) / (max_val - min_val) * (max_score - min_score)
