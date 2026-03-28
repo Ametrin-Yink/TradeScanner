@@ -108,6 +108,10 @@ class MomentumStrategy(BaseStrategy):
         price_12m_ago = df['close'].iloc[-252] if len(df) >= 252 else df['close'].iloc[0]
         ret_12m = (current_price - price_12m_ago) / price_12m_ago
 
+        # 5-day return for RS resilience
+        price_5d_ago = df['close'].iloc[-5] if len(df) >= 5 else df['close'].iloc[0]
+        ret_5d = (current_price - price_5d_ago) / price_5d_ago
+
         rs_raw_score = ind.calculate_rs_score(ret_3m, ret_6m, ret_12m)
 
         # Get technical data
@@ -128,8 +132,11 @@ class MomentumStrategy(BaseStrategy):
 
         dimensions = []
 
+        # Get SPY return for RS resilience calculation
+        spy_return_5d = getattr(self, '_spy_return_5d', 0.0)
+
         # Dimension 1: RS Strength (RS) - 0-5 points
-        rs_score = self._calculate_rs(rs_raw_score)
+        rs_score = self._calculate_rs(rs_raw_score, spy_return_5d, ret_5d)
         dimensions.append(ScoringDimension(
             name='RS',
             score=rs_score,
@@ -181,8 +188,13 @@ class MomentumStrategy(BaseStrategy):
 
         return dimensions
 
-    def _calculate_rs(self, rs_raw_score: float) -> float:
-        """RS Strength dimension (0-5) based on raw RS score."""
+    def _calculate_rs(self, rs_raw_score: float, spy_return_5d: float = 0.0, stock_return_5d: float = 0.0) -> float:
+        """
+        RS Strength dimension (0-5) based on raw RS score with resilience bonus (建议#2).
+
+        When SPY is down but stock holds up (relative strength), add bonus.
+        Formula: Resilience_Bonus = 0 to 1.5 based on relative performance vs SPY
+        """
         rs_score = 0.0
 
         # Base score based on raw RS strength (linear interpolation)
@@ -198,7 +210,26 @@ class MomentumStrategy(BaseStrategy):
             # Linear from 0 at -0.1 to 1.0 at 0.1
             rs_score = max(0.0, (rs_raw_score + 0.1) / 0.2 * 1.0)
 
-        return round(min(5.0, rs_score), 2)
+        # Resilience Bonus: If SPY is down but stock is up/flat, add bonus
+        # This captures "refusing to decline" stocks in weak markets
+        if spy_return_5d < -0.02:  # SPY down more than 2%
+            # Calculate relative resilience
+            relative_performance = stock_return_5d - spy_return_5d
+
+            # Bonus: 0 to 1.5 based on how much better stock performed
+            if relative_performance > 0.05:  # Stock beat SPY by 5%+
+                resilience_bonus = 1.5
+            elif relative_performance > 0:
+                # Linear from 0 to 1.5 as relative performance goes from 0 to 5%
+                resilience_bonus = relative_performance / 0.05 * 1.5
+            else:
+                # Stock also down, but less than SPY: partial bonus
+                # If stock down 1% vs SPY down 3%, relative = 2%, bonus = 0.6
+                resilience_bonus = max(0, relative_performance / 0.03)
+
+            rs_score = min(5.0, rs_score + resilience_bonus)
+
+        return round(rs_score, 2)
 
     def _calculate_sq(self, squeeze: Dict) -> float:
         """Squeeze Quality dimension (0-5)."""
@@ -353,6 +384,17 @@ class MomentumStrategy(BaseStrategy):
         """
         matches = []
 
+        # Phase 0: Get SPY data for market regime and RS resilience calculation
+        spy_df = self._get_data('SPY')
+        spy_return_5d = 0.0
+        if spy_df is not None and len(spy_df) >= 5:
+            spy_current = spy_df['close'].iloc[-1]
+            spy_5d_ago = spy_df['close'].iloc[-5]
+            spy_return_5d = (spy_current - spy_5d_ago) / spy_5d_ago
+
+        # Store SPY return for RS resilience calculation
+        self._spy_return_5d = spy_return_5d
+
         # Phase 1: Calculate RS scores for all symbols (need 1 year data)
         rs_scores = []
         for symbol in symbols:
@@ -375,6 +417,10 @@ class MomentumStrategy(BaseStrategy):
                 price_12m_ago = df['close'].iloc[-252] if len(df) >= 252 else df['close'].iloc[0]
                 ret_12m = (current_price - price_12m_ago) / price_12m_ago
 
+                # 5-day return for RS resilience
+                price_5d_ago = df['close'].iloc[-5] if len(df) >= 5 else df['close'].iloc[0]
+                ret_5d = (current_price - price_5d_ago) / price_5d_ago
+
                 # Calculate RS score
                 ind = TechnicalIndicators(df)
                 rs_score = ind.calculate_rs_score(ret_3m, ret_6m, ret_12m)
@@ -385,6 +431,7 @@ class MomentumStrategy(BaseStrategy):
                     'ret_3m': ret_3m,
                     'ret_6m': ret_6m,
                     'ret_12m': ret_12m,
+                    'ret_5d': ret_5d,  # 5-day return for RS resilience
                     'df': df
                 })
             except Exception as e:

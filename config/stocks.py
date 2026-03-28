@@ -108,6 +108,10 @@ def load_stock_universe(db: Database = None, force_refresh: bool = False) -> lis
     # Combine and deduplicate
     all_symbols = list(set(sp500 + nasdaq100 + dow))
 
+    # Add market ETFs for regime detection (SPY for S&P500 trend)
+    market_etfs = ['SPY']
+    all_symbols = list(set(all_symbols + market_etfs))
+
     # Filter out delisted stocks
     all_symbols = filter_delisted(all_symbols)
     logger.info(f"Filtered out delisted stocks, {len(all_symbols)} remaining")
