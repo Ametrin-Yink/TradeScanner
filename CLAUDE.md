@@ -115,16 +115,20 @@ Automated US stock trading opportunity scanner based on strategies in `Strategy_
 - **Financial/Professional style preferred** over "AI" style with gradients/emojis
 - Use dark header (#1a1a2e), clean borders, compact spacing
 - Color-code confidence: green (high), orange (medium), red (low)
+- **Compact Layout**: Stats in single line, sentiment with full AI reasoning
+- **Chart Position**: Side-by-side with Analysis section using flex layout
 
 ## Stock Management
 
-- **Add Stock**: Insert into `stocks` table with `is_active = 1` - see `docs/STOCK_MANAGEMENT.md`
-- **Verify Ticker**: Use `yfinance.Ticker(symbol).info` to confirm validity before adding
-- **Soft Delete**: Set `is_active = 0` instead of DELETE to preserve history
-- **Bulk Add**: Use Python script to add multiple stocks at once
-- **Delisted**: Add to `config/delisted.py` blacklist, not database
+- **Reference**: See `docs/STOCK_MANAGEMENT.md` for complete stock management procedures
+- **Quick Add**: `python -c "from data.db import Database; db = Database(); db.get_connection().execute('INSERT INTO stocks (symbol, name, sector, added_date, is_active) VALUES (?, ?, ?, datetime('now'), 1)', ('SYMBOL', 'Name', 'Sector')); db.get_connection().commit()"`
+- **Verify First**: Use `yfinance.Ticker(symbol).info` to confirm validity
+- **Soft Delete**: Set `is_active = 0` to preserve history
+- **Delisted**: Add to `config/delisted.py` blacklist
 
 ## Report Generation
 
 - Pass `all_candidates` (40 items) separately from `opportunities` (10 analyzed) to show Additional Candidates (11-40)
 - Use symbol deduplication to avoid overlap between Top 10 and Additional sections
+- **Market Sentiment Section**: Display AI reasoning, key_factors, and confidence percentage
+- **Compact Stats**: Single line format: "Scanned: N | Success: N | Failed: N | Top Picks: N"
