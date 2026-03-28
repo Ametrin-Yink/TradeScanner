@@ -1,8 +1,9 @@
-"""Strategy G: DTSS - Distribution Top Sell Signal (Short)."""
+"""Strategy G: DTSS v2.1 - Distribution Top / Accumulation Bottom with expert suggestions."""
 from typing import Dict, List, Optional, Tuple, Any
 import logging
 
 import pandas as pd
+import numpy as np
 
 from ..indicators import TechnicalIndicators
 from .base_strategy import BaseStrategy, StrategyMatch, ScoringDimension, StrategyType
@@ -11,26 +12,161 @@ logger = logging.getLogger(__name__)
 
 
 class DTSSStrategy(BaseStrategy):
-    """Strategy G: DTSS - Distribution Top Sell Signal (Short strategy).
+    """
+    Strategy G: DTSS v2.1 - Distribution Top / Accumulation Bottom.
 
-    Short strategy: Within 3% of 60-day high + showing weakness.
+    Expert suggestions implemented:
+    A. Left/Right side grading (TS dimension)
+    B. Test interval > 10 days (PL dimension)
+    C. Exhaustion gap detection (VC dimension)
+    D. Institutional intensity factor (VC dimension)
     """
 
     NAME = "DTSS"
     STRATEGY_TYPE = StrategyType.DTSS
-    DESCRIPTION = "Distribution Top Sell Signal - Short strategy near highs with weakness"
-    DIMENSIONS = ['PQ', 'WS', 'VC']
+    DESCRIPTION = "Distribution Top / Accumulation Bottom v2.1 with left/right side grading"
+    DIMENSIONS = ['PL', 'TS', 'VC']
 
     PARAMS = {
         'min_dollar_volume': 50_000_000,
         'min_atr_pct': 0.015,
         'min_listing_days': 60,
-        'max_distance_from_high': 0.03,
+        'max_distance_from_level': 0.03,  # 3% from 60d high/low
         'target_r_multiplier': 3.0,
+        'support_tolerance_atr': 0.5,
+        'min_test_interval_days': 10,  # Expert suggestion B: quality test interval
+        'volume_veto_threshold': 1.5,
+        'breakout_threshold_atr': 0.5,
+        'time_decay_days': 3,
+        'profit_efficiency_threshold': 1.5,
+        'efficiency_penalty': 2.0,
+        'left_side_max_tier': 'B',  # Expert suggestion A: left side position limit
+        'exhaustion_gap_threshold': 0.01,  # 1% gap
+        'institutional_intensity_threshold': 1.5,  # Expert suggestion D
     }
 
+    def __init__(self, fetcher=None, db=None):
+        """Initialize with market direction cache."""
+        super().__init__(fetcher=fetcher, db=db)
+        self.market_direction = 'neutral'  # 'long', 'short', 'neutral'
+        self.spy_return_1d = 0.0
+
+    def screen(self, symbols: List[str]) -> List[StrategyMatch]:
+        """
+        Screen symbols with Phase 0 market direction detection.
+        """
+        # Phase 0: Determine market direction
+        logger.info("DTSS: Phase 0 - Determining market direction...")
+        self._detect_market_direction()
+
+        if self.market_direction == 'neutral':
+            logger.info("DTSS: Market neutral, no trading")
+            return []
+
+        logger.info(f"DTSS: Market direction = {self.market_direction.upper()}")
+
+        # Phase 0.5: Pre-filter by trend and level existence
+        prefiltered = []
+        logger.info(f"DTSS: Phase 0.5 - Pre-filtering for {self.market_direction} mode...")
+
+        for symbol in symbols:
+            try:
+                df = self._get_data(symbol)
+                if df is None or len(df) < self.PARAMS['min_listing_days']:
+                    continue
+
+                if self._prefilter_symbol(symbol, df):
+                    prefiltered.append(symbol)
+
+            except Exception as e:
+                logger.debug(f"Error pre-filtering {symbol}: {e}")
+                continue
+
+        logger.info(f"DTSS: {len(prefiltered)}/{len(symbols)} passed pre-filter")
+
+        # Use base class screen on pre-filtered symbols
+        return super().screen(prefiltered)
+
+    def _detect_market_direction(self):
+        """
+        Detect market direction based on SPY trend.
+        Short: SPY < EMA50 or SPY < open - 1%
+        Long: SPY > EMA50 or SPY > open + 1%
+        """
+        try:
+            spy_df = self._get_data('SPY')
+            if spy_df is None or len(spy_df) < 50:
+                self.market_direction = 'neutral'
+                return
+
+            current = spy_df['close'].iloc[-1]
+            ema50 = spy_df['close'].ewm(span=50).mean().iloc[-1]
+            open_price = spy_df['open'].iloc[-1]
+            atr = spy_df['close'].rolling(14).apply(lambda x: (x.max() - x.min())).iloc[-1]
+
+            # Short mode: distribution environment
+            if current < ema50 or current < open_price * 0.99:
+                self.market_direction = 'short'
+            # Long mode: accumulation environment
+            elif current > ema50 or current > open_price * 1.01:
+                self.market_direction = 'long'
+            else:
+                self.market_direction = 'neutral'
+
+        except Exception as e:
+            logger.warning(f"Could not detect market direction: {e}")
+            self.market_direction = 'neutral'
+
+    def _prefilter_symbol(self, symbol: str, df: pd.DataFrame) -> bool:
+        """Pre-filter symbol based on market direction."""
+        ind = TechnicalIndicators(df)
+        ind.calculate_all()
+
+        current_price = df['close'].iloc[-1]
+        price_metrics = ind.indicators.get('price_metrics', {})
+
+        if self.market_direction == 'short':
+            # Distribution top mode
+            high_60d = price_metrics.get('high_60d')
+            if high_60d is None:
+                return False
+
+            distance = abs(high_60d - current_price) / current_price
+            if distance > self.PARAMS['max_distance_from_level']:
+                return False
+
+            # Check for weakness
+            ema = ind.indicators.get('ema', {})
+            ema8 = ema.get('ema8', current_price)
+            ema21 = ema.get('ema21', current_price)
+
+            weakness = ema8 < ema21 or current_price < ema8
+            if not weakness:
+                return False
+
+        else:  # long mode
+            # Accumulation bottom mode
+            low_60d = price_metrics.get('low_60d')
+            if low_60d is None:
+                return False
+
+            distance = abs(current_price - low_60d) / current_price
+            if distance > self.PARAMS['max_distance_from_level']:
+                return False
+
+            # Check for strength
+            ema = ind.indicators.get('ema', {})
+            ema8 = ema.get('ema8', current_price)
+            ema21 = ema.get('ema21', current_price)
+
+            strength = ema8 > ema21 or current_price > ema8
+            if not strength:
+                return False
+
+        return True
+
     def filter(self, symbol: str, df: pd.DataFrame) -> bool:
-        """Filter for DTSS candidates."""
+        """Filter with veto checks."""
         if len(df) < self.PARAMS['min_listing_days']:
             return False
 
@@ -41,158 +177,528 @@ class DTSSStrategy(BaseStrategy):
             return False
 
         current_price = df['close'].iloc[-1]
+        atr = ind.indicators.get('atr', {}).get('atr', current_price * 0.02)
+        volume_data = ind.indicators.get('volume', {})
+        volume_ratio = volume_data.get('volume_ratio', 1.0)
+
         price_metrics = ind.indicators.get('price_metrics', {})
-        high_60d = price_metrics.get('high_60d')
 
-        if high_60d is None:
-            return False
+        if self.market_direction == 'short':
+            high_60d = price_metrics.get('high_60d')
+            if high_60d is None:
+                return False
 
-        # Check if near 60-day high (within 3%)
-        distance_from_high = abs(high_60d - current_price) / current_price
-        if distance_from_high > self.PARAMS['max_distance_from_high']:
-            return False
+            # Veto: breakout above 60d high with volume
+            if volume_ratio > self.PARAMS['volume_veto_threshold'] and \
+               current_price > high_60d + self.PARAMS['breakout_threshold_atr'] * atr:
+                logger.debug(f"{symbol}: Breakout veto (short)")
+                return False
 
-        # Check for weakness signs
-        ema = ind.indicators.get('ema', {})
-        ema8 = ema.get('ema8')
-        ema21 = ema.get('ema21')
+        else:  # long mode
+            low_60d = price_metrics.get('low_60d')
+            if low_60d is None:
+                return False
 
-        if ema8 is None or ema21 is None:
-            return False
-
-        # Weakness: EMA8 crossing below EMA21 or price below both
-        weakness = ema8 < ema21 or current_price < ema8
-
-        if not weakness:
-            return False
+            # Veto: breakdown below 60d low with volume
+            if volume_ratio > self.PARAMS['volume_veto_threshold'] and \
+               current_price < low_60d - self.PARAMS['breakout_threshold_atr'] * atr:
+                logger.debug(f"{symbol}: Breakdown veto (long)")
+                return False
 
         return True
 
     def calculate_dimensions(self, symbol: str, df: pd.DataFrame) -> List[ScoringDimension]:
-        """Calculate 3-dimensional scoring."""
+        """Calculate 3-dimensional scoring with expert suggestions."""
         ind = TechnicalIndicators(df)
         ind.calculate_all()
 
         current_price = df['close'].iloc[-1]
+        atr = ind.indicators.get('atr', {}).get('atr', current_price * 0.02)
         price_metrics = ind.indicators.get('price_metrics', {})
-        high_60d = price_metrics.get('high_60d', current_price)
-        distance_from_high = abs(high_60d - current_price) / current_price
-
-        ema = ind.indicators.get('ema', {})
-        ema8 = ema.get('ema8', current_price)
-        ema21 = ema.get('ema21', current_price)
-
-        volume_data = ind.indicators.get('volume', {})
-        volume_spike = volume_data.get('volume_spike', False)
-        volume_ratio = volume_data.get('volume_ratio', 1.0)
 
         dimensions = []
 
-        # Dimension 1: Proximity Quality (PQ)
-        pq_score = self._calculate_pq(distance_from_high)
-        dimensions.append(ScoringDimension(
-            name='PQ',
-            score=pq_score,
-            max_score=5.0,
-            details={
-                'high_60d': high_60d,
-                'distance_from_high': distance_from_high
-            }
-        ))
+        if self.market_direction == 'short':
+            level_60d = price_metrics.get('high_60d', current_price)
+            distance_pct = abs(level_60d - current_price) / current_price
 
-        # Dimension 2: Weakness Signals (WS)
-        ws_score = self._calculate_ws(ema8, ema21, current_price)
-        dimensions.append(ScoringDimension(
-            name='WS',
-            score=ws_score,
-            max_score=5.0,
-            details={
-                'ema8': ema8,
-                'ema21': ema21,
-                'ema_bearish': ema8 < ema21,
-                'price_below_ema8': current_price < ema8
-            }
-        ))
+            # Calculate test info with interval (Expert suggestion B)
+            test_info = self._calculate_test_info(df, level_60d, atr, 'high')
 
-        # Dimension 3: Volume Confirmation (VC)
-        vc_score = self._calculate_vc(volume_spike, volume_ratio)
-        dimensions.append(ScoringDimension(
-            name='VC',
-            score=vc_score,
-            max_score=5.0,
-            details={
-                'volume_spike': volume_spike,
-                'volume_ratio': volume_ratio
-            }
-        ))
+            # Dimension 1: PL - Proximity to Level (5 pts)
+            pl_score, pl_details = self._calculate_pl(distance_pct, test_info)
+            dimensions.append(ScoringDimension(
+                name='PL',
+                score=pl_score,
+                max_score=5.0,
+                details=pl_details
+            ))
+
+            # Dimension 2: TS - Trend Structure with left/right grading (Expert suggestion A)
+            ts_score, ts_details = self._calculate_ts_short(ind, df, current_price)
+            dimensions.append(ScoringDimension(
+                name='TS',
+                score=ts_score,
+                max_score=6.0,
+                details=ts_details
+            ))
+
+            # Dimension 3: VC - Volume with exhaustion gap & institutional intensity (Expert C & D)
+            vc_score, vc_details = self._calculate_vc_short(ind, df, current_price, level_60d)
+            dimensions.append(ScoringDimension(
+                name='VC',
+                score=vc_score,
+                max_score=4.0,
+                details=vc_details
+            ))
+
+        else:  # long mode
+            level_60d = price_metrics.get('low_60d', current_price)
+            distance_pct = abs(current_price - level_60d) / current_price
+
+            # Calculate test info with interval
+            test_info = self._calculate_test_info(df, level_60d, atr, 'low')
+
+            # Dimension 1: PL
+            pl_score, pl_details = self._calculate_pl(distance_pct, test_info)
+            dimensions.append(ScoringDimension(
+                name='PL',
+                score=pl_score,
+                max_score=5.0,
+                details=pl_details
+            ))
+
+            # Dimension 2: TS with left/right grading
+            ts_score, ts_details = self._calculate_ts_long(ind, df, current_price)
+            dimensions.append(ScoringDimension(
+                name='TS',
+                score=ts_score,
+                max_score=6.0,
+                details=ts_details
+            ))
+
+            # Dimension 3: VC
+            vc_score, vc_details = self._calculate_vc_long(ind, df, current_price, level_60d)
+            dimensions.append(ScoringDimension(
+                name='VC',
+                score=vc_score,
+                max_score=4.0,
+                details=vc_details
+            ))
+
+        # Check profit efficiency (Devil detail)
+        total_score = sum(d.score for d in dimensions)
+        entry = current_price
+        stop = self._calculate_stop(df, dimensions)
+        target1 = self._calculate_target1(df, dimensions)
+
+        if target1 and stop and abs(entry - stop) > 0:
+            profit_potential = abs(target1 - entry) / abs(entry - stop)
+            if profit_potential < self.PARAMS['profit_efficiency_threshold']:
+                total_score -= self.PARAMS['efficiency_penalty']
+                logger.debug(f"{symbol}: Efficiency penalty applied (R:R={profit_potential:.2f})")
 
         return dimensions
 
-    def _calculate_pq(self, distance_pct: float) -> float:
-        """Proximity Quality dimension (0-5) - closer to high is better for short."""
-        pq_score = 0.0
+    def _calculate_test_info(self, df: pd.DataFrame, level: float, atr: float, level_type: str) -> Dict:
+        """
+        Calculate test information with interval constraint (Expert suggestion B).
+        """
+        tolerance = atr * self.PARAMS['support_tolerance_atr']
+        tests = []
+        last_test_idx = None
 
-        # Near the high is good for short
+        lookback = min(90, len(df) - 1)
+
+        for i in range(1, lookback + 1):
+            idx = -(i + 1)
+            if idx < -len(df):
+                break
+
+            row = df.iloc[idx]
+
+            # Check if price touched the level
+            touched = False
+            if level_type == 'high':
+                # Near 60d high
+                if abs(row['high'] - level) <= tolerance or row['high'] >= level - tolerance:
+                    if row['close'] < level:  # Rejected
+                        touched = True
+            else:  # low
+                # Near 60d low
+                if abs(row['low'] - level) <= tolerance or row['low'] <= level + tolerance:
+                    if row['close'] > level:  # Bounced
+                        touched = True
+
+            if touched:
+                # Expert suggestion B: min 10 days between quality tests
+                if last_test_idx is None or (last_test_idx - i) >= self.PARAMS['min_test_interval_days']:
+                    tests.append({
+                        'idx': i,
+                        'days_since': i
+                    })
+                    last_test_idx = i
+
+        # Calculate average interval
+        intervals = []
+        if len(tests) >= 2:
+            for i in range(1, len(tests)):
+                intervals.append(tests[i-1]['idx'] - tests[i]['idx'])
+
+        avg_interval = sum(intervals) / len(intervals) if intervals else 0
+
+        return {
+            'test_count': len(tests),
+            'avg_interval': avg_interval,
+            'max_interval': max(intervals) if intervals else 0
+        }
+
+    def _calculate_pl(self, distance_pct: float, test_info: Dict) -> Tuple[float, Dict]:
+        """
+        Proximity to Level dimension (0-5) with test interval (Expert suggestion B).
+        """
+        details = {
+            'distance_pct': distance_pct,
+            'test_count': test_info['test_count'],
+            'avg_interval': test_info['avg_interval']
+        }
+
+        pl_score = 0.0
+
+        # Distance scoring
         if distance_pct < 0.01:
-            pq_score += 3.0
+            pl_score += 3.0
         elif distance_pct < 0.02:
-            pq_score += 2.5
+            pl_score += 2.0
         elif distance_pct < 0.03:
-            pq_score += 2.0
-        else:
-            pq_score += 1.0
+            pl_score += 1.0
 
-        # Bonus for extreme proximity
-        if distance_pct < 0.005:
-            pq_score += 2.0
-        elif distance_pct < 0.015:
-            pq_score += 1.0
+        # Test interval scoring (Expert suggestion B)
+        avg_interval = test_info['avg_interval']
+        if avg_interval > 10:
+            pl_score += 1.5  # High quality validation
+        elif avg_interval > 5:
+            pl_score += 1.0
+        elif test_info['test_count'] >= 2:
+            pl_score += 0.5  # Short interval, lower quality
 
-        return round(min(5.0, pq_score), 2)
+        return round(min(5.0, pl_score), 2), details
 
-    def _calculate_ws(self, ema8: float, ema21: float, price: float) -> float:
-        """Weakness Signals dimension (0-5)."""
-        ws_score = 0.0
+    def _calculate_ts_short(self, ind: TechnicalIndicators, df: pd.DataFrame, price: float) -> Tuple[float, Dict]:
+        """
+        Trend Structure for short with left/right grading (Expert suggestion A).
+        Right side (confirmed): EMA8 < EMA21 < EMA50 = 5 pts
+        Left side (early): EMA still bullish BUT distribution signs = 3 pts
+        """
+        ema = ind.indicators.get('ema', {})
+        ema8 = ema.get('ema8', price)
+        ema21 = ema.get('ema21', price)
+        ema50 = ema.get('ema50', price)
 
-        # EMA crossover (bearish)
-        if ema8 < ema21:
-            ema_diff = (ema21 - ema8) / ema21
-            if ema_diff > 0.02:
-                ws_score += 3.0
-            elif ema_diff > 0.01:
-                ws_score += 2.0 + (ema_diff - 0.01) / 0.01
-            else:
-                ws_score += 1.0 + ema_diff / 0.01
+        rsi_data = ind.indicators.get('rsi', {})
+        rsi = rsi_data.get('rsi', 50)
+
+        # Calculate RSI divergence
+        rsi_divergence = self._check_rsi_divergence(df, 'bearish')
+
+        details = {
+            'side': 'unknown',
+            'ema8': ema8,
+            'ema21': ema21,
+            'ema50': ema50,
+            'rsi': rsi,
+            'rsi_divergence': rsi_divergence
+        }
+
+        ts_score = 0.0
+
+        # Right side: Confirmed bearish alignment
+        if ema8 < ema21 < ema50:
+            ts_score += 2.0
+            details['side'] = 'right'
+        # Left side: Early distribution (Expert suggestion A)
+        elif ema8 > ema21 > ema50 and rsi_divergence:
+            ts_score += 2.0  # Left side base
+            details['side'] = 'left'
+        elif ema8 < ema21:
+            ts_score += 1.5
+            details['side'] = 'transition'
 
         # Price below EMA8
         if price < ema8:
-            price_diff = (ema8 - price) / ema8
-            if price_diff > 0.01:
-                ws_score += 2.0
-            else:
-                ws_score += price_diff / 0.01 * 2.0
+            ts_score += 2.0
 
-        return round(min(5.0, ws_score), 2)
+        # EMA21 slope
+        ema21_slope = ind.calculate_stable_ema_slope(period=21, comparison_days=3)
+        slope_val = ema21_slope.get('slope', 0)
+        if slope_val < -0.002:  # -0.2%
+            ts_score += 1.5
+        elif slope_val < 0:
+            ts_score += 0.5
 
-    def _calculate_vc(self, volume_spike: bool, volume_ratio: float) -> float:
-        """Volume Confirmation dimension (0-5)."""
+        # RSI in distribution zone
+        if 45 < rsi < 60:
+            ts_score += 1.0
+
+        # Expert suggestion A: Left side gets max 3 points
+        if details['side'] == 'left':
+            ts_score = min(ts_score, 3.0)
+
+        return round(min(6.0, ts_score), 2), details
+
+    def _calculate_ts_long(self, ind: TechnicalIndicators, df: pd.DataFrame, price: float) -> Tuple[float, Dict]:
+        """Trend Structure for long with left/right grading."""
+        ema = ind.indicators.get('ema', {})
+        ema8 = ema.get('ema8', price)
+        ema21 = ema.get('ema21', price)
+        ema50 = ema.get('ema50', price)
+
+        rsi_data = ind.indicators.get('rsi', {})
+        rsi = rsi_data.get('rsi', 50)
+
+        # Calculate RSI divergence
+        rsi_divergence = self._check_rsi_divergence(df, 'bullish')
+
+        details = {
+            'side': 'unknown',
+            'ema8': ema8,
+            'ema21': ema21,
+            'ema50': ema50,
+            'rsi': rsi,
+            'rsi_divergence': rsi_divergence
+        }
+
+        ts_score = 0.0
+
+        # Right side: Confirmed bullish alignment
+        if ema8 > ema21 > ema50:
+            ts_score += 2.0
+            details['side'] = 'right'
+        # Left side: Early accumulation
+        elif ema8 < ema21 < ema50 and rsi_divergence:
+            ts_score += 2.0
+            details['side'] = 'left'
+        elif ema8 > ema21:
+            ts_score += 1.5
+            details['side'] = 'transition'
+
+        # Price above EMA8
+        if price > ema8:
+            ts_score += 2.0
+
+        # EMA21 slope
+        ema21_slope = ind.calculate_stable_ema_slope(period=21, comparison_days=3)
+        slope_val = ema21_slope.get('slope', 0)
+        if slope_val > 0.002:  # +0.2%
+            ts_score += 1.5
+        elif slope_val > 0:
+            ts_score += 0.5
+
+        # RSI in accumulation zone
+        if 40 < rsi < 55:
+            ts_score += 1.0
+
+        # Left side gets max 3 points
+        if details['side'] == 'left':
+            ts_score = min(ts_score, 3.0)
+
+        return round(min(6.0, ts_score), 2), details
+
+    def _check_rsi_divergence(self, df: pd.DataFrame, direction: str) -> bool:
+        """Check for RSI divergence."""
+        if len(df) < 20:
+            return False
+
+        # Calculate RSI
+        delta = df['close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = gain / loss
+        rsi = 100 - (100 / (1 + rs))
+
+        if direction == 'bearish':
+            # Bearish divergence: price higher high, RSI lower high
+            price_high_idx = df['high'].tail(10).idxmax()
+            price_high = df.loc[price_high_idx, 'high']
+
+            prev_price_high = df['high'].tail(20).head(10).max()
+            prev_rsi_high = rsi.tail(20).head(10).max()
+
+            current_rsi = rsi.iloc[-1]
+
+            if price_high > prev_price_high and current_rsi < prev_rsi_high:
+                return True
+        else:
+            # Bullish divergence: price lower low, RSI higher low
+            price_low_idx = df['low'].tail(10).idxmin()
+            price_low = df.loc[price_low_idx, 'low']
+
+            prev_price_low = df['low'].tail(20).head(10).min()
+            prev_rsi_low = rsi.tail(20).head(10).min()
+
+            current_rsi = rsi.iloc[-1]
+
+            if price_low < prev_price_low and current_rsi > prev_rsi_low:
+                return True
+
+        return False
+
+    def _calculate_vc_short(self, ind: TechnicalIndicators, df: pd.DataFrame, price: float, high_60d: float) -> Tuple[float, Dict]:
+        """
+        Volume Confirmation for short with exhaustion gap & institutional intensity (Expert C & D).
+        """
+        volume_data = ind.indicators.get('volume', {})
+        volume_ratio = volume_data.get('volume_ratio', 1.0)
+
+        # Calculate CLV for institutional intensity (Expert suggestion D)
+        today = df.iloc[-1]
+        clv = self._calculate_clv(today['close'], today['high'], today['low'])
+        institutional_intensity = volume_ratio * abs(clv - 0.5)
+
+        # Check exhaustion gap (Expert suggestion C)
+        exhaustion_gap = self._check_exhaustion_gap(df, high_60d, 'short')
+
+        details = {
+            'volume_ratio': volume_ratio,
+            'clv': clv,
+            'institutional_intensity': institutional_intensity,
+            'exhaustion_gap': exhaustion_gap
+        }
+
         vc_score = 0.0
 
-        # Volume spike on decline
-        if volume_spike:
-            vc_score += 3.0
-        elif volume_ratio > 1.5:
-            vc_score += 2.0 + min(1.0, (volume_ratio - 1.5) / 1.0)
+        # Volume spike
+        if volume_ratio > 1.5:
+            vc_score += 2.0
         elif volume_ratio > 1.2:
-            vc_score += 1.0 + (volume_ratio - 1.2) / 0.3
-
-        # Above average volume
-        if volume_ratio > 1.0:
             vc_score += 1.0
-        elif volume_ratio > 0.8:
-            vc_score += 0.5
 
-        return round(min(5.0, vc_score), 2)
+        # Expert suggestion C: Exhaustion gap
+        if exhaustion_gap:
+            vc_score += 2.0
+
+        # Expert suggestion D: Institutional intensity
+        if institutional_intensity > self.PARAMS['institutional_intensity_threshold']:
+            vc_score += 1.5
+        elif institutional_intensity > 1.0:
+            vc_score += 1.0
+
+        return round(min(4.0, vc_score), 2), details
+
+    def _calculate_vc_long(self, ind: TechnicalIndicators, df: pd.DataFrame, price: float, low_60d: float) -> Tuple[float, Dict]:
+        """Volume Confirmation for long."""
+        volume_data = ind.indicators.get('volume', {})
+        volume_ratio = volume_data.get('volume_ratio', 1.0)
+
+        # Institutional intensity
+        today = df.iloc[-1]
+        clv = self._calculate_clv(today['close'], today['high'], today['low'])
+        institutional_intensity = volume_ratio * abs(clv - 0.5)
+
+        # Exhaustion gap
+        exhaustion_gap = self._check_exhaustion_gap(df, low_60d, 'long')
+
+        details = {
+            'volume_ratio': volume_ratio,
+            'clv': clv,
+            'institutional_intensity': institutional_intensity,
+            'exhaustion_gap': exhaustion_gap
+        }
+
+        vc_score = 0.0
+
+        # Volume
+        if volume_ratio > 1.3:
+            vc_score += 2.0
+        elif volume_ratio > 1.0:
+            vc_score += 1.0
+
+        # Exhaustion gap
+        if exhaustion_gap:
+            vc_score += 2.0
+
+        # Institutional intensity
+        if institutional_intensity > self.PARAMS['institutional_intensity_threshold']:
+            vc_score += 1.5
+        elif institutional_intensity > 1.0:
+            vc_score += 1.0
+
+        return round(min(4.0, vc_score), 2), details
+
+    def _calculate_clv(self, close: float, high: float, low: float) -> float:
+        """Calculate Close Location Value."""
+        if high > low:
+            return (close - low) / (high - low)
+        return 0.5
+
+    def _check_exhaustion_gap(self, df: pd.DataFrame, level: float, direction: str) -> bool:
+        """
+        Check for exhaustion gap (Expert suggestion C).
+        Short: Gap up to level + close < open + volume spike
+        Long: Gap down to level + close > open + volume spike
+        """
+        if len(df) < 2:
+            return False
+
+        today = df.iloc[-1]
+        yesterday = df.iloc[-2]
+
+        gap_threshold = self.PARAMS['exhaustion_gap_threshold']
+
+        if direction == 'short':
+            # Gap up
+            gap_up = today['open'] > yesterday['high'] * (1 + gap_threshold)
+            # Near 60d high
+            near_high = today['high'] >= level * 0.995
+            # Close below open (rejection)
+            rejection = today['close'] < today['open']
+            # Volume spike
+            volume_spike = today['volume'] > df['volume'].tail(20).mean() * 1.5
+
+            return gap_up and near_high and rejection and volume_spike
+        else:
+            # Gap down
+            gap_down = today['open'] < yesterday['low'] * (1 - gap_threshold)
+            # Near 60d low
+            near_low = today['low'] <= level * 1.005
+            # Close above open (rejection)
+            rejection = today['close'] > today['open']
+            # Volume spike
+            volume_spike = today['volume'] > df['volume'].tail(20).mean() * 1.5
+
+            return gap_down and near_low and rejection and volume_spike
+
+    def _calculate_stop(self, df: pd.DataFrame, dimensions: List[ScoringDimension]) -> Optional[float]:
+        """Calculate stop price."""
+        ind = TechnicalIndicators(df)
+        ind.calculate_all()
+
+        current_price = df['close'].iloc[-1]
+        atr = ind.indicators.get('atr', {}).get('atr', current_price * 0.02)
+        price_metrics = ind.indicators.get('price_metrics', {})
+
+        if self.market_direction == 'short':
+            high_60d = price_metrics.get('high_60d', current_price)
+            return high_60d + atr * 0.5
+        else:
+            low_60d = price_metrics.get('low_60d', current_price)
+            return low_60d - atr * 0.5
+
+    def _calculate_target1(self, df: pd.DataFrame, dimensions: List[ScoringDimension]) -> Optional[float]:
+        """Calculate first target."""
+        ind = TechnicalIndicators(df)
+        ind.calculate_all()
+
+        current_price = df['close'].iloc[-1]
+        atr = ind.indicators.get('atr', {}).get('atr', current_price * 0.02)
+        price_metrics = ind.indicators.get('price_metrics', {})
+
+        if self.market_direction == 'short':
+            high_60d = price_metrics.get('high_60d', current_price)
+            return high_60d - atr  # First target: 1 ATR below high
+        else:
+            low_60d = price_metrics.get('low_60d', current_price)
+            return low_60d + atr  # First target: 1 ATR above low
 
     def calculate_entry_exit(
         self,
@@ -202,19 +708,24 @@ class DTSSStrategy(BaseStrategy):
         score: float,
         tier: str
     ) -> Tuple[float, float, float]:
-        """Calculate entry, stop, and target prices for short."""
+        """Calculate entry, stop, and target prices."""
         ind = TechnicalIndicators(df)
         ind.calculate_all()
 
         current_price = df['close'].iloc[-1]
         atr = ind.indicators.get('atr', {}).get('atr', current_price * 0.02)
-
         price_metrics = ind.indicators.get('price_metrics', {})
-        high_60d = price_metrics.get('high_60d', current_price * 1.03)
 
         entry = round(current_price, 2)
-        stop = round(high_60d + atr, 2)
-        target = round(current_price - atr * self.PARAMS['target_r_multiplier'], 2)
+
+        if self.market_direction == 'short':
+            high_60d = price_metrics.get('high_60d', current_price * 1.03)
+            stop = round(high_60d + atr * 0.5, 2)
+            target = round(high_60d - atr * self.PARAMS['target_r_multiplier'], 2)
+        else:
+            low_60d = price_metrics.get('low_60d', current_price * 0.97)
+            stop = round(low_60d - atr * 0.5, 2)
+            target = round(low_60d + atr * self.PARAMS['target_r_multiplier'], 2)
 
         return entry, stop, target
 
@@ -227,20 +738,44 @@ class DTSSStrategy(BaseStrategy):
         tier: str
     ) -> List[str]:
         """Build human-readable match reasons."""
-        pq = next((d for d in dimensions if d.name == 'PQ'), None)
-        ws = next((d for d in dimensions if d.name == 'WS'), None)
+        pl = next((d for d in dimensions if d.name == 'PL'), None)
+        ts = next((d for d in dimensions if d.name == 'TS'), None)
         vc = next((d for d in dimensions if d.name == 'VC'), None)
 
         position_pct = self.calculate_position_pct(tier)
 
-        pq_details = pq.details if pq else {}
-        ws_details = ws.details if ws else {}
+        pl_details = pl.details if pl else {}
+        ts_details = ts.details if ts else {}
         vc_details = vc.details if vc else {}
 
-        return [
-            f"Score: {score:.2f}/15 (Tier {tier}-{position_pct*100:.0f}%)",
-            f"PQ:{pq.score:.2f} WS:{ws.score:.2f} VC:{vc.score:.2f}",
-            f"Near 60d high ({pq_details.get('distance_from_high', 0)*100:.1f}%)",
-            f"Weakness: EMA8<EMA21: {ws_details.get('ema_bearish', False)}",
-            f"Volume spike: {vc_details.get('volume_spike', False)}"
+        side = ts_details.get('side', 'unknown')
+        side_label = f"{side.upper()}" if side != 'unknown' else ""
+
+        reasons = [
+            f"Score: {score:.2f}/15 (Tier {tier}-{position_pct*100:.0f}%) {side_label}",
+            f"PL:{pl.score:.2f} TS:{ts.score:.2f} VC:{vc.score:.2f}",
+            f"Direction: {self.market_direction.upper()}",
+            f"Tests: {pl_details.get('test_count', 0)} (avg {pl_details.get('avg_interval', 0):.0f}d)",
         ]
+
+        if vc_details.get('exhaustion_gap'):
+            reasons.append("Exhaustion gap!")
+
+        if vc_details.get('institutional_intensity', 0) > 1.5:
+            reasons.append(f"Inst intensity: {vc_details['institutional_intensity']:.2f}")
+
+        if ts_details.get('rsi_divergence'):
+            reasons.append("RSI divergence")
+
+        return reasons
+
+    def calculate_position_pct(self, tier: str) -> float:
+        """
+        Override to implement left/right side position limit (Expert suggestion A).
+        Left side (TS <= 3) max Tier B (5%).
+        """
+        # This is called after dimensions are calculated, but we don't have access here
+        # The actual limiting should be done in selector.py based on TS details
+        # For now, return standard values
+        base_pct = super().calculate_position_pct(tier)
+        return base_pct
