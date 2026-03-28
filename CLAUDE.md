@@ -135,13 +135,18 @@ Automated US stock trading opportunity scanner based on strategies in `Strategy_
 
 ## Strategy Scoring System
 
-All 8 strategies use unified 0-15 point scoring with 4 dimensions (3-4 points each):
-- **Tier S (13-15 pts)**: 20% position size - Exceptional setup with confirmation
-- **Tier A (10-12 pts)**: 10% position size - Qualified setup with minor concerns
-- **Tier B (7-9 pts)**: 5% position size - Marginal setup, reduced exposure
-- **Below 7**: Filter out - Insufficient edge
+All 8 strategies use unified scoring with 4 dimensions:
+- **Tier S**: 20% position - Exceptional setup
+- **Tier A**: 10% position - Qualified setup
+- **Tier B**: 5% position - Marginal setup
+- **Below Tier B**: Reject
 
-Score dimensions vary by strategy (PQ/BS/VC/TC for VCP-EP, RS/SQ/VC/TC for Momentum, etc.)
+**Non-equal weights** (Strategy D example):
+- TQ (Trend): 4 pts - Foundation
+- VS (Volume): 5 pts - Core signal ⭐
+- PD (Depth): 3 pts - Timing
+- RS (Strength): 3 pts - Resilience
+- **Total**: 15 points
 
 ## Industry Data
 
