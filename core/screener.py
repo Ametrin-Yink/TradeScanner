@@ -156,18 +156,24 @@ class StrategyScreener:
     def screen_all(
         self,
         symbols: List[str],
-        market_data: Optional[Dict[str, pd.DataFrame]] = None
+        market_data: Optional[Dict[str, pd.DataFrame]] = None,
+        batch_size: int = 100  # Phase C: Stream processing batch size
     ) -> List[StrategyMatch]:
         """
-        Screen all symbols using all 8 strategy plugins.
+        Screen all symbols using all 8 strategy plugins with stream processing.
+
+        Phase C Optimization: Stream processing in batches to limit memory usage.
 
         Args:
             symbols: List of stock symbols to screen
             market_data: Optional pre-loaded market data cache
+            batch_size: Number of symbols to process per batch (default 100)
 
         Returns:
             List of StrategyMatch (max 40 total: 5 per strategy)
         """
+        import gc
+
         self.market_data = market_data or {}
 
         # Load earnings if not already loaded
@@ -182,13 +188,36 @@ class StrategyScreener:
 
         all_candidates = []
 
-        # Run each strategy plugin
+        # Run each strategy plugin with stream processing
         for strategy_type, strategy in self._strategies.items():
             try:
-                candidates = strategy.screen(symbols)
-                if candidates:
-                    # Apply market regime filter
-                    for match in candidates:
+                # Phase C: Stream processing - process symbols in batches
+                strategy_candidates = []
+                total_symbols = len(symbols)
+                num_batches = (total_symbols + batch_size - 1) // batch_size
+
+                for batch_idx in range(num_batches):
+                    batch_start = batch_idx * batch_size
+                    batch_end = min(batch_start + batch_size, total_symbols)
+                    batch_symbols = symbols[batch_start:batch_end]
+
+                    logger.debug(f"{strategy_type.value}: batch {batch_idx + 1}/{num_batches} ({len(batch_symbols)} symbols)")
+
+                    # Process this batch
+                    batch_candidates = strategy.screen(batch_symbols)
+
+                    if batch_candidates:
+                        strategy_candidates.extend(batch_candidates)
+
+                    # Clear batch data and force garbage collection
+                    del batch_symbols
+                    if batch_idx % 5 == 0:  # GC every 5 batches
+                        gc.collect()
+
+                # Apply market regime filter
+                if strategy_candidates:
+                    filtered_candidates = []
+                    for match in strategy_candidates:
                         if hasattr(match, 'technical_snapshot'):
                             original_tier = match.technical_snapshot.get('tier', 'B')
                             original_score = match.technical_snapshot.get('score', 0)
@@ -202,9 +231,16 @@ class StrategyScreener:
                             match.technical_snapshot['position_pct'] = {
                                 'S': 0.20, 'A': 0.10, 'B': 0.05
                             }.get(adjusted_tier, 0.0)
+                        filtered_candidates.append(match)
 
-                    all_candidates.extend(candidates[:self.MAX_CANDIDATES_PER_STRATEGY])
-                    logger.info(f"{strategy_type.value}: found {len(candidates)} candidates")
+                    all_candidates.extend(filtered_candidates[:self.MAX_CANDIDATES_PER_STRATEGY])
+                    logger.info(f"{strategy_type.value}: found {len(filtered_candidates)} candidates")
+
+                # Clear candidates and force GC after each strategy
+                if 'strategy_candidates' in locals():
+                    del strategy_candidates
+                gc.collect()
+
             except Exception as e:
                 logger.error(f"Error in {strategy_type.value} screening: {e}")
 
