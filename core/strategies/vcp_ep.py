@@ -13,9 +13,9 @@ logger = logging.getLogger(__name__)
 class VCPEPStrategy(BaseStrategy):
     """Strategy A: VCP-EP - Captures demand burst after supply exhaustion."""
 
-    NAME = "EP"
+    NAME = "动能右侧突破"
     STRATEGY_TYPE = StrategyType.EP
-    DESCRIPTION = "Volatility Contraction Pattern - Episodic Pivot"
+    DESCRIPTION = "动能右侧突破 - VCP平台+放量突破，RS>85百分位加分（合并原Momentum）"
     DIMENSIONS = ['PQ', 'BS', 'VC', 'TC']
 
     # VCP-EP Parameters
@@ -23,7 +23,8 @@ class VCPEPStrategy(BaseStrategy):
         'min_dollar_volume': 50_000_000,      # $50M minimum
         'min_atr_pct': 0.015,                  # 1.5% minimum ATR
         'min_listing_days': 60,                # 60 days minimum
-        'platform_lookback': (15, 30),         # 15-30 day platform
+        'platform_lookback': (15, 60),         # 15-60 day platform (relaxed from 15-30)
+        'rs_bonus_threshold': 0.85,            # RS>85 percentile bonus
         'platform_max_range': 0.12,            # <12% range
         'concentration_threshold': 0.50,       # 50% days in ±2.5% band
         'volume_contraction_vs_platform': 0.70, # Last 5d < 70% of platform avg
@@ -171,6 +172,11 @@ class VCPEPStrategy(BaseStrategy):
 
         # Dimension 4: Trend Context (TC)
         tc_score = self._calculate_tc(ema50_distance, metrics_52w, clv)
+
+        # Add RS bonus to TC score (from Momentum strategy)
+        rs_bonus = self._calculate_rs_bonus(df)
+        tc_score = min(5.0, tc_score + rs_bonus)
+
         dimensions.append(ScoringDimension(
             name='TC',
             score=tc_score,
@@ -178,7 +184,8 @@ class VCPEPStrategy(BaseStrategy):
             details={
                 'ema50_distance': ema50_distance['distance_pct'],
                 'distance_from_52w_high': metrics_52w['distance_from_high'],
-                'clv': clv
+                'clv': clv,
+                'rs_bonus': rs_bonus
             }
         ))
 
@@ -295,6 +302,36 @@ class VCPEPStrategy(BaseStrategy):
             tc_score += (clv - 0.65) / 0.20
 
         return round(min(5.0, tc_score), 2)
+
+    def _calculate_rs_bonus(self, df: pd.DataFrame) -> float:
+        """
+        Calculate RS bonus score (0-1 points) for TC dimension.
+        Merged from original Momentum strategy.
+        """
+        if len(df) < 252:
+            return 0.0
+
+        close = df['close']
+        current_price = close.iloc[-1]
+
+        # Calculate RS components
+        price_3m = close.iloc[-63] if len(close) >= 63 else close.iloc[0]
+        price_6m = close.iloc[-126] if len(close) >= 126 else close.iloc[0]
+        price_12m = close.iloc[-252] if len(close) >= 252 else close.iloc[0]
+
+        rs_3m = (current_price - price_3m) / price_3m
+        rs_6m = (current_price - price_6m) / price_6m
+        rs_12m = (current_price - price_12m) / price_12m
+
+        rs_score = rs_3m * 0.4 + rs_6m * 0.3 + rs_12m * 0.3
+
+        # Convert to 0-1 bonus
+        if rs_score > 0.5:
+            return 1.0
+        elif rs_score > 0.3:
+            return 0.5 + (rs_score - 0.3) / 0.2 * 0.5
+        else:
+            return max(0.0, rs_score / 0.3 * 0.5)
 
     def calculate_entry_exit(
         self,
