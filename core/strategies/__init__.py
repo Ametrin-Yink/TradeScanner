@@ -3,21 +3,21 @@ from typing import Dict, Type, List
 from .base_strategy import BaseStrategy, StrategyMatch, ScoringDimension, StrategyType
 
 # Import all strategies
-from .vcp_ep import VCPEPStrategy
-from .shoryuken import ShoryukenStrategy
-from .upthrust_rebound import UpthrustReboundStrategy
-from .range_support import RangeSupportStrategy
-from .dtss import DTSSStrategy
-from .parabolic import ParabolicStrategy
+from .momentum_breakout import MomentumBreakoutStrategy
+from .pullback_entry import PullbackEntryStrategy
+from .support_bounce import SupportBounceStrategy
+from .range_short import RangeShortStrategy
+from .double_top_bottom import DoubleTopBottomStrategy
+from .capitulation_rebound import CapitulationReboundStrategy
 
 # Registry mapping
 STRATEGY_REGISTRY: Dict[StrategyType, Type[BaseStrategy]] = {
-    StrategyType.EP: VCPEPStrategy,
-    StrategyType.SHORYUKEN: ShoryukenStrategy,
-    StrategyType.UPTHRUST_REBOUND: UpthrustReboundStrategy,
-    StrategyType.RANGE_SUPPORT: RangeSupportStrategy,
-    StrategyType.DTSS: DTSSStrategy,
-    StrategyType.PARABOLIC: ParabolicStrategy,
+    StrategyType.EP: MomentumBreakoutStrategy,
+    StrategyType.SHORYUKEN: PullbackEntryStrategy,
+    StrategyType.UPTHRUST_REBOUND: SupportBounceStrategy,
+    StrategyType.RANGE_SUPPORT: RangeShortStrategy,
+    StrategyType.DTSS: DoubleTopBottomStrategy,
+    StrategyType.PARABOLIC: CapitulationReboundStrategy,
 }
 
 
@@ -45,12 +45,12 @@ __all__ = [
     'StrategyMatch',
     'ScoringDimension',
     'StrategyType',
-    'VCPEPStrategy',
-    'ShoryukenStrategy',
-    'UpthrustReboundStrategy',
-    'RangeSupportStrategy',
-    'DTSSStrategy',
-    'ParabolicStrategy',
+    'MomentumBreakoutStrategy',
+    'PullbackEntryStrategy',
+    'SupportBounceStrategy',
+    'RangeShortStrategy',
+    'DoubleTopBottomStrategy',
+    'CapitulationReboundStrategy',
     'STRATEGY_REGISTRY',
     'get_strategy',
     'get_all_strategies',

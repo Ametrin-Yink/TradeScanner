@@ -12,7 +12,7 @@ from .base_strategy import BaseStrategy, StrategyMatch, ScoringDimension, Strate
 logger = logging.getLogger(__name__)
 
 
-class ParabolicStrategy(BaseStrategy):
+class CapitulationReboundStrategy(BaseStrategy):
     """
     Strategy H: Parabolic/Capitulation v2.1 - Capitulation bottom detection with volume climax.
 

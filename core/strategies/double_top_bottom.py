@@ -12,7 +12,7 @@ from .base_strategy import BaseStrategy, StrategyMatch, ScoringDimension, Strate
 logger = logging.getLogger(__name__)
 
 
-class DTSSStrategy(BaseStrategy):
+class DoubleTopBottomStrategy(BaseStrategy):
     """
     Strategy G: DTSS v2.1 - Distribution Top / Accumulation Bottom.
 

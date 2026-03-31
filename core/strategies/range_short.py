@@ -12,7 +12,7 @@ from .base_strategy import BaseStrategy, StrategyMatch, ScoringDimension, Strate
 logger = logging.getLogger(__name__)
 
 
-class RangeSupportStrategy(BaseStrategy):
+class RangeShortStrategy(BaseStrategy):
     """
     Strategy F: Range Resistance Short
     - Short-only: Short at resistance in bearish/neutral markets

@@ -10,7 +10,7 @@ from .base_strategy import BaseStrategy, StrategyMatch, ScoringDimension, Strate
 logger = logging.getLogger(__name__)
 
 
-class VCPEPStrategy(BaseStrategy):
+class MomentumBreakoutStrategy(BaseStrategy):
     """Strategy A: VCP-EP - Captures demand burst after supply exhaustion."""
 
     NAME = "MomentumBreakout"

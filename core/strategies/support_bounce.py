@@ -13,7 +13,7 @@ from .base_strategy import BaseStrategy, StrategyMatch, ScoringDimension, Strate
 logger = logging.getLogger(__name__)
 
 
-class UpthrustReboundStrategy(BaseStrategy):
+class SupportBounceStrategy(BaseStrategy):
     """Strategy E: 支撑回踩买入 - 支撑位假跌破后反弹，区间存在加分（合并原Range多头）"""
 
     NAME = "SupportBounce"
