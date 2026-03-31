@@ -33,7 +33,7 @@ core/
 └── reporter.py          # HTML report generation
 
 config/
-├── stocks.py            # Stock universe (517 symbols)
+├── stocks.py            # Stock universe loader (market cap >$2B)
 ├── settings.json        # Configuration
 └── secrets.json         # API keys (gitignored)
 
@@ -53,7 +53,7 @@ pip install -r requirements.txt
 # Run test scan (10 symbols)
 python scheduler.py --test --symbols AAPL,MSFT,NVDA
 
-# Run full scan (all 517 stocks)
+# Run full scan (all >$2B market cap stocks)
 python scheduler.py
 
 # Start web server
@@ -74,14 +74,14 @@ python api/server.py
 ## Documentation
 
 - [CLAUDE.md](CLAUDE.md) - Development guidelines and architecture
-- [Strategy_Description.md](Strategy_Description.md) - Detailed strategy formulas and specifications
+- [docs/Strategy_Description.md](docs/Strategy_Description.md) - Detailed strategy formulas and specifications
 - [docs/STOCK_MANAGEMENT.md](docs/STOCK_MANAGEMENT.md) - Stock management procedures
 
 ## Performance
 
 - **Full Scan**: ~70-80 minutes (first run), ~20-25 minutes (cached)
 - **Memory**: Under 500MB peak usage
-- **Stocks**: 517 active symbols
+- **Stocks**: Dynamic universe (market cap >$2B)
 
 ## License
 

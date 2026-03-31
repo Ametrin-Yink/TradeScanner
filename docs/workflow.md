@@ -4,14 +4,14 @@ This document describes the complete workflow for generating daily trading oppor
 
 ## Overview
 
-The Trade Scanner runs daily to analyze 517 US stocks and generate an HTML report with the top 10 trading opportunities. The process involves data fetching, strategy screening, market analysis, AI scoring, and report generation.
+The Trade Scanner runs daily to analyze all US stocks with market cap >$2B and generate an HTML report with the top 10 trading opportunities. The process involves data fetching, strategy screening, market analysis, AI scoring, and report generation.
 
 ## Pipeline Architecture
 
 ```
 ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
 │   Fetcher   │───▶│  Screener   │───▶│   Market    │───▶│   AI Score  │───▶│   Report    │
-│  (517 stk)  │    │ (6 strategies)│   │  Analyzer   │    │  (Top 10)   │    │  (HTML)     │
+│  (>2B mcap) │    │ (6 strategies)│   │  Analyzer   │    │  (Top 10)   │    │  (HTML)     │
 └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
        │                  │                  │                  │                  │
        ▼                  ▼                  ▼                  ▼                  ▼
@@ -23,10 +23,10 @@ The Trade Scanner runs daily to analyze 517 US stocks and generate an HTML repor
 
 ### Phase 1: Data Fetching (fetcher.py)
 
-**Purpose**: Fetch daily OHLCV data for all 517 symbols
+**Purpose**: Fetch daily OHLCV data for all symbols (market cap >$2B)
 
 **Process**:
-1. Load symbol list from database (517 US stocks)
+1. Load symbol list from database (market cap >$2B)
 2. Process in batches of 50 symbols (memory optimization)
 3. For each symbol:
    - Check SQLite cache for existing data
@@ -198,7 +198,7 @@ For each of the top 10 candidates:
 
 ### Manual Run
 ```bash
-# Full scan (all 517 stocks)
+# Full scan (all >$2B market cap stocks)
 python scheduler.py
 
 # Test scan (3 stocks only)

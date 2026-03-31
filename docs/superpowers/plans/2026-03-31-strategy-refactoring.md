@@ -1113,7 +1113,7 @@ ranks opportunities via AI, generates web-based reports with Discord/WeChat noti
 ## Testing
 
 - **100-Stock Quick Test**: `python3 scripts/test_100_stocks.py` - Fast validation after strategy changes
-- **Full Scan (Cached):** 517 stocks takes ~20-25 minutes
+- **Full Scan (Cached):** Dynamic universe (market cap >$2B) takes ~20-25 minutes
 ```
 
 - [ ] **Step 5: 提交**

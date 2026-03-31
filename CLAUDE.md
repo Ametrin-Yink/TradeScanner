@@ -4,7 +4,7 @@ Trade Scanner - Current State Reference
 
 ## Project Overview
 
-Automated US stock trading opportunity scanner analyzing 517 US stocks daily using 6 trading strategies. Generates web-based reports with AI-powered analysis.
+Automated US stock trading opportunity scanner analyzing stocks with market cap >$2B daily using 6 trading strategies. Generates web-based reports with AI-powered analysis.
 
 ## Current Architecture (v3.0)
 
@@ -27,7 +27,7 @@ Automated US stock trading opportunity scanner analyzing 517 US stocks daily usi
 
 - **Data**: yfinance (free), threads=False, 0.5s delay
 - **AI**: Alibaba DashScope (OpenAI-compatible)
-- **Scale**: 517 stocks, ~70-80 min first run, ~20-25 min cached
+- **Scale**: Dynamic universe (market cap >$2B), ~70-80 min first run, ~20-25 min cached
 - **Charts**: matplotlib with Agg backend
 - **Caching**: 150 trading days retained
 
