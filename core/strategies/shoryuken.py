@@ -107,7 +107,7 @@ class ShoryukenStrategy(BaseStrategy):
                 continue
 
 
-        logger.info(f"Shoryuken: {len(prefiltered_symbols)}/{len(symbol_data) + len(prefiltered_symbols)} passed EMA21 trend pre-filter")
+        logger.info(f"Shoryuken: {len(prefiltered_symbols)}/{len(symbol_data)} passed EMA21 trend pre-filter")
 
         # Get industry data for sector bonus
         try:
