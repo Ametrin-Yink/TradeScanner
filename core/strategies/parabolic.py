@@ -22,9 +22,9 @@ class ParabolicStrategy(BaseStrategy):
     C. VIX Second Wave Filter: VIX > 30 and rising = reject
     """
 
-    NAME = "抛物线回弹"
+    NAME = "CapitulationRebound"
     STRATEGY_TYPE = StrategyType.PARABOLIC
-    DESCRIPTION = "Parabolic Rebound - Capitulation bottom detection with volume climax"
+    DESCRIPTION = "CapitulationRebound v2.1 - Capitulation bottom detection with volume climax"
     DIMENSIONS = ['MO', 'EX', 'VC']
 
     PARAMS = {

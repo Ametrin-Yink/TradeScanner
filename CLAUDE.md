@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 
 ## Project Overview
 
-Automated US stock trading opportunity scanner based on strategies in `Strategy_All.txt`. Runs daily at 6:00 AM ET to analyze 2000+ stocks using 8 trading strategies, ranks opportunities via AI, generates web-based reports with Discord/WeChat notifications.
+Automated US stock trading opportunity scanner based on strategies in `Strategy_All.txt`. Runs daily at 6:00 AM ET to analyze 2000+ stocks using 6 trading strategies, ranks opportunities via AI, generates web-based reports with Discord/WeChat notifications.
 
 ## Architecture
 
@@ -88,7 +88,7 @@ Automated US stock trading opportunity scanner based on strategies in `Strategy_
 
 - **Full Scan (Cached):** 517 stocks takes ~20-25 minutes (incremental update, ~2-3 min for data)
 - **Full Scan (First Run):** 517 stocks takes ~70-80 minutes (no cache, downloads full history)
-- **Typical Output:** 10-20 candidates from 8 strategies, AI selects top 10 with confidence scores
+- **Typical Output:** 10-20 candidates from 6 strategies, AI selects top 10 with confidence scores
 - **Server:** Check `ss -tlnp | grep 19801` to verify Flask is listening
 
 ## AI API Compatibility
@@ -135,7 +135,7 @@ Automated US stock trading opportunity scanner based on strategies in `Strategy_
 
 ## Strategy Scoring System
 
-All 8 strategies use unified scoring with 4 dimensions:
+All 6 strategies use unified scoring with 4 dimensions:
 - **Tier S**: 20% position - Exceptional setup
 - **Tier A**: 10% position - Qualified setup
 - **Tier B**: 5% position - Marginal setup
@@ -189,12 +189,12 @@ New calculations in `core/indicators.py`:
 
 ## Strategy Documentation
 
-**策略描述.md** (`/home/admin/Projects/TradeChanceScreen/策略描述.md`) is the canonical documentation for all 8 trading strategies.
+**策略描述.md** (`/home/admin/Projects/TradeChanceScreen/策略描述.md`) is the canonical documentation for all 6 trading strategies.
 
 **Critical Rule**: When modifying strategy logic in `core/screener.py` or scoring calculations in `core/indicators.py`, **you MUST同步更新 `策略描述.md`**.
 
 Documentation requirements:
-- All 8 strategies (A: VCP-EP, B: Momentum, C: Shoryuken, D: Pullbacks, E: U&R, F: RangeSupport, G: DTSS, H: Parabolic)
+- All 6 strategies (A+B: 动能右侧突破, C+D: 均线回踩买入, E: 支撑回踩买入, F: 区间阻力做空, G: 双顶双底策略, H: 抛物线回弹)
 - Unified 0-15 scoring system with 2 decimal precision
 - 4-dimensional scoring breakdown per strategy
 - Entry/exit rules and trailing stop logic
@@ -221,11 +221,28 @@ Before committing strategy changes:
 
 ## Strategy Plugin Architecture
 
-All 8 strategies now use plugin pattern under `core/strategies/`:
+All 6 strategies now use plugin pattern under `core/strategies/`:
 - `BaseStrategy` abstract class defines interface: `filter()`, `calculate_dimensions()`, `calculate_entry_exit()`, `build_match_reasons()`
 - `STRATEGY_REGISTRY` maps `StrategyType` enum to strategy classes
 - `create_strategy()` factory instantiates by type
 - Each strategy implements 4-dimensional 0-15 point scoring with linear interpolation
+
+## Strategy Merges (v2.2)
+
+The 6-strategy architecture was achieved through strategic merges and conversions:
+
+- **A+B Merged**: 动能右侧突破 (VCP-EP + Momentum) - Combined with RS bonus for merged scoring
+- **C+D Merged**: 均线回踩买入 (Shoryuken + Pullbacks) - Combined with PD dimension for pullback depth
+- **E**: 支撑回踩买入 (Upthrust & Rebound) - Unchanged, 4-dimension scoring
+- **F Converted**: Range Support → 区间阻力做空 (short only) - Direction constraint added
+- **G Updated**: DTSS → 双顶双底策略 - TS max 4, market filter added
+- **H Converted**: Parabolic → 抛物线回弹 (long only) - Direction constraint added
+
+**Benefits**:
+- Reduced complexity from 8 to 6 strategies while maintaining coverage
+- Clearer directionality (F short-only, H long-only)
+- Stronger merged strategies (A+B, C+D) with combined scoring power
+- Easier maintenance and documentation
 
 ## Linear Interpolation Scoring Pattern
 

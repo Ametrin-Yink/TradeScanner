@@ -871,18 +871,39 @@ class TechnicalIndicators:
             'vol_20d_avg': int(vol_20d)
         }
 
-    def detect_blow_off(self) -> Dict[str, any]:
+    def detect_blow_off(self, symbol: str = None) -> Dict[str, any]:
         """
         Detect blow-off top signal for profit protection (建议#4).
 
         Logic: If price rises > 2x ATR in 3 days with volume spike
         and CLV declining (upper shadow forming), signal profit taking.
 
+        Args:
+            symbol: Stock symbol for earnings calendar check (optional)
+
         Returns:
             Dict with blow-off signal and details
         """
         if len(self.df) < 5:
             return {'is_blow_off': False, 'signal': None}
+
+        # Check earnings calendar if symbol provided
+        if symbol:
+            from ..earnings_calendar import EarningsCalendar
+            cal = EarningsCalendar()
+            if cal.is_earnings_day(symbol):
+                # Reduce signal strength around earnings - return early with HOLD signal
+                return {
+                    'is_blow_off': False,
+                    'signal': 'HOLD',
+                    'reason': 'Earnings day (±1 day) - pausing blow-off detection',
+                    'price_change_3d': None,
+                    'atr_pct': None,
+                    'volume_ratio': None,
+                    'clv_current': None,
+                    'clv_prev': None,
+                    'earnings_pause': True
+                }
 
         # Get recent 3-day price change
         price_3d_ago = self.df['close'].iloc[-4]
@@ -920,7 +941,8 @@ class TechnicalIndicators:
             'atr_pct': round(atr_pct * 100, 2),
             'volume_ratio': round(volume_current / volume_5d_avg, 2) if volume_5d_avg > 0 else 0,
             'clv_current': round(clv_current, 2),
-            'clv_prev': round(clv_prev, 2)
+            'clv_prev': round(clv_prev, 2),
+            'earnings_pause': False
         }
 
     def _calculate_clv_for_index(self, idx: int) -> float:

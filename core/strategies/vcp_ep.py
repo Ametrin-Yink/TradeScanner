@@ -13,9 +13,9 @@ logger = logging.getLogger(__name__)
 class VCPEPStrategy(BaseStrategy):
     """Strategy A: VCP-EP - Captures demand burst after supply exhaustion."""
 
-    NAME = "动能右侧突破"
+    NAME = "MomentumBreakout"
     STRATEGY_TYPE = StrategyType.EP
-    DESCRIPTION = "动能右侧突破 - VCP平台+放量突破，RS>85百分位加分（合并原Momentum）"
+    DESCRIPTION = "MomentumBreakout v2.0 - VCP platform + volume breakout, RS>85 percentile bonus"
     DIMENSIONS = ['PQ', 'BS', 'VC', 'TC']
 
     # VCP-EP Parameters
