@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Callable, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+import numpy as np
 import yfinance as yf
 import pandas as pd
 

@@ -26,8 +26,8 @@ logger = logging.getLogger(__name__)
 class MemoryOptimizedScanner:
     """Memory-optimized trade scanner for low-resource VPS."""
 
-    # Keep 150 trading days of history
-    MAX_HISTORY_DAYS = 150
+    # Keep 280 trading days of history (52 weeks + buffer for calculations)
+    MAX_HISTORY_DAYS = 280
 
     def __init__(self):
         """Initialize scanner components."""
