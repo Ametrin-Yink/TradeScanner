@@ -1,4 +1,5 @@
 """Strategy screener - thin orchestrator using plugin architecture."""
+import copy
 import logging
 import time
 from typing import Dict, List, Optional
@@ -446,7 +447,6 @@ class StrategyScreener:
         self._phase0_data = self._run_phase0_precalculation(symbols, self.market_data)
 
         # Share Phase 0 data, market data, and earnings with all strategies
-        import copy
         for strategy in self._strategies.values():
             strategy.market_data = copy.copy(self.market_data)
             strategy.phase0_data = copy.copy(self._phase0_data)
