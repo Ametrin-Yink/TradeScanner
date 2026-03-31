@@ -194,7 +194,7 @@ New calculations in `core/indicators.py`:
 **Critical Rule**: When modifying strategy logic in `core/screener.py` or scoring calculations in `core/indicators.py`, **you MUST同步更新 `策略描述.md`**.
 
 Documentation requirements:
-- All 6 strategies (A+B: 动能右侧突破, C+D: 均线回踩买入, E: 支撑回踩买入, F: 区间阻力做空, G: 双顶双底策略, H: 抛物线回弹)
+- All 6 strategies (A+B: MomentumBreakout, C+D: PullbackEntry, E: SupportBounce, F: RangeShort, G: DoubleTopBottom, H: CapitulationRebound)
 - Unified 0-15 scoring system with 2 decimal precision
 - 4-dimensional scoring breakdown per strategy
 - Entry/exit rules and trailing stop logic
@@ -231,12 +231,12 @@ All 6 strategies now use plugin pattern under `core/strategies/`:
 
 The 6-strategy architecture was achieved through strategic merges and conversions:
 
-- **A+B Merged**: 动能右侧突破 (VCP-EP + Momentum) - Combined with RS bonus for merged scoring
-- **C+D Merged**: 均线回踩买入 (Shoryuken + Pullbacks) - Combined with PD dimension for pullback depth
-- **E**: 支撑回踩买入 (Upthrust & Rebound) - Unchanged, 4-dimension scoring
-- **F Converted**: Range Support → 区间阻力做空 (short only) - Direction constraint added
-- **G Updated**: DTSS → 双顶双底策略 - TS max 4, market filter added
-- **H Converted**: Parabolic → 抛物线回弹 (long only) - Direction constraint added
+- **A+B Merged**: MomentumBreakout (VCP-EP + Momentum) - Combined with RS bonus for merged scoring
+- **C+D Merged**: PullbackEntry (Shoryuken + Pullbacks) - Combined with PD dimension for pullback depth
+- **E**: SupportBounce (Upthrust & Rebound) - Unchanged, 4-dimension scoring
+- **F Converted**: Range Support → RangeShort (short only) - Direction constraint added
+- **G Updated**: DTSS → DoubleTopBottom - TS max 4, market filter added
+- **H Converted**: Parabolic → CapitulationRebound (long only) - Direction constraint added
 
 **Benefits**:
 - Reduced complexity from 8 to 6 strategies while maintaining coverage
