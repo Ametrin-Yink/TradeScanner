@@ -23,7 +23,7 @@ __all__ = ['StrategyScreener', 'StrategyType', 'StrategyMatch']
 
 
 class StrategyScreener:
-    """Screen stocks using 8 trading strategies via plugin architecture."""
+    """Screen stocks using 6 trading strategies via plugin architecture."""
 
     # Dynamic allocation: total 30 candidates distributed by market regime
     TOTAL_CANDIDATES_TARGET = 30
@@ -37,9 +37,7 @@ class StrategyScreener:
     # Strategy group mapping for dynamic allocation
     STRATEGY_GROUPS = {
         StrategyType.EP: 'breakout_momentum',
-        StrategyType.MOMENTUM: 'breakout_momentum',
         StrategyType.SHORYUKEN: 'trend_pullback',
-        StrategyType.PULLBACKS: 'trend_pullback',
         StrategyType.UPTHRUST_REBOUND: 'rebound_range',
         StrategyType.RANGE_SUPPORT: 'rebound_range',
         StrategyType.DTSS: 'rebound_range',
@@ -69,7 +67,8 @@ class StrategyScreener:
 
         # Initialize all strategy plugins
         self._strategies = {}
-        for strategy_type in StrategyType:
+        for strategy_type in [StrategyType.EP, StrategyType.SHORYUKEN, StrategyType.UPTHRUST_REBOUND,
+                               StrategyType.RANGE_SUPPORT, StrategyType.DTSS, StrategyType.PARABOLIC]:
             self._strategies[strategy_type] = create_strategy(
                 strategy_type, fetcher=self.fetcher, db=self.db
             )
@@ -392,7 +391,7 @@ class StrategyScreener:
         strategy_weighting: Optional[Dict[str, float]] = None  # Dynamic strategy allocation
     ) -> List[StrategyMatch]:
         """
-        Screen all symbols using all 8 strategy plugins with unified Phase 0.
+        Screen all symbols using all 6 strategy plugins with unified Phase 0.
 
         Phase 0: Universal pre-calculation (price/volume/RS/SPY) - runs ONCE
         Phase 1: Strategy screening (global collection, no slot limits)
