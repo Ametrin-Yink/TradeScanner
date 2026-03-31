@@ -159,11 +159,30 @@ Sector/industry data from yfinance for sector rotation analysis:
 ## Strategy Development Testing
 
 When developing/upgrading strategies:
-- Create isolated test script (e.g., `test_strategy_a_v2.py`) before modifying screener.py
-- Use existing cache data (`market_data` table) for fast iteration (20-30 min vs 70-80 min)
+- Use existing cache data (`market_data` table) for fast iteration
 - Test with 5-10 known symbols before full scan
 - Check Feb 2026 data for extreme cases (tight platforms, volatility spikes)
 - Use `yfinance.Ticker(symbol).history(period="1d")` to verify live data availability
+
+## Completed Refactoring (2026-04-01)
+
+### Strategy Architecture v3.0
+- **Merged**: 8 strategies → 6 strategies
+  - A+B → MomentumBreakout (VCP-EP + Momentum)
+  - C+D → PullbackEntry (Shoryuken + Pullbacks)
+- **Converted**: Direction-specific strategies
+  - F → RangeShort (short-only)
+  - H → CapitulationRebound (long-only)
+- **Renamed**: All strategies to English names
+  - Files: `core/strategies/*.py`
+  - Classes: MomentumBreakoutStrategy, PullbackEntryStrategy, etc.
+- **All tests passing**: 100-stock validation complete
+
+### Repository Cleanup
+- Removed obsolete branches: refactor/strategy-v3.0, fix/step2-phase-fixes, all worktree branches
+- Removed temporary test scripts: test_all_strategies.py, test_strategies_abc.py
+- Removed obsolete docs: OPTIMIZATION.md, REFACTOR_PLAN.md, optimization analysis docs
+- Only master branch remains with clean history
 
 ## Dynamic Trailing Stops
 
@@ -211,7 +230,7 @@ Before committing strategy changes:
 1. Update code in `core/screener.py` or `core/indicators.py`
 2. 同步更新 `策略描述.md` formulas and scoring tables
 3. Update the maintenance record at the bottom of `策略描述.md`
-4. Test with `test_strategies_abc.py` to verify scoring
+4. Test with `python scheduler.py --test --symbols AAPL,MSFT,NVDA...` to verify scoring
 
 **Key Formulas Reference**:
 - RS评分: `0.4×R3m + 0.3×R6m + 0.3×R12m`
@@ -463,7 +482,7 @@ When creating shared utility packages:
 
 Test all strategies without full data:
 ```bash
-python3 test_all_strategies.py
+python scheduler.py --test --symbols AAPL,MSFT,NVDA,TSLA,GOOGL,AMZN,META,AMD,CRM,AVGO
 ```
 Validates: imports, attributes, methods, scoring_utils integration
 
