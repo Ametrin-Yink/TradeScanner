@@ -383,6 +383,45 @@ class StrategyScreener:
         except:
             return False
 
+    def screen(
+        self,
+        strategy_types: List[StrategyType],
+        symbols: List[str],
+        market_data: Optional[Dict[str, pd.DataFrame]] = None
+    ) -> List[StrategyMatch]:
+        """
+        Screen symbols using specific strategy types.
+
+        Args:
+            strategy_types: List of strategy types to screen with
+            symbols: List of stock symbols to screen
+            market_data: Optional pre-loaded market data cache
+
+        Returns:
+            List of StrategyMatch
+        """
+        self.market_data = market_data or {}
+
+        # Run Phase 0 pre-calculation
+        phase0_data = self._run_phase0_precalculation(symbols, self.market_data)
+
+        all_matches = []
+
+        for strategy_type in strategy_types:
+            strategy = self._strategies.get(strategy_type)
+            if not strategy:
+                continue
+
+            # Set SPY data for strategies that need it
+            if hasattr(strategy, '_spy_df'):
+                strategy._spy_df = self._spy_data
+
+            # Run strategy screen
+            matches = strategy.screen(symbols)
+            all_matches.extend(matches)
+
+        return all_matches
+
     def screen_all(
         self,
         symbols: List[str],
