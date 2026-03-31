@@ -86,3 +86,4 @@ class MyStrategy(BaseStrategy):
 - **Memory**: Keep under 500MB, batch processing in 50s
 - **Server**: Port 19801 only (security group restriction)
 - **Formula Sync**: Update `策略描述.md` when modifying calculations
+- **Subagent Deadlock Detection**: When dispatching subagents, implement timeout/watchdog mechanisms. If a subagent task hangs (>5 min without progress), kill and retry with reduced scope. Check TaskOutput with timeout parameter instead of blocking indefinitely.
