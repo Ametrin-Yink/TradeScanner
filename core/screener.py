@@ -109,7 +109,7 @@ class StrategyScreener:
 
         for symbol in symbols:
             df = market_data.get(symbol)
-            if df is None or len(df) < 60:  # Absolute minimum for any calculation
+            if df is None or len(df) < self.MIN_HISTORY_DAYS:
                 continue
             if len(df) < self.MIN_HISTORY_DAYS:
                 logger.debug(f"Phase 0: {symbol} has {len(df)} days (< {self.MIN_HISTORY_DAYS}), limited indicators")
