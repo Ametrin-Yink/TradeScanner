@@ -59,17 +59,19 @@ class TechnicalIndicators:
         return self.indicators
 
     def _calculate_emas(self) -> Dict[str, Optional[float]]:
-        """Calculate EMA8, EMA21, EMA50."""
+        """Calculate EMA8, EMA21, EMA50, EMA200."""
         close = self.df['close']
 
         ema8 = close.ewm(span=8, adjust=False).mean().iloc[-1] if len(close) >= 8 else None
         ema21 = close.ewm(span=21, adjust=False).mean().iloc[-1] if len(close) >= 21 else None
         ema50 = close.ewm(span=50, adjust=False).mean().iloc[-1] if len(close) >= 50 else None
+        ema200 = close.ewm(span=200, adjust=False).mean().iloc[-1] if len(close) >= 200 else None
 
         return {
             'ema8': float(ema8) if ema8 is not None else None,
             'ema21': float(ema21) if ema21 is not None else None,
             'ema50': float(ema50) if ema50 is not None else None,
+            'ema200': float(ema200) if ema200 is not None else None,
         }
 
     def _calculate_atr(self, period: int = 14) -> Dict[str, Optional[float]]:
