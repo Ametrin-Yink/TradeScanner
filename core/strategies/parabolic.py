@@ -1,4 +1,4 @@
-"""Strategy H: Parabolic/Capitulation v2.1 - Extreme reversal with expert suggestions."""
+"""Strategy H: Parabolic/Capitulation v2.1 - Capitulation bottom detection only."""
 from ..scoring_utils import calculate_clv, check_rsi_divergence
 from typing import Dict, List, Optional, Tuple, Any
 import logging
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 class ParabolicStrategy(BaseStrategy):
     """
-    Strategy H: Parabolic/Capitulation v2.1 - Extreme overextension reversal.
+    Strategy H: Parabolic/Capitulation v2.1 - Capitulation bottom detection with volume climax.
 
     Expert suggestions implemented:
     A. Volume Climax: Vol > 4xMA20 = +2 points (panic exhaustion)
@@ -22,9 +22,9 @@ class ParabolicStrategy(BaseStrategy):
     C. VIX Second Wave Filter: VIX > 30 and rising = reject
     """
 
-    NAME = "Parabolic"
+    NAME = "抛物线回弹"
     STRATEGY_TYPE = StrategyType.PARABOLIC
-    DESCRIPTION = "Parabolic/Capitulation v2.1 - Extreme reversal with volume climax and VIX filter"
+    DESCRIPTION = "Parabolic Rebound - Capitulation bottom detection with volume climax"
     DIMENSIONS = ['MO', 'EX', 'VC']
 
     PARAMS = {
@@ -48,36 +48,28 @@ class ParabolicStrategy(BaseStrategy):
     }
 
     def __init__(self, fetcher=None, db=None):
-        """Initialize with market direction cache."""
+        """Initialize with VIX data cache."""
         super().__init__(fetcher=fetcher, db=db)
-        self.market_direction = 'neutral'  # 'long', 'short', 'neutral'
         self.vix_data = None
 
     def screen(self, symbols: List[str]) -> List[StrategyMatch]:
         """
-        Screen symbols with Phase 0 market direction and VIX filter.
+        Screen symbols for capitulation bottom setups.
         """
-        # Phase 0: Determine market direction and check VIX (ONCE)
-        logger.info("Parabolic: Phase 0 - Determining market direction and VIX...")
-        self._detect_market_direction()
-
-        # Cache VIX status to avoid rechecking for every symbol
+        # Phase 0: Check VIX filter (ONCE)
+        logger.info("Parabolic: Phase 0 - Checking VIX filter...")
         self._vix_status = self._check_vix_filter()
-
-        if self.market_direction == 'neutral':
-            logger.info("Parabolic: Market neutral, no trading")
-            return []
 
         # Expert suggestion C: VIX second wave filter
         if self._vix_status == 'reject':
             logger.info("Parabolic: VIX > 30 and rising - rejecting all signals (don't catch falling knives)")
             return []
 
-        logger.info(f"Parabolic: Market direction = {self.market_direction.upper()}, VIX status = {self._vix_status}")
+        logger.info(f"Parabolic: VIX status = {self._vix_status}")
 
         # Phase 0.5: Pre-filter by extreme conditions
         prefiltered = []
-        logger.info(f"Parabolic: Phase 0.5 - Pre-filtering for {self.market_direction} mode...")
+        logger.info("Parabolic: Phase 0.5 - Pre-filtering for capitulation bottom setups...")
 
         for symbol in symbols:
             try:
@@ -96,39 +88,6 @@ class ParabolicStrategy(BaseStrategy):
 
         # Use base class screen on pre-filtered symbols
         return super().screen(prefiltered)
-
-    def _detect_market_direction(self):
-        """
-        Detect market direction based on SPY trend.
-        Short: SPY > EMA50 + 2*ATR (parabolic uptrend)
-        Long: SPY < EMA50 - 2*ATR (capitulation downtrend)
-        """
-        try:
-            # Use cached SPY data from screener if available
-            spy_df = getattr(self, '_spy_df', None)
-            if spy_df is None:
-                spy_df = self._get_data('SPY')
-
-            if spy_df is None or len(spy_df) < 50:
-                self.market_direction = 'neutral'
-                return
-
-            current = spy_df['close'].iloc[-1]
-            ema50 = spy_df['close'].ewm(span=50).mean().iloc[-1]
-            atr = spy_df['close'].rolling(14).apply(lambda x: (x.max() - x.min())).iloc[-1]
-
-            # Short mode: parabolic uptrend
-            if current > ema50 + 2 * atr:
-                self.market_direction = 'short'
-            # Long mode: capitulation downtrend
-            elif current < ema50 - 2 * atr:
-                self.market_direction = 'long'
-            else:
-                self.market_direction = 'neutral'
-
-        except Exception as e:
-            logger.warning(f"Could not detect market direction: {e}")
-            self.market_direction = 'neutral'
 
     def _check_vix_filter(self) -> str:
         """
@@ -152,12 +111,11 @@ class ParabolicStrategy(BaseStrategy):
             }
 
             # Capitulation mode: be extra careful with VIX
-            if self.market_direction == 'long':
-                # Don't catch falling knives when panic is spreading
-                if current_vix > self.PARAMS['vix_reject_threshold'] and vix_slope > 0:
-                    return 'reject'
-                elif current_vix > self.PARAMS['vix_limit_threshold']:
-                    return 'limit'
+            # Don't catch falling knives when panic is spreading
+            if current_vix > self.PARAMS['vix_reject_threshold'] and vix_slope > 0:
+                return 'reject'
+            elif current_vix > self.PARAMS['vix_limit_threshold']:
+                return 'limit'
 
             return 'normal'
 
@@ -166,7 +124,7 @@ class ParabolicStrategy(BaseStrategy):
             return 'limit'  # Safer default on error
 
     def _prefilter_symbol(self, symbol: str, df: pd.DataFrame) -> bool:
-        """Pre-filter symbol based on extreme conditions."""
+        """Pre-filter symbol for capitulation bottom conditions only."""
         ind = TechnicalIndicators(df)
         ind.calculate_all()
 
@@ -181,27 +139,15 @@ class ParabolicStrategy(BaseStrategy):
         price_metrics = ind.indicators.get('price_metrics', {})
         gaps = price_metrics.get('gaps_5d', 0)
 
-        if self.market_direction == 'short':
-            # Parabolic top conditions
-            if rsi is None or rsi <= self.PARAMS['rsi_overbought']:
-                return False
+        # Capitulation bottom conditions (long mode only)
+        if rsi is None or rsi >= self.PARAMS['rsi_oversold']:
+            return False
 
-            if current_price <= ema50 + self.PARAMS['ema_atr_multiplier'] * atr:
-                return False
+        if current_price >= ema50 - self.PARAMS['ema_atr_multiplier'] * atr:
+            return False
 
-            if gaps < self.PARAMS['min_gaps']:
-                return False
-
-        else:  # long mode
-            # Capitulation bottom conditions
-            if rsi is None or rsi >= self.PARAMS['rsi_oversold']:
-                return False
-
-            if current_price >= ema50 - self.PARAMS['ema_atr_multiplier'] * atr:
-                return False
-
-            if gaps < self.PARAMS['min_gaps']:
-                return False
+        if gaps < self.PARAMS['min_gaps']:
+            return False
 
         return True
 
@@ -271,8 +217,8 @@ class ParabolicStrategy(BaseStrategy):
         # Check profit efficiency
         total_score = sum(d.score for d in dimensions)
         entry = current_price
-        stop = entry + atr * self.PARAMS['stop_atr_multiplier'] if self.market_direction == 'short' else entry - atr * self.PARAMS['stop_atr_multiplier']
-        target1 = ema50 + 2 * atr if self.market_direction == 'short' else ema50 - 2 * atr
+        stop = entry - atr * self.PARAMS['stop_atr_multiplier']
+        target1 = ema50 - 2 * atr
 
         if abs(entry - stop) > 0:
             profit_potential = abs(target1 - entry) / abs(entry - stop)
@@ -285,6 +231,7 @@ class ParabolicStrategy(BaseStrategy):
     def _calculate_mo(self, df: pd.DataFrame, rsi: float, atr_multiple: float) -> Tuple[float, Dict]:
         """
         Momentum Overextension dimension (0-5) with RSI divergence core scoring (Expert suggestion B).
+        Long mode only: Capitulation bottom detection.
         """
         details = {
             'rsi': rsi,
@@ -294,37 +241,20 @@ class ParabolicStrategy(BaseStrategy):
 
         mo_score = 0.0
 
-        if self.market_direction == 'short':
-            # RSI overbought
-            if rsi > 85:
-                mo_score += 3.0
-            elif rsi > 80:
-                mo_score += 2.0 + (rsi - 80) / 5.0
-            elif rsi > 75:
-                mo_score += 1.0 + (rsi - 75) / 5.0
-            else:
-                mo_score += max(0, (rsi - 70) / 10.0)
+        # RSI oversold (capitulation detection)
+        if rsi < 15:
+            mo_score += 3.0
+        elif rsi < 20:
+            mo_score += 2.0 + (20 - rsi) / 5.0
+        elif rsi < 25:
+            mo_score += 1.0 + (25 - rsi) / 5.0
+        else:
+            mo_score += max(0, (30 - rsi) / 10.0)
 
-            # Expert suggestion B: RSI bearish divergence (core scoring)
-            if check_rsi_divergence(df, 'bearish'):
-                mo_score += 2.0
-                details['rsi_divergence'] = True
-
-        else:  # long mode
-            # RSI oversold
-            if rsi < 15:
-                mo_score += 3.0
-            elif rsi < 20:
-                mo_score += 2.0 + (20 - rsi) / 5.0
-            elif rsi < 25:
-                mo_score += 1.0 + (25 - rsi) / 5.0
-            else:
-                mo_score += max(0, (30 - rsi) / 10.0)
-
-            # Expert suggestion B: RSI bullish divergence (core scoring)
-            if check_rsi_divergence(df, 'bullish'):
-                mo_score += 2.0
-                details['rsi_divergence'] = True
+        # Expert suggestion B: RSI bullish divergence (core scoring)
+        if check_rsi_divergence(df, 'bullish'):
+            mo_score += 2.0
+            details['rsi_divergence'] = True
 
         # Distance from EMA in ATR terms
         if atr_multiple > 10:
@@ -415,6 +345,7 @@ class ParabolicStrategy(BaseStrategy):
     def _calculate_vc(self, ind: TechnicalIndicators, df: pd.DataFrame) -> Tuple[float, Dict]:
         """
         Volume Confirmation dimension (0-4) with Volume Climax (Expert suggestion A).
+        Long mode only: Capitulation bottom detection.
         """
         volume_data = ind.indicators.get('volume', {})
         volume_ratio = volume_data.get('volume_ratio', 1.0)
@@ -431,38 +362,22 @@ class ParabolicStrategy(BaseStrategy):
 
         vc_score = 0.0
 
-        if self.market_direction == 'short':
-            # Volume spike on decline
-            if volume_spike:
-                vc_score += 3.0
-            elif volume_ratio > 2.0:
-                vc_score += 2.0 + min(1.0, (volume_ratio - 2.0) / 2.0)
-            elif volume_ratio > 1.5:
-                vc_score += 1.0 + (volume_ratio - 1.5) / 0.5
+        # Expert suggestion A: Volume Climax
+        if volume_ratio > self.PARAMS['volume_climax_threshold']:  # > 4xMA20
+            vc_score += 2.0  # Maximum reward for panic exhaustion
+            details['volume_climax'] = True
+        elif volume_ratio > self.PARAMS['volume_high_threshold']:  # > 3xMA20
+            vc_score += 1.5
+        elif volume_ratio > self.PARAMS['volume_medium_threshold']:  # > 2xMA20
+            vc_score += 1.0
+        elif volume_ratio > 1.5:
+            vc_score += 0.5
 
-            # Elevated volume
-            if volume_ratio > 1.2:
-                vc_score += 1.5
-            elif volume_ratio > 1.0:
-                vc_score += 0.5 + (volume_ratio - 1.0) / 0.2 * 1.0
+        # Capitulation with long lower shadow
+        if clv > 0.7 and volume_ratio > 1.5:
+            vc_score += 2.0
 
-        else:  # long mode - Capitulation
-            # Expert suggestion A: Volume Climax
-            if volume_ratio > self.PARAMS['volume_climax_threshold']:  # > 4xMA20
-                vc_score += 2.0  # Maximum reward for panic exhaustion
-                details['volume_climax'] = True
-            elif volume_ratio > self.PARAMS['volume_high_threshold']:  # > 3xMA20
-                vc_score += 1.5
-            elif volume_ratio > self.PARAMS['volume_medium_threshold']:  # > 2xMA20
-                vc_score += 1.0
-            elif volume_ratio > 1.5:
-                vc_score += 0.5
-
-            # Capitulation with long lower shadow
-            if clv > 0.7 and volume_ratio > 1.5:
-                vc_score += 2.0
-
-            # OBV divergence would be checked here if available
+        # OBV divergence would be checked here if available
 
         return round(min(4.0, vc_score), 2), details
 
@@ -475,7 +390,7 @@ class ParabolicStrategy(BaseStrategy):
         score: float,
         tier: str
     ) -> Tuple[float, float, float]:
-        """Calculate entry, stop, and target prices."""
+        """Calculate entry, stop, and target prices for long positions."""
         ind = TechnicalIndicators(df)
         ind.calculate_all()
 
@@ -486,13 +401,8 @@ class ParabolicStrategy(BaseStrategy):
         ema50 = ema.get('ema50', current_price)
 
         entry = round(current_price, 2)
-
-        if self.market_direction == 'short':
-            stop = round(current_price + atr * self.PARAMS['stop_atr_multiplier'], 2)
-            target = round(ema50, 2)
-        else:
-            stop = round(current_price - atr * self.PARAMS['stop_atr_multiplier'], 2)
-            target = round(ema50, 2)
+        stop = round(current_price - atr * self.PARAMS['stop_atr_multiplier'], 2)
+        target = round(ema50, 2)
 
         return entry, stop, target
 
@@ -518,7 +428,6 @@ class ParabolicStrategy(BaseStrategy):
         reasons = [
             f"Score: {score:.2f}/15 (Tier {tier}-{position_pct*100:.0f}%)",
             f"MO:{mo.score:.2f} EX:{ex.score:.2f} VC:{vc.score:.2f}",
-            f"Direction: {self.market_direction.upper()}",
             f"RSI: {mo_details.get('rsi', 0):.1f}",
             f"Gaps: {ex_details.get('gaps_5d', 0)}",
         ]
@@ -537,17 +446,16 @@ class ParabolicStrategy(BaseStrategy):
     def calculate_position_pct(self, tier: str) -> float:
         """
         Override to implement VIX-based position limit (Expert suggestion C).
+        Long mode only.
         """
         base_pct = super().calculate_position_pct(tier)
 
-        # Expert suggestion C: VIX-based limits
+        # Expert suggestion C: VIX-based limits for capitulation mode
         if self.vix_data:
             current_vix = self.vix_data['current']
 
-            # Capitulation mode with high VIX
-            if self.market_direction == 'long':
-                if current_vix > self.PARAMS['vix_limit_threshold']:
-                    # Limit to Tier B max (5%)
-                    return min(base_pct, 0.05)
+            if current_vix > self.PARAMS['vix_limit_threshold']:
+                # Limit to Tier B max (5%)
+                return min(base_pct, 0.05)
 
         return base_pct
