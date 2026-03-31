@@ -167,7 +167,7 @@ class RangeSupportStrategy(BaseStrategy):
             # Check volume veto
             volume_data = ind.indicators.get('volume', {})
             volume_ratio = volume_data.get('volume_ratio', 1.0)
-            if volume_ratio > 1.2:
+            if volume_ratio > self.PARAMS['volume_veto_threshold']:
                 return False
 
         elif self.market_direction == 'short':
