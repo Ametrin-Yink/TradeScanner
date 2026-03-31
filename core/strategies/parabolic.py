@@ -57,21 +57,23 @@ class ParabolicStrategy(BaseStrategy):
         """
         Screen symbols with Phase 0 market direction and VIX filter.
         """
-        # Phase 0: Determine market direction and check VIX
+        # Phase 0: Determine market direction and check VIX (ONCE)
         logger.info("Parabolic: Phase 0 - Determining market direction and VIX...")
         self._detect_market_direction()
+
+        # Cache VIX status to avoid rechecking for every symbol
+        self._vix_status = self._check_vix_filter()
 
         if self.market_direction == 'neutral':
             logger.info("Parabolic: Market neutral, no trading")
             return []
 
         # Expert suggestion C: VIX second wave filter
-        vix_status = self._check_vix_filter()
-        if vix_status == 'reject':
+        if self._vix_status == 'reject':
             logger.info("Parabolic: VIX > 30 and rising - rejecting all signals (don't catch falling knives)")
             return []
 
-        logger.info(f"Parabolic: Market direction = {self.market_direction.upper()}, VIX status = {vix_status}")
+        logger.info(f"Parabolic: Market direction = {self.market_direction.upper()}, VIX status = {self._vix_status}")
 
         # Phase 0.5: Pre-filter by extreme conditions
         prefiltered = []
@@ -102,7 +104,11 @@ class ParabolicStrategy(BaseStrategy):
         Long: SPY < EMA50 - 2*ATR (capitulation downtrend)
         """
         try:
-            spy_df = self._get_data('SPY')
+            # Use cached SPY data from screener if available
+            spy_df = getattr(self, '_spy_df', None)
+            if spy_df is None:
+                spy_df = self._get_data('SPY')
+
             if spy_df is None or len(spy_df) < 50:
                 self.market_direction = 'neutral'
                 return
@@ -133,8 +139,8 @@ class ParabolicStrategy(BaseStrategy):
             # Try to get VIX data
             vix_df = self._get_data('VIX')
             if vix_df is None or len(vix_df) < 10:
-                logger.warning("VIX data unavailable, skipping VIX filter")
-                return 'normal'
+                logger.warning("VIX data unavailable, defaulting to limit mode")
+                return 'limit'  # Safer default - limit exposure when VIX unknown
 
             current_vix = vix_df['close'].iloc[-1]
             vix_5d_ago = vix_df['close'].iloc[-6] if len(vix_df) > 5 else current_vix
@@ -156,8 +162,8 @@ class ParabolicStrategy(BaseStrategy):
             return 'normal'
 
         except Exception as e:
-            logger.warning(f"Could not check VIX: {e}")
-            return 'normal'
+            logger.warning(f"Could not check VIX: {e}, defaulting to limit mode")
+            return 'limit'  # Safer default on error
 
     def _prefilter_symbol(self, symbol: str, df: pd.DataFrame) -> bool:
         """Pre-filter symbol based on extreme conditions."""

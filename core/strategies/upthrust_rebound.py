@@ -60,7 +60,9 @@ class UpthrustReboundStrategy(BaseStrategy):
         """
         # Phase 0: Check SPY trend
         logger.info("U&R: Phase 0 - Checking SPY trend...")
-        spy_df = self._get_data('SPY')
+        spy_df = getattr(self, '_spy_df', None)
+        if spy_df is None:
+            spy_df = self._get_data('SPY')
         if spy_df is not None and len(spy_df) >= 200:
             spy_current = spy_df['close'].iloc[-1]
             spy_ema200 = spy_df['close'].ewm(span=200).mean().iloc[-1]

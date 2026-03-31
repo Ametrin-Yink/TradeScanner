@@ -1,4 +1,5 @@
 """Strategy screener - thin orchestrator using plugin architecture."""
+import copy
 import logging
 import time
 from typing import Dict, List, Optional
@@ -109,7 +110,7 @@ class StrategyScreener:
 
         for symbol in symbols:
             df = market_data.get(symbol)
-            if df is None or len(df) < 60:  # Absolute minimum for any calculation
+            if df is None or len(df) < self.MIN_HISTORY_DAYS:
                 continue
             if len(df) < self.MIN_HISTORY_DAYS:
                 logger.debug(f"Phase 0: {symbol} has {len(df)} days (< {self.MIN_HISTORY_DAYS}), limited indicators")
@@ -200,10 +201,11 @@ class StrategyScreener:
 
             # Calculate percentile based on position in sorted array
             for i, item in enumerate(sorted_scores):
-                # Percentile = (number of values below) / total * 100
-                percentile = (i / n) * 100
+                # Use (i+1)/n to avoid 0 percentile for lowest stock
+                # This ensures even the lowest RS stock gets some percentile > 0
+                percentile = ((i + 1) / n) * 100
                 if item['symbol'] in phase0_data:
-                    phase0_data[item['symbol']]['rs_percentile'] = percentile
+                    phase0_data[item['symbol']]['rs_percentile'] = min(99.9, percentile)
 
         logger.info(f"Phase 0: Pre-calculation complete for {len(phase0_data)} symbols")
         return phase0_data
@@ -301,7 +303,8 @@ class StrategyScreener:
                     selected.append(candidate)
                     selected_symbols_strategies.add(key)
 
-            selected_from_group = len([s for s in selected if s in candidates])
+            selected_from_group = len([c for c in selected
+                                      if any(st.value == c.strategy for st, g in self.STRATEGY_GROUPS.items() if g == group)])
             logger.info(f"[{group}] Selected {selected_from_group}/{len(candidates)} candidates (target: {slots})")
 
         # Phase 2.2: If underfilled, add from underrepresented groups first
@@ -444,7 +447,6 @@ class StrategyScreener:
         self._phase0_data = self._run_phase0_precalculation(symbols, self.market_data)
 
         # Share Phase 0 data, market data, and earnings with all strategies
-        import copy
         for strategy in self._strategies.values():
             strategy.market_data = copy.copy(self.market_data)
             strategy.phase0_data = copy.copy(self._phase0_data)

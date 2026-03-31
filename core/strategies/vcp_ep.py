@@ -33,6 +33,7 @@ class VCPEPStrategy(BaseStrategy):
         'max_distance_from_50ema': 0.20,       # Within 20% of 50EMA
         'max_distance_from_52w_high': 0.10,    # Within 10% of 52-week high
         'energy_ratio_cap': 3.0,               # Cap energy ratio at 3.0
+        'rs_percentile_min': 80,               # RS > 80 percentile (kept intentionally different from Momentum)
     }
 
     def filter(self, symbol: str, df: pd.DataFrame) -> bool:
@@ -396,11 +397,11 @@ class VCPEPStrategy(BaseStrategy):
             below = sum(1 for r in all_rs if r < item['rs'])
             item['percentile'] = (below / len(all_rs)) * 100
 
-        # Phase 0.2: Pre-filter by 52w high and RS > 80
-        logger.info("VCP-EP: Phase 0.2 - Pre-filtering by 52w high and RS > 80...")
+        # Phase 0.2: Pre-filter by 52w high and RS > threshold
+        logger.info(f"VCP-EP: Phase 0.2 - Pre-filtering by 52w high and RS > {self.PARAMS['rs_percentile_min']}...")
         for item in rs_scores:
             try:
-                if item['percentile'] < 80:  # RS > 80%
+                if item['percentile'] < self.PARAMS['rs_percentile_min']:  # RS > threshold
                     continue
 
                 df = item['df']

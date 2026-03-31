@@ -91,7 +91,11 @@ class RangeSupportStrategy(BaseStrategy):
         Short: SPY < EMA200 OR close < open - 0.5%
         """
         try:
-            spy_df = self._get_data('SPY')
+            # Use cached SPY data from screener if available
+            spy_df = getattr(self, '_spy_df', None)
+            if spy_df is None:
+                spy_df = self._get_data('SPY')
+
             if spy_df is None or len(spy_df) < 200:
                 self.market_direction = 'neutral'
                 return
@@ -163,7 +167,7 @@ class RangeSupportStrategy(BaseStrategy):
             # Check volume veto
             volume_data = ind.indicators.get('volume', {})
             volume_ratio = volume_data.get('volume_ratio', 1.0)
-            if volume_ratio > 1.2:
+            if volume_ratio > self.PARAMS['volume_veto_threshold']:
                 return False
 
         elif self.market_direction == 'short':
