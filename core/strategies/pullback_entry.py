@@ -84,6 +84,7 @@ class PullbackEntryStrategy(BaseStrategy):
         # Phase 0.5: Pre-filter by EMA21 trend (price > EMA21 and slope > 0)
         logger.info("Shoryuken: Phase 0.5 - Pre-filtering by EMA21 trend...")
         prefiltered_symbols = []
+        symbols_to_remove = []
         for symbol, data in symbol_data.items():
             try:
                 df = data['df']
@@ -100,11 +101,16 @@ class PullbackEntryStrategy(BaseStrategy):
                 if current_price > ema21 and ema_slope > 0:
                     prefiltered_symbols.append(symbol)
                 else:
-                    # Remove from symbol_data to skip processing
-                    del symbol_data[symbol]
+                    # Mark for removal (can't delete during iteration)
+                    symbols_to_remove.append(symbol)
             except Exception as e:
                 logger.debug(f"Error pre-filtering {symbol}: {e}")
+                symbols_to_remove.append(symbol)
                 continue
+
+        # Remove filtered symbols after iteration
+        for symbol in symbols_to_remove:
+            del symbol_data[symbol]
 
 
         logger.info(f"Shoryuken: {len(prefiltered_symbols)}/{len(symbol_data)} passed EMA21 trend pre-filter")
