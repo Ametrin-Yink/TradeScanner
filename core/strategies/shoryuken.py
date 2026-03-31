@@ -370,7 +370,7 @@ class ShoryukenStrategy(BaseStrategy):
         position_pct = self.calculate_position_pct(tier)
 
         reasons = [
-            f"Score: {score:.0f}/15 (Tier {tier}-{position_pct*100:.0f}%)",
+            f"Score: {score:.1f}/15 (Tier {tier}-{position_pct*100:.0f}%)",
             f"TI:{ti.score if ti else 0} RS:{rs.score if rs else 0} "
             f"VC:{vc.score if vc else 0} B:{bonus.score if bonus else 0}"
         ]
