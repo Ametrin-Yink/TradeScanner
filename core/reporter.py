@@ -35,7 +35,8 @@ class ReportGenerator:
         fail_count: int,
         fail_symbols: List[str],
         all_candidates: List = None,
-        sentiment_result: Dict = None
+        sentiment_result: Dict = None,
+        symbol_data_cache: Dict = None
     ) -> str:
         """
         Generate full HTML report.
@@ -49,6 +50,7 @@ class ReportGenerator:
             fail_symbols: List of failed symbols
             all_candidates: List of all candidates
             sentiment_result: Full sentiment analysis result with reasoning
+            symbol_data_cache: Optional dict of cached symbol DataFrames
 
         Returns:
             Path to generated report
@@ -56,23 +58,31 @@ class ReportGenerator:
         scan_date = datetime.now().strftime('%Y-%m-%d')
         scan_time = datetime.now().strftime('%H:%M:%S')
 
-        # Generate charts
-        chart_paths = self._generate_charts(opportunities)
+        try:
+            # Generate charts using cached data if available
+            chart_paths = self._generate_charts(opportunities, symbol_data_cache)
 
-        # Build HTML
-        html = self._build_html(
-            opportunities=opportunities,
-            all_candidates=all_candidates or [],
-            market_sentiment=market_sentiment,
-            sentiment_result=sentiment_result or {},
-            scan_date=scan_date,
-            scan_time=scan_time,
-            total_stocks=total_stocks,
-            success_count=success_count,
-            fail_count=fail_count,
-            fail_symbols=fail_symbols,
-            chart_paths=chart_paths
-        )
+            # Build HTML
+            html = self._build_html(
+                opportunities=opportunities,
+                all_candidates=all_candidates or [],
+                market_sentiment=market_sentiment,
+                sentiment_result=sentiment_result or {},
+                scan_date=scan_date,
+                scan_time=scan_time,
+                total_stocks=total_stocks,
+                success_count=success_count,
+                fail_count=fail_count,
+                fail_symbols=fail_symbols,
+                chart_paths=chart_paths
+            )
+        except Exception as e:
+            logger.error(f"HTML generation failed: {e}, using fallback template")
+            html = self._build_fallback_html(
+                scan_date=scan_date,
+                scan_time=scan_time,
+                error_message=str(e)
+            )
 
         # Save report
         report_filename = f"report_{scan_date}.html"
@@ -90,14 +100,15 @@ class ReportGenerator:
 
     def _generate_charts(
         self,
-        opportunities: List[AnalyzedOpportunity]
+        opportunities: List[AnalyzedOpportunity],
+        symbol_data_cache: Dict = None
     ) -> Dict[str, str]:
         """Generate K-line charts for top opportunities."""
         chart_paths = {}
 
         for opp in opportunities[:10]:  # Top 10 only
             try:
-                chart_path = self._generate_kline_chart(opp)
+                chart_path = self._generate_kline_chart(opp, symbol_data_cache)
                 if chart_path:
                     chart_paths[opp.symbol] = chart_path
             except Exception as e:
@@ -105,9 +116,14 @@ class ReportGenerator:
 
         return chart_paths
 
-    def _generate_kline_chart(self, opp: AnalyzedOpportunity) -> Optional[str]:
+    def _generate_kline_chart(self, opp: AnalyzedOpportunity, symbol_data_cache: Dict = None) -> Optional[str]:
         """Generate static PNG chart for a single stock."""
-        df = self.fetcher.fetch_stock_data(opp.symbol, period="3mo", interval="1d")
+        # Use cached data if available, otherwise fetch
+        if symbol_data_cache and opp.symbol in symbol_data_cache:
+            df = symbol_data_cache[opp.symbol]
+            logger.debug(f"Using cached data for {opp.symbol} chart")
+        else:
+            df = self.fetcher.fetch_stock_data(opp.symbol, period="3mo", interval="1d")
 
         if df is None or len(df) < 20:
             return None
@@ -145,6 +161,17 @@ class ReportGenerator:
         sentiment_reasoning = sentiment_result.get('reasoning', '')
         sentiment_factors = sentiment_result.get('key_factors', [])
         sentiment_confidence = sentiment_result.get('confidence', 50)
+        sentiment_timestamp = sentiment_result.get('timestamp', '')
+
+        # Format timestamp if available
+        sentiment_time_str = ""
+        if sentiment_timestamp:
+            try:
+                from datetime import datetime
+                dt = datetime.fromisoformat(sentiment_timestamp)
+                sentiment_time_str = dt.strftime('%H:%M:%S')
+            except:
+                pass
 
         # Format sentiment details
         sentiment_factors_html = ""
@@ -159,6 +186,9 @@ class ReportGenerator:
             'neutral': '#ffc107',
             'watch': '#6c757d'
         }.get(market_sentiment, '#6c757d')
+
+        # Build sentiment timestamp display
+        sentiment_timestamp_html = f' <span style="opacity:0.7;font-size:11px;">(analyzed at {sentiment_time_str})</span>' if sentiment_time_str else ""
 
         # Build top opportunities section
         top_section = ""
@@ -479,7 +509,7 @@ class ReportGenerator:
             <div class="meta">
                 Date: {scan_date} | Time: {scan_time} ET | Scanned: {total_stocks} stocks
             </div>
-            <div class="sentiment">Sentiment: {market_sentiment.upper()} ({sentiment_confidence}% confidence)</div>
+            <div class="sentiment">Sentiment: {market_sentiment.upper()} ({sentiment_confidence}% confidence){sentiment_timestamp_html}</div>
             {sentiment_reasoning_html}
             {sentiment_factors_html}
         </header>
@@ -521,29 +551,53 @@ class ReportGenerator:
 </html>"""
         return html
 
+    def _build_fallback_html(self, scan_date: str, scan_time: str, error_message: str) -> str:
+        """Build minimal fallback HTML when main generation fails."""
+        return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Trade Scanner Report - {scan_date}</title>
+    <style>
+        body {{ font-family: sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; }}
+        .error {{ background: #f8d7da; color: #721c24; padding: 20px; border-radius: 4px; }}
+    </style>
+</head>
+<body>
+    <h1>Trade Scanner Report</h1>
+    <p>Date: {scan_date} | Time: {scan_time}</p>
+    <div class="error">
+        <h2>Report Generation Error</h2>
+        <p>{error_message}</p>
+        <p>Please check the logs for more details.</p>
+    </div>
+</body>
+</html>"""
+
     def _cleanup_old_reports(self):
-        """Remove old reports beyond retention limit."""
+        """Remove old reports and charts beyond retention limit."""
         try:
+            # Cleanup old reports (keep only max_reports)
             reports = sorted(
                 self.reports_dir.glob('report_*.html'),
                 key=lambda x: x.stat().st_mtime,
                 reverse=True
             )
-
-            # Keep only max_reports
             for old_report in reports[self.max_reports:]:
                 old_report.unlink()
                 logger.info(f"Removed old report: {old_report}")
 
-            # Also cleanup charts older than retention_days
-            cutoff = datetime.now() - timedelta(days=self.retention_days)
-            for chart in self.charts_dir.glob('*.png'):
-                if datetime.fromtimestamp(chart.stat().st_mtime) < cutoff:
-                    chart.unlink()
-            # Cleanup Plotly HTML charts
-            for chart in self.charts_dir.glob('*.html'):
-                if datetime.fromtimestamp(chart.stat().st_mtime) < cutoff:
-                    chart.unlink()
+            # Cleanup old charts using same retention (keep max_reports * 10 charts)
+            # Each report generates up to 10 charts
+            charts = sorted(
+                list(self.charts_dir.glob('*.png')) + list(self.charts_dir.glob('*.html')),
+                key=lambda x: x.stat().st_mtime,
+                reverse=True
+            )
+            max_charts = self.max_reports * 10
+            for old_chart in charts[max_charts:]:
+                old_chart.unlink()
+                logger.info(f"Removed old chart: {old_chart}")
 
         except Exception as e:
             logger.warning(f"Cleanup failed: {e}")

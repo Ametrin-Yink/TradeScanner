@@ -43,6 +43,9 @@ class MemoryOptimizedScanner:
         self.opportunity_analyzer = OpportunityAnalyzer(fetcher=self.fetcher)
         self.reporter = ReportGenerator(fetcher=self.fetcher)
 
+        # Cache for symbol data to avoid re-fetching
+        self._symbol_data_cache: Dict[str, pd.DataFrame] = {}
+
     def is_trading_day(self) -> bool:
         """Check if today is a US trading day."""
         from datetime import datetime
@@ -61,16 +64,17 @@ class MemoryOptimizedScanner:
         self,
         symbols: List[str],
         batch_size: int = 50
-    ) -> Iterator[List[tuple]]:
+    ) -> Iterator[tuple]:
         """
         Fetch data in batches with incremental updates.
 
         Yields:
-            List of (symbol, DataFrame) tuples for each batch
+            Tuple of (list of (symbol, DataFrame) tuples, list of failed symbols)
         """
         total = len(symbols)
         fetched = 0
         cached_count = 0
+        failed_symbols = []
 
         for i in range(0, total, batch_size):
             batch = symbols[i:i + batch_size]
@@ -80,6 +84,7 @@ class MemoryOptimizedScanner:
 
             # Fetch this batch with incremental updates
             batch_data = []
+            batch_failed = []
             for symbol in batch:
                 # This will use cache and fetch only new data
                 df = self.fetcher.fetch_stock_data(
@@ -92,22 +97,25 @@ class MemoryOptimizedScanner:
                     batch_data.append((symbol, df))
                     if len(df) >= self.MAX_HISTORY_DAYS - 5:  # Approximately cached
                         cached_count += 1
+                else:
+                    batch_failed.append(symbol)
                 fetched += 1
 
+            failed_symbols.extend(batch_failed)
             logger.info(f"Batch {batch_num}: fetched {len(batch_data)}/{len(batch)} symbols")
 
-            yield batch_data
+            yield batch_data, batch_failed
 
             # Force garbage collection after each batch
             del batch_data
             gc.collect()
 
-        logger.info(f"Total fetched: {fetched} symbols, ~{cached_count} from cache")
+        logger.info(f"Total fetched: {fetched} symbols, ~{cached_count} from cache, {len(failed_symbols)} failed")
 
     def screen_symbols_streaming(
         self,
         symbols: List[str]
-    ) -> List[StrategyMatch]:
+    ) -> tuple:
         """
         Screen symbols using streaming to limit memory.
 
@@ -115,17 +123,26 @@ class MemoryOptimizedScanner:
             symbols: List of symbols to screen
 
         Returns:
-            List of all candidates found
+            Tuple of (candidates list, failed symbols list)
         """
         all_candidates = []
+        all_failed = []
         batch_size = 50
 
-        for batch_data in self.fetch_symbols_streaming(symbols, batch_size):
+        # Clear data cache for this scan
+        self._symbol_data_cache.clear()
+
+        for batch_data, batch_failed in self.fetch_symbols_streaming(symbols, batch_size):
+            all_failed.extend(batch_failed)
+
             if not batch_data:
                 continue
 
             # Create temporary market_data dict for this batch
             batch_market_data = {sym: df for sym, df in batch_data}
+
+            # Cache data for later use (reporter, analyzer)
+            self._symbol_data_cache.update(batch_market_data)
 
             # Screen this batch
             batch_symbols = list(batch_market_data.keys())
@@ -137,12 +154,13 @@ class MemoryOptimizedScanner:
             all_candidates.extend(candidates)
             logger.info(f"Batch screening: found {len(candidates)} candidates (total: {len(all_candidates)})")
 
-            # Clear batch data and force GC
+            # Clear batch data and force GC (but keep cache)
             batch_market_data.clear()
-            batch_data.clear()
+            del batch_data
             gc.collect()
 
-        return all_candidates
+        logger.info(f"Cached {len(self._symbol_data_cache)} symbols for report generation")
+        return all_candidates, all_failed
 
     def run_scan(
         self,
@@ -180,14 +198,30 @@ class MemoryOptimizedScanner:
             logger.info(f"Market sentiment: {market_sentiment}")
 
             # Step 2: Screen symbols (streaming with incremental data)
-            logger.info(f"Step 2/5: Screening symbols with 8 strategies (incremental update)...")
+            logger.info(f"Step 2/5: Screening symbols with 6 strategies (incremental update)...")
             logger.info(f"Target: {len(symbols)} symbols, keeping {self.MAX_HISTORY_DAYS} trading days of history")
-            candidates = self.screen_symbols_streaming(symbols)
-            logger.info(f"Found {len(candidates)} total candidates")
+            candidates, fail_symbols = self.screen_symbols_streaming(symbols)
+            success_count = len(symbols) - len(fail_symbols)
+            fail_count = len(fail_symbols)
+            logger.info(f"Found {len(candidates)} total candidates ({success_count} success, {fail_count} failed)")
 
             if not candidates:
-                logger.warning("No candidates found")
-                return None
+                logger.warning("No candidates found, generating empty report")
+                # Generate a report showing no opportunities
+                report_path = self.reporter.generate_report(
+                    opportunities=[],
+                    all_candidates=[],
+                    market_sentiment=market_sentiment,
+                    total_stocks=len(symbols),
+                    success_count=success_count,
+                    fail_count=fail_count,
+                    fail_symbols=fail_symbols,
+                    sentiment_result=sentiment_result
+                )
+                scan_duration = (datetime.now() - scan_start).total_seconds()
+                logger.info(f"Scan complete in {scan_duration:.1f}s - no opportunities")
+                logger.info(f"Report: {report_path}")
+                return report_path
 
             # Step 3: Select and score top 10
             logger.info("Step 3/5: AI scoring and selecting top 10...")
@@ -204,7 +238,11 @@ class MemoryOptimizedScanner:
             for i, match in enumerate(top_10_scored):
                 try:
                     logger.info(f"Analyzing {match.symbol} ({i+1}/{len(top_10_scored)})...")
-                    analysis = self.opportunity_analyzer.analyze_opportunity(match, market_sentiment)
+                    # Pass cached data to avoid re-fetching
+                    analysis = self.opportunity_analyzer.analyze_opportunity(
+                        match, market_sentiment,
+                        cached_data=self._symbol_data_cache.get(match.symbol)
+                    )
                     analyzed.append(analysis)
                     gc.collect()  # Clean up after each analysis
                 except Exception as e:
@@ -230,10 +268,11 @@ class MemoryOptimizedScanner:
                 all_candidates=candidates,
                 market_sentiment=market_sentiment,
                 total_stocks=len(symbols),
-                success_count=len(symbols),  # Simplified
-                fail_count=0,
-                fail_symbols=[],
-                sentiment_result=sentiment_result
+                success_count=success_count,
+                fail_count=fail_count,
+                fail_symbols=fail_symbols,
+                sentiment_result=sentiment_result,
+                symbol_data_cache=self._symbol_data_cache
             )
 
             # Save scan result
@@ -255,9 +294,9 @@ class MemoryOptimizedScanner:
                     'confidence': o.confidence
                 } for o in candidates],
                 'total_stocks': len(symbols),
-                'success_count': len(symbols),
-                'fail_count': 0,
-                'fail_symbols': [],
+                'success_count': success_count,
+                'fail_count': fail_count,
+                'fail_symbols': fail_symbols,
                 'report_path': report_path
             }
             self.db.save_scan_result(scan_result)

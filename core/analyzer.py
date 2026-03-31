@@ -1,6 +1,7 @@
 """AI opportunity analyzer - deep analysis for top 10."""
 import logging
 import json
+import time
 from typing import Dict, Optional
 from dataclasses import dataclass, field
 
@@ -48,7 +49,8 @@ class OpportunityAnalyzer:
     def analyze_opportunity(
         self,
         match: StrategyMatch,
-        market_sentiment: str = 'neutral'
+        market_sentiment: str = 'neutral',
+        cached_data: Optional[pd.DataFrame] = None
     ) -> AnalyzedOpportunity:
         """
         Deep analysis of a single opportunity.
@@ -56,13 +58,18 @@ class OpportunityAnalyzer:
         Args:
             match: Strategy match from screener
             market_sentiment: Current market sentiment
+            cached_data: Optional cached DataFrame to avoid re-fetching
 
         Returns:
             AnalyzedOpportunity with AI insights
         """
-        # Fetch additional market data
+        # Fetch additional market data (use cached if available)
         symbol = match.symbol
-        df = self.fetcher.fetch_stock_data(symbol, period="3mo", interval="1d")
+        if cached_data is not None and len(cached_data) >= 20:
+            df = cached_data
+            logger.debug(f"Using cached data for {symbol} analysis")
+        else:
+            df = self.fetcher.fetch_stock_data(symbol, period="3mo", interval="1d")
 
         # Tavily search for symbol news
         news = self._search_symbol_news(symbol)
@@ -153,6 +160,34 @@ class OpportunityAnalyzer:
             logger.warning(f"News search failed for {symbol}: {e}")
             return []
 
+    def _call_ai_with_retry(
+        self,
+        url: str,
+        headers: dict,
+        payload: dict,
+        max_retries: int = 2
+    ) -> Optional[dict]:
+        """Call AI API with retry logic."""
+        for attempt in range(max_retries + 1):
+            try:
+                timeout = 60 + (attempt * 30)  # Increase timeout on retry
+                response = requests.post(url, headers=headers, json=payload, timeout=timeout)
+                response.raise_for_status()
+                return response.json()
+            except requests.Timeout:
+                if attempt < max_retries:
+                    logger.warning(f"AI call timeout, retrying ({attempt + 1}/{max_retries})...")
+                    time.sleep(2 ** attempt)  # Exponential backoff
+                else:
+                    raise
+            except Exception:
+                if attempt < max_retries:
+                    logger.warning(f"AI call failed, retrying ({attempt + 1}/{max_retries})...")
+                    time.sleep(2 ** attempt)
+                else:
+                    raise
+        return None
+
     def _call_ai_analysis(
         self,
         match: StrategyMatch,
@@ -224,10 +259,11 @@ Provide analysis in JSON format:
                 "temperature": 0.4
             }
 
-            response = requests.post(url, headers=headers, json=payload, timeout=60)
-            response.raise_for_status()
+            # Call AI with retry logic
+            data = self._call_ai_with_retry(url, headers, payload, max_retries=2)
+            if data is None:
+                raise Exception("AI call failed after retries")
 
-            data = response.json()
             content = data['choices'][0]['message']['content']
 
             # Extract JSON from response
