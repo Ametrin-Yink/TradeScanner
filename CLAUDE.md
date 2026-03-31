@@ -89,7 +89,7 @@ class MyStrategy(BaseStrategy):
 
 ## Documentation Alignment Rule
 
-**Rule**: Strategy_Description.md must match actual code implementation.
+**Rule**: `docs/Strategy_Description.md` must match actual code implementation.
 
 ### Verification Process
 1. Before modifying strategy code, read the documentation section
