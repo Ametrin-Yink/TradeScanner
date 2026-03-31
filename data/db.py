@@ -45,6 +45,29 @@ class Database:
                  data['low'], data['close'], data['volume'])
             )
 
+    def save_market_data_batch(self, symbol: str, data_list: list):
+        """
+        Save multiple market data rows in a single batch operation.
+
+        Args:
+            symbol: Stock symbol
+            data_list: List of dicts with keys ['date', 'open', 'high', 'low', 'close', 'volume']
+        """
+        if not data_list:
+            return
+
+        with self.get_connection() as conn:
+            rows = [
+                (symbol, d['date'], d['open'], d['high'], d['low'], d['close'], d['volume'])
+                for d in data_list
+            ]
+            conn.executemany(
+                """INSERT OR REPLACE INTO market_data
+                (symbol, date, open, high, low, close, volume)
+                VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                rows
+            )
+
     def save_scan_result(self, result: dict) -> int:
         with self.get_connection() as conn:
             cursor = conn.execute(

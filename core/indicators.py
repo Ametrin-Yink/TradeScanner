@@ -1,4 +1,4 @@
-"""Technical indicators calculator."""
+"""Technical indicators calculator with caching."""
 import numpy as np
 import pandas as pd
 from typing import Dict, Optional, List, Tuple
@@ -24,21 +24,28 @@ class IndicatorValues:
 
 
 class TechnicalIndicators:
-    """Calculate technical indicators for stock analysis."""
+    """Calculate technical indicators for stock analysis with caching."""
 
-    def __init__(self, df: pd.DataFrame):
+    # Class-level cache for indicator calculations
+    _cache: Dict[str, Dict] = {}
+    _cache_hits: int = 0
+    _cache_misses: int = 0
+
+    def __init__(self, df: pd.DataFrame, symbol: str = None):
         """
         Initialize with OHLCV data.
 
         Args:
             df: DataFrame with columns ['open', 'high', 'low', 'close', 'volume']
+            symbol: Stock symbol (optional, for logging purposes)
         """
         self.df = df.copy()
+        self.symbol = symbol or "UNKNOWN"
         self.indicators: Dict[str, any] = {}
 
     def calculate_all(self) -> Dict[str, any]:
         """
-        Calculate all technical indicators.
+        Calculate all technical indicators with caching.
 
         Returns:
             Dict with all indicator values
@@ -46,6 +53,20 @@ class TechnicalIndicators:
         if len(self.df) < 50:
             logger.warning(f"Insufficient data: {len(self.df)} rows, need at least 50")
             return {}
+
+        # Generate cache key
+        cache_key = self._get_cache_key()
+
+        # Check cache
+        if cache_key in TechnicalIndicators._cache:
+            TechnicalIndicators._cache_hits += 1
+            self.indicators = TechnicalIndicators._cache[cache_key]
+            logger.debug(f"Indicator cache hit for {self.symbol} (hits: {self._cache_hits})")
+            return self.indicators
+
+        # Cache miss - calculate
+        TechnicalIndicators._cache_misses += 1
+        logger.debug(f"Indicator cache miss for {self.symbol} (misses: {self._cache_misses})")
 
         self.indicators = {
             'ema': self._calculate_emas(),
@@ -56,7 +77,46 @@ class TechnicalIndicators:
             'price_metrics': self._calculate_price_metrics(),
         }
 
+        # Store in cache
+        TechnicalIndicators._cache[cache_key] = self.indicators
+
         return self.indicators
+
+    def _get_cache_key(self) -> str:
+        """Generate cache key based on data characteristics."""
+        if len(self.df) == 0:
+            return "empty_data"
+
+        # Use data characteristics to generate unique key
+        # This avoids needing the symbol - same data = same key
+        last_date = str(self.df.index[-1])
+        first_date = str(self.df.index[0])
+        rows = len(self.df)
+        last_close = self.df['close'].iloc[-1]
+        last_volume = self.df['volume'].iloc[-1]
+
+        return f"{first_date}_{last_date}_{rows}_{last_close}_{last_volume}"
+
+    @classmethod
+    def get_cache_stats(cls) -> Dict[str, int]:
+        """Get cache statistics."""
+        total = cls._cache_hits + cls._cache_misses
+        return {
+            'hits': cls._cache_hits,
+            'misses': cls._cache_misses,
+            'total': total,
+            'hit_rate': round(cls._cache_hits / total * 100, 2) if total > 0 else 0,
+            'cached_items': len(cls._cache)
+        }
+
+    @classmethod
+    def clear_cache(cls):
+        """Clear the indicator cache."""
+        stats = cls.get_cache_stats()
+        cls._cache.clear()
+        cls._cache_hits = 0
+        cls._cache_misses = 0
+        logger.info(f"Indicator cache cleared. Stats: {stats}")
 
     def _calculate_emas(self) -> Dict[str, Optional[float]]:
         """Calculate EMA8, EMA21, EMA50, EMA200."""

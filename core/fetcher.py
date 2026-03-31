@@ -219,7 +219,7 @@ class DataFetcher:
                 return None
 
     def _save_to_db(self, symbol: str, df: pd.DataFrame, incremental: bool = True):
-        """Save fetched data to database."""
+        """Save fetched data to database using batch insert."""
         try:
             if incremental:
                 # Check latest date in database
@@ -239,11 +239,11 @@ class DataFetcher:
             else:
                 df_to_save = df
 
-            saved_count = 0
+            # Prepare batch data
+            data_list = []
             for date, row in df_to_save.iterrows():
                 date_str = date.strftime('%Y-%m-%d') if isinstance(date, pd.Timestamp) else str(date)[:10]
-
-                self.db.save_market_data(symbol, {
+                data_list.append({
                     'date': date_str,
                     'open': float(row['open']),
                     'high': float(row['high']),
@@ -251,10 +251,11 @@ class DataFetcher:
                     'close': float(row['close']),
                     'volume': int(row['volume'])
                 })
-                saved_count += 1
 
-            if saved_count > 0:
-                logger.debug(f"Saved {saved_count} new rows for {symbol}")
+            # Batch insert
+            if data_list:
+                self.db.save_market_data_batch(symbol, data_list)
+                logger.debug(f"Saved {len(data_list)} new rows for {symbol} (batch)")
 
         except Exception as e:
             logger.error(f"Error saving {symbol} to database: {e}")
