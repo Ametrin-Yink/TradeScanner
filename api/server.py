@@ -6,6 +6,7 @@ from typing import Optional
 
 from flask import Flask, jsonify, request
 
+import os
 from config.settings import settings, REPORTS_DIR, CHARTS_DIR
 from data.db import Database
 from core.fetcher import DataFetcher
@@ -293,13 +294,12 @@ def list_reports():
         logger.error(f"List reports failed: {e}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
-
-def run_server(host='0.0.0.0', port=None, debug=False):
+def run_server(host='0.0.0.0', port=None):
     """Run the Flask server."""
     port = port or settings.get('report', {}).get('web_port', 8080)
+    debug_mode = os.getenv('FLASK_DEBUG', 'false').lower() == 'true'
     logger.info(f"Starting API server on {host}:{port}")
-    app.run(host=host, port=port, debug=debug)
-
+    app.run(host=host, port=port, debug=debug_mode)
 
 if __name__ == '__main__':
     run_server()
