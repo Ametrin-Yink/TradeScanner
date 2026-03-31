@@ -10,12 +10,12 @@ from .base_strategy import BaseStrategy, StrategyMatch, ScoringDimension, Strate
 logger = logging.getLogger(__name__)
 
 
-class ShoryukenStrategy(BaseStrategy):
+class PullbackEntryStrategy(BaseStrategy):
     """Strategy C: Shoryuken v3.0 - Pullback to EMA with 4D scoring."""
 
-    NAME = "Shoryuken"
+    NAME = "PullbackEntry"
     STRATEGY_TYPE = StrategyType.SHORYUKEN
-    DESCRIPTION = "Shoryuken v3.0 - Institutional Grade Pullback System"
+    DESCRIPTION = "PullbackEntry v3.0 - Institutional Grade Pullback System"
     DIMENSIONS = ['TI', 'RS', 'VC', 'BONUS']
 
     # Shoryuken Parameters
