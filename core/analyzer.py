@@ -268,11 +268,15 @@ Provide analysis in JSON format:
 
             # Extract JSON from response
             import re
-            json_match = re.search(r'\{.*\}', content, re.DOTALL)
-            if json_match:
-                result = json.loads(json_match.group())
-            else:
-                result = json.loads(content)
+            try:
+                json_match = re.search(r'\{[^{}]*\}', content, re.DOTALL)
+                if json_match:
+                    result = json.loads(json_match.group())
+                else:
+                    result = json.loads(content)
+            except json.JSONDecodeError as e:
+                logger.warning(f"Failed to parse AI response as JSON: {e}")
+                result = {}
 
             logger.info(f"AI analysis complete for {match.symbol}")
             return result

@@ -170,7 +170,8 @@ class ReportGenerator:
                 from datetime import datetime
                 dt = datetime.fromisoformat(sentiment_timestamp)
                 sentiment_time_str = dt.strftime('%H:%M:%S')
-            except:
+            except (ValueError, KeyError, TypeError) as e:
+                logger.debug(f"Failed to parse timestamp: {e}")
                 pass
 
         # Format sentiment details

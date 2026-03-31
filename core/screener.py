@@ -99,9 +99,11 @@ class StrategyScreener:
         self._spy_data = self._get_data('SPY')
         if self._spy_data is not None and len(self._spy_data) >= 5:
             spy_current = self._spy_data['close'].iloc[-1]
-            spy_5d_ago = self._spy_data['close'].iloc[-5]
-            self._spy_return_5d = (spy_current - spy_5d_ago) / spy_5d_ago
+            spy_5d_ago = self._spy_data['close'].iloc[-5] if len(self._spy_data) >= 5 else self._spy_data['close'].iloc[0]
+            self._spy_return_5d = (spy_current - spy_5d_ago) / spy_5d_ago if spy_5d_ago > 0 else 0.0
             logger.info(f"Phase 0: SPY 5-day return = {self._spy_return_5d:.2%}")
+        elif self._spy_data is not None and len(self._spy_data) > 0:
+            logger.warning(f"Phase 0: SPY data has only {len(self._spy_data)} days, skipping 5-day return calculation")
 
         phase0_data = {}
         rs_scores = []
@@ -132,19 +134,24 @@ class StrategyScreener:
 
                 # Phase 0.3: Calculate RS metrics only for periods with sufficient data
                 returns = {}
-                if len(df) >= 63:
+                if len(df) >= 64:  # Need at least 63 days back + current day
                     price_3m_ago = df['close'].iloc[-63]
                     returns['3m'] = (current_price - price_3m_ago) / price_3m_ago
-                if len(df) >= 126:
+                if len(df) >= 127:  # Need at least 126 days back + current day
                     price_6m_ago = df['close'].iloc[-126]
                     returns['6m'] = (current_price - price_6m_ago) / price_6m_ago
-                if len(df) >= 252:
+                if len(df) >= 253:  # Need at least 252 days back + current day
                     price_12m_ago = df['close'].iloc[-252]
                     returns['12m'] = (current_price - price_12m_ago) / price_12m_ago
 
                 # 5-day return (most stocks should have this)
-                price_5d_ago = df['close'].iloc[-5] if len(df) >= 5 else df['close'].iloc[0]
-                ret_5d = (current_price - price_5d_ago) / price_5d_ago
+                if len(df) >= 6:
+                    price_5d_ago = df['close'].iloc[-5]
+                elif len(df) > 1:
+                    price_5d_ago = df['close'].iloc[0]
+                else:
+                    price_5d_ago = current_price
+                ret_5d = (current_price - price_5d_ago) / price_5d_ago if price_5d_ago > 0 else 0.0
 
                 # Weighted average of available returns (reweights if some missing)
                 weights = {'3m': 0.4, '6m': 0.3, '12m': 0.3}
@@ -380,7 +387,8 @@ class StrategyScreener:
                 return False
 
             return True
-        except:
+        except (KeyError, IndexError, AttributeError, ValueError) as e:
+            logger.debug(f"Basic requirements check failed: {e}")
             return False
 
     def screen(

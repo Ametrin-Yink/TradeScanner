@@ -43,6 +43,12 @@ class DataFetcher:
         self.max_history_days = max_history_days
         self._last_request_time = 0
 
+    def _normalize_timezone(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Normalize timezone to UTC for consistent comparisons."""
+        if df.index.tz is not None:
+            df.index = df.index.tz_convert('UTC').tz_localize(None)
+        return df
+
     def _rate_limited_request(self, func: Callable, *args, **kwargs):
         """Execute function with rate limiting."""
         elapsed = time.time() - self._last_request_time
@@ -146,6 +152,9 @@ class DataFetcher:
 
             # Merge with cached data if exists
             if cached_df is not None:
+                # Normalize timezone before comparison
+                cached_df = self._normalize_timezone(cached_df)
+                df = self._normalize_timezone(df)
                 # Remove overlapping dates from cached data
                 cached_df = cached_df[cached_df.index < df.index.min()]
                 # Concatenate
@@ -242,15 +251,23 @@ class DataFetcher:
             # Prepare batch data
             data_list = []
             for date, row in df_to_save.iterrows():
-                date_str = date.strftime('%Y-%m-%d') if isinstance(date, pd.Timestamp) else str(date)[:10]
-                data_list.append({
-                    'date': date_str,
-                    'open': float(row['open']),
-                    'high': float(row['high']),
-                    'low': float(row['low']),
-                    'close': float(row['close']),
-                    'volume': int(row['volume'])
-                })
+                date_str = date.strftime('%Y-%m-%d') if hasattr(date, 'strftime') else str(date)[:10]
+                record = {'date': date_str}
+
+                # Add NaN/null checks before type conversions
+                for col in ['open', 'high', 'low', 'close']:
+                    val = row.get(col, None)
+                    if val is None or (isinstance(val, float) and np.isnan(val)):
+                        continue
+                    record[col] = float(val)
+
+                volume_val = row.get('volume', None)
+                if volume_val is not None and not (isinstance(volume_val, float) and np.isnan(volume_val)):
+                    record['volume'] = int(volume_val)
+
+                # Only add record if we have all required price columns
+                if all(k in record for k in ['open', 'high', 'low', 'close']):
+                    data_list.append(record)
 
             # Batch insert
             if data_list:

@@ -528,7 +528,7 @@ class DoubleTopBottomStrategy(BaseStrategy):
 
     def _check_rsi_divergence(self, df: pd.DataFrame, direction: str) -> bool:
         """Check for RSI divergence."""
-        if len(df) < 20:
+        if len(df) < 30:
             return False
 
         # Calculate RSI
@@ -540,30 +540,48 @@ class DoubleTopBottomStrategy(BaseStrategy):
 
         if direction == 'bearish':
             # Bearish divergence: price higher high, RSI lower high
-            price_high_idx = df['high'].tail(10).idxmax()
-            price_high = df.loc[price_high_idx, 'high']
+            recent_slice = df.tail(10)
+            recent_high_idx = recent_slice['high'].idxmax()
+            recent_high = df.loc[recent_high_idx, 'high']
+            recent_rsi = rsi.loc[recent_high_idx]
 
-            prev_price_high = df['high'].tail(20).head(10).max()
-            prev_rsi_high = rsi.tail(20).head(10).max()
+            prev_start = max(0, len(df) - 30)
+            prev_end = len(df) - 10
+            if prev_start >= prev_end:
+                return False
 
-            current_rsi = rsi.iloc[-1]
+            prev_period = df.iloc[prev_start:prev_end]
+            prev_rsi_period = rsi.iloc[prev_start:prev_end]
 
-            if price_high > prev_price_high and current_rsi < prev_rsi_high:
-                return True
+            if len(prev_period) < 5:
+                return False
+
+            prev_high = prev_period['high'].max()
+            prev_rsi_high = prev_rsi_period.max()
+
+            return recent_high > prev_high and recent_rsi < prev_rsi_high
         else:
             # Bullish divergence: price lower low, RSI higher low
-            price_low_idx = df['low'].tail(10).idxmin()
-            price_low = df.loc[price_low_idx, 'low']
+            recent_slice = df.tail(10)
+            recent_low_idx = recent_slice['low'].idxmin()
+            recent_low = df.loc[recent_low_idx, 'low']
+            recent_rsi = rsi.loc[recent_low_idx]
 
-            prev_price_low = df['low'].tail(20).head(10).min()
-            prev_rsi_low = rsi.tail(20).head(10).min()
+            prev_start = max(0, len(df) - 30)
+            prev_end = len(df) - 10
+            if prev_start >= prev_end:
+                return False
 
-            current_rsi = rsi.iloc[-1]
+            prev_period = df.iloc[prev_start:prev_end]
+            prev_rsi_period = rsi.iloc[prev_start:prev_end]
 
-            if price_low < prev_price_low and current_rsi > prev_rsi_low:
-                return True
+            if len(prev_period) < 5:
+                return False
 
-        return False
+            prev_low = prev_period['low'].min()
+            prev_rsi_low = prev_rsi_period.min()
+
+            return recent_low < prev_low and recent_rsi > prev_rsi_low
 
     def _calculate_vc_short(self, ind: TechnicalIndicators, df: pd.DataFrame, price: float, high_60d: float) -> Tuple[float, Dict]:
         """

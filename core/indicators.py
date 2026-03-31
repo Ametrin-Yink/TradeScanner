@@ -4,6 +4,7 @@ import pandas as pd
 from typing import Dict, Optional, List, Tuple
 from dataclasses import dataclass
 import logging
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,7 @@ class TechnicalIndicators:
     _cache: Dict[str, Dict] = {}
     _cache_hits: int = 0
     _cache_misses: int = 0
+    _cache_lock = threading.Lock()
 
     def __init__(self, df: pd.DataFrame, symbol: str = None):
         """
@@ -58,14 +60,16 @@ class TechnicalIndicators:
         cache_key = self._get_cache_key()
 
         # Check cache
-        if cache_key in TechnicalIndicators._cache:
-            TechnicalIndicators._cache_hits += 1
-            self.indicators = TechnicalIndicators._cache[cache_key]
-            logger.debug(f"Indicator cache hit for {self.symbol} (hits: {self._cache_hits})")
-            return self.indicators
+        with TechnicalIndicators._cache_lock:
+            if cache_key in TechnicalIndicators._cache:
+                TechnicalIndicators._cache_hits += 1
+                self.indicators = TechnicalIndicators._cache[cache_key]
+                logger.debug(f"Indicator cache hit for {self.symbol} (hits: {self._cache_hits})")
+                return self.indicators
 
         # Cache miss - calculate
-        TechnicalIndicators._cache_misses += 1
+        with TechnicalIndicators._cache_lock:
+            TechnicalIndicators._cache_misses += 1
         logger.debug(f"Indicator cache miss for {self.symbol} (misses: {self._cache_misses})")
 
         self.indicators = {
@@ -78,7 +82,8 @@ class TechnicalIndicators:
         }
 
         # Store in cache
-        TechnicalIndicators._cache[cache_key] = self.indicators
+        with TechnicalIndicators._cache_lock:
+            TechnicalIndicators._cache[cache_key] = self.indicators
 
         return self.indicators
 
@@ -161,9 +166,11 @@ class TechnicalIndicators:
         # Calculate ATR
         atr = true_range.ewm(span=period, adjust=False).mean().iloc[-1]
 
-        # ATR as percentage of current price
+        # ATR as percentage of current price (return decimal, not percentage)
         current_price = close.iloc[-1]
-        atr_pct = (atr / current_price) * 100 if current_price > 0 else None
+        if current_price <= 0:
+            return {'atr': atr, 'atr_pct': None}
+        atr_pct = atr / current_price
 
         return {
             'atr': float(atr) if atr is not None else None,
@@ -288,12 +295,12 @@ class TechnicalIndicators:
 
         # Daily gaps in last 5 days
         gaps = 0
-        for i in range(-5, 0):
-            if i < -1:
-                prev_close = close.iloc[i - 1]
-                curr_open = self.df['open'].iloc[i]
-                gap_pct = abs((curr_open - prev_close) / prev_close) * 100
-                if gap_pct > 1.0:  # 1% gap
+        for i in range(1, 6):  # 1 to 5 days back
+            if len(self.df) > i + 1:
+                prev_close = self.df['close'].iloc[-(i + 1)]
+                curr_open = self.df['open'].iloc[-i]
+                gap_pct = abs((curr_open - prev_close) / prev_close)
+                if gap_pct > 0.01:  # 1% gap
                     gaps += 1
 
         return {
@@ -674,7 +681,8 @@ class TechnicalIndicators:
         try:
             slope, intercept = np.polyfit(x, recent_ranges, 1)
             qualitative_ok = slope < 0  # Decreasing trend
-        except:
+        except (KeyError, IndexError, ValueError) as e:
+            logger.debug(f"Blow-off detection failed: {e}")
             qualitative_ok = False
             slope = 0
 
@@ -1015,7 +1023,8 @@ class TechnicalIndicators:
             if high == low:
                 return 0.5
             return (close - low) / (high - low)
-        except:
+        except (KeyError, IndexError, ValueError) as e:
+            logger.debug(f"CLV calculation failed: {e}")
             return 0.5
 
     def estimate_gap_impact(self) -> Dict[str, any]:

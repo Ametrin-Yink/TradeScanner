@@ -292,7 +292,11 @@ class RangeShortStrategy(BaseStrategy):
         target1 = self._calculate_target1(df, level_info, current_price)
 
         if target1 and entry != stop:
-            profit_potential = abs(target1 - entry) / abs(entry - stop)
+            # For short positions: stop > entry, target1 < entry
+            if stop > entry:
+                profit_potential = (entry - target1) / (stop - entry)
+            else:
+                profit_potential = (target1 - entry) / (entry - stop)
             if profit_potential < self.PARAMS['profit_efficiency_threshold']:
                 total_score -= self.PARAMS['efficiency_penalty']
                 logger.debug(f"{symbol}: Efficiency penalty applied (R:R={profit_potential:.2f})")

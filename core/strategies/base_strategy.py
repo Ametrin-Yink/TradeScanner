@@ -182,7 +182,11 @@ class BaseStrategy(ABC):
             try:
                 # Get data
                 df = self._get_data(symbol)
-                if df is None or len(df) < 50:
+                if df is None:
+                    logger.debug(f"No data for {symbol}")
+                    continue
+                if not isinstance(df, pd.DataFrame) or len(df) < 50:
+                    logger.debug(f"Insufficient data for {symbol}")
                     continue
 
                 # Filter
