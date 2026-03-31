@@ -1,5 +1,6 @@
 """Flask API server for trade scanner."""
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -18,6 +19,14 @@ from core.reporter import ReportGenerator
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def validate_symbol(symbol: str) -> bool:
+    """Validate stock symbol format."""
+    if not symbol or len(symbol) > 10:
+        return False
+    return bool(re.match(r'^[A-Z0-9.]{1,10}$', symbol))
+
 
 app = Flask(__name__)
 db = Database()
@@ -42,7 +51,15 @@ def trigger_scan():
         mode = data.get('mode', 'full')  # quick, full
         symbols = data.get('symbols')
 
-        if not symbols:
+        if symbols:
+            # Validate all symbols
+            invalid_symbols = [s for s in symbols if not validate_symbol(s)]
+            if invalid_symbols:
+                return jsonify({
+                    'status': 'error',
+                    'message': f'Invalid stock symbols: {invalid_symbols}'
+                }), 400
+        else:
             symbols = db.get_active_stocks()
 
         # Run scan pipeline
@@ -177,6 +194,14 @@ def add_stock():
             return jsonify({'status': 'error', 'message': 'symbol required'}), 400
 
         symbol = data['symbol'].upper()
+
+        # Validate symbol format
+        if not validate_symbol(symbol):
+            return jsonify({
+                'status': 'error',
+                'message': f'Invalid stock symbol format: {symbol}'
+            }), 400
+
         name = data.get('name', '')
         sector = data.get('sector', '')
 
@@ -202,6 +227,13 @@ def remove_stock():
             return jsonify({'status': 'error', 'message': 'symbol required'}), 400
 
         symbol = data['symbol'].upper()
+
+        # Validate symbol format
+        if not validate_symbol(symbol):
+            return jsonify({
+                'status': 'error',
+                'message': f'Invalid stock symbol format: {symbol}'
+            }), 400
 
         # Soft delete by setting is_active = 0
         conn = db.get_connection()
