@@ -302,7 +302,8 @@ class StrategyScreener:
                     selected.append(candidate)
                     selected_symbols_strategies.add(key)
 
-            selected_from_group = len([s for s in selected if s in candidates])
+            selected_from_group = len([c for c in selected
+                                      if any(st.value == c.strategy for st, g in self.STRATEGY_GROUPS.items() if g == group)])
             logger.info(f"[{group}] Selected {selected_from_group}/{len(candidates)} candidates (target: {slots})")
 
         # Phase 2.2: If underfilled, add from underrepresented groups first
