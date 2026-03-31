@@ -101,10 +101,153 @@ class AIConfidenceScorer:
             scored_batch = self._score_batch(batch, market_sentiment)
             all_scored.extend(scored_batch)
 
+        # Apply sector concentration penalty
+        all_scored = self._apply_sector_penalties(all_scored)
+
         # Sort by confidence descending
         all_scored.sort(key=lambda x: x.confidence, reverse=True)
 
         return all_scored
+
+    def _extract_sector(self, candidate) -> str:
+        """
+        Extract sector from candidate data.
+
+        Args:
+            candidate: StrategyMatch or ScoredCandidate object
+
+        Returns:
+            Sector name or 'Unknown' if not found
+        """
+        # Try technical_snapshot first
+        if hasattr(candidate, 'technical_snapshot') and candidate.technical_snapshot:
+            sector = candidate.technical_snapshot.get('sector')
+            if sector and sector != 'Unknown':
+                return sector
+
+        # Try to extract from match_reasons
+        if hasattr(candidate, 'match_reasons') and candidate.match_reasons:
+            for reason in candidate.match_reasons:
+                if reason.startswith('Sector: '):
+                    return reason.replace('Sector: ', '')
+
+        return 'Unknown'
+
+    def _count_sectors(self, candidates: List) -> Dict[str, int]:
+        """
+        Count sector occurrences across candidates.
+
+        Args:
+            candidates: List of StrategyMatch or ScoredCandidate objects
+
+        Returns:
+            Dict mapping sector name to count
+        """
+        sector_counts = {}
+        for candidate in candidates:
+            sector = self._extract_sector(candidate)
+            if sector != 'Unknown':
+                sector_counts[sector] = sector_counts.get(sector, 0) + 1
+        return sector_counts
+
+    def _calculate_sector_penalty(self, sector_count: int) -> float:
+        """
+        Calculate penalty percentage based on sector concentration.
+
+        Penalty: -5% confidence per duplicate sector beyond 2.
+        - 1-2 stocks: no penalty
+        - 3 stocks: -5%
+        - 4 stocks: -10%
+        - 5+ stocks: -15% (max)
+
+        Args:
+            sector_count: Number of candidates in this sector
+
+        Returns:
+            Penalty percentage (0.0 to 0.15)
+        """
+        if sector_count <= 2:
+            return 0.0
+        # -5% per stock beyond 2, capped at 15% (5 stocks)
+        return min(0.15, max(0, sector_count - 2) * 0.05)
+
+    def _apply_sector_penalty(self, confidence: int, sector_count: int) -> int:
+        """
+        Apply sector concentration penalty to confidence score.
+
+        Args:
+            confidence: Original confidence score (0-100)
+            sector_count: Number of candidates in this sector
+
+        Returns:
+            Adjusted confidence score
+        """
+        penalty = self._calculate_sector_penalty(sector_count)
+        adjusted = confidence * (1 - penalty)
+        return round(adjusted)
+
+    def _apply_sector_penalties(self, scored_candidates: List[ScoredCandidate]) -> List[ScoredCandidate]:
+        """
+        Apply sector concentration penalties to all scored candidates.
+
+        Args:
+            scored_candidates: List of ScoredCandidate objects
+
+        Returns:
+            List of ScoredCandidate with adjusted confidence scores
+        """
+        if not scored_candidates:
+            return scored_candidates
+
+        # Count sectors
+        sector_counts = self._count_sectors(scored_candidates)
+
+        if not sector_counts:
+            return scored_candidates
+
+        # Log sector distribution
+        logger.info(f"Sector distribution: {sector_counts}")
+
+        # Apply penalties
+        adjusted_candidates = []
+        for candidate in scored_candidates:
+            sector = self._extract_sector(candidate)
+            if sector != 'Unknown' and sector in sector_counts:
+                sector_count = sector_counts[sector]
+                penalty = self._calculate_sector_penalty(sector_count)
+
+                if penalty > 0:
+                    original_confidence = candidate.confidence
+                    adjusted_confidence = self._apply_sector_penalty(original_confidence, sector_count)
+
+                    logger.info(
+                        f"Sector penalty applied: {candidate.symbol} ({sector}) "
+                        f"- {sector_count} candidates in sector, "
+                        f"confidence {original_confidence} -> {adjusted_confidence} "
+                        f"(-{penalty*100:.0f}%)"
+                    )
+
+                    # Create new candidate with adjusted confidence
+                    adjusted_candidate = ScoredCandidate(
+                        symbol=candidate.symbol,
+                        strategy=candidate.strategy,
+                        entry_price=candidate.entry_price,
+                        stop_loss=candidate.stop_loss,
+                        take_profit=candidate.take_profit,
+                        confidence=adjusted_confidence,
+                        reasoning=candidate.reasoning + f" [Sector penalty: -{penalty*100:.0f}% for {sector_count} in {sector}]",
+                        key_factors=candidate.key_factors,
+                        risk_factors=candidate.risk_factors,
+                        match_reasons=candidate.match_reasons,
+                        technical_snapshot=candidate.technical_snapshot
+                    )
+                    adjusted_candidates.append(adjusted_candidate)
+                else:
+                    adjusted_candidates.append(candidate)
+            else:
+                adjusted_candidates.append(candidate)
+
+        return adjusted_candidates
 
     def _score_batch(
         self,

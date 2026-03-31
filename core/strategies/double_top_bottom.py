@@ -391,9 +391,10 @@ class DoubleTopBottomStrategy(BaseStrategy):
 
     def _calculate_ts_short(self, ind: TechnicalIndicators, df: pd.DataFrame, price: float) -> Tuple[float, Dict]:
         """
-        Trend Structure for short with left/right grading (Expert suggestion A).
-        Right side (confirmed): EMA8 < EMA21 < EMA50 = 5 pts
-        Left side (early): EMA still bullish BUT distribution signs = 3 pts
+        Trend Structure for short with stricter confirmation.
+        Right side (confirmed): EMA8 < EMA21 < EMA50 + RSI divergence = max 6 pts
+        Without RSI divergence: max 4 pts (stricter confirmation)
+        Left side (early): EMA still bullish BUT distribution signs = 3 pts (Tier B max)
         """
         ema = ind.indicators.get('ema', {})
         ema8 = ema.get('ema8', price)
@@ -403,7 +404,7 @@ class DoubleTopBottomStrategy(BaseStrategy):
         rsi_data = ind.indicators.get('rsi', {})
         rsi = rsi_data.get('rsi', 50)
 
-        # Calculate RSI divergence
+        # Calculate RSI divergence - REQUIRED for max score
         rsi_divergence = check_rsi_divergence(df, 'bearish')
 
         details = {
@@ -416,20 +417,32 @@ class DoubleTopBottomStrategy(BaseStrategy):
         }
 
         ts_score = 0.0
+        has_death_cross = ema8 < ema21
+        full_bearish_alignment = ema8 < ema21 < ema50
 
-        # Right side: Confirmed bearish alignment
-        if ema8 < ema21 < ema50:
-            ts_score += 2.0
-            details['side'] = 'right'
-        # Left side: Early distribution (Expert suggestion A)
+        # Right side: Confirmed bearish alignment with death cross
+        if full_bearish_alignment:
+            if rsi_divergence:
+                # Full confirmation: death cross + RSI divergence
+                ts_score += 3.0  # Increased base for full confirmation
+                details['side'] = 'right'
+            else:
+                # Death cross but no divergence - partial credit
+                ts_score += 2.0
+                details['side'] = 'right'  # Still right side technically
+        # Left side: Early distribution (EMA still bullish but divergence present)
         elif ema8 > ema21 > ema50 and rsi_divergence:
             ts_score += 2.0  # Left side base
             details['side'] = 'left'
-        elif ema8 < ema21:
+        # Transition: Partial death cross (ema8 < ema21 but not below ema50)
+        elif has_death_cross:
             ts_score += 1.5
             details['side'] = 'transition'
+        # No clear signal
+        else:
+            details['side'] = 'unknown'
 
-        # Price below EMA8
+        # Price below EMA8 (bearish position)
         if price < ema8:
             ts_score += 2.0
 
@@ -441,9 +454,13 @@ class DoubleTopBottomStrategy(BaseStrategy):
         elif slope_val < 0:
             ts_score += 0.5
 
-        # RSI in distribution zone
+        # RSI in distribution zone (45-60)
         if 45 < rsi < 60:
             ts_score += 1.0
+
+        # Stricter confirmation: Without RSI divergence, cap at 4.0 points
+        if not rsi_divergence:
+            ts_score = min(ts_score, 4.0)
 
         # Expert suggestion A: Left side gets max 3 points
         if details['side'] == 'left':

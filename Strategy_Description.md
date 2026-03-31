@@ -440,208 +440,254 @@ If days_at_level > 5 with < 1% movement:
 
 ## Strategy E: DoubleTopBottom
 
-**Type**: Long/Short (bidirectional)  
-**Description**: Distribution top / accumulation bottom pattern
+**Type**: Long/Short (bidirectional)
+**Description**: Distribution top / accumulation bottom pattern with stricter short confirmation
 
-### Scoring Dimensions (4D)
+### Scoring Dimensions (3D)
 
 | Dimension | Max Score | Description |
 |-----------|-----------|-------------|
-| TQ | 4.0 | Trend quality |
-| VS | 5.0 | Volume signal |
-| PD | 3.0 | Pattern development |
-| TS | 3.0 | Test strength (max 3 tests) |
+| PL | 5.0 | Proximity to Level (distance + test quality) |
+| TS | 6.0 | Trend Structure with left/right side grading |
+| VC | 4.0 | Volume Confirmation (exhaustion gap + institutional intensity) |
+
+**Total**: 15 points (Tier S: 12+, Tier A: 9+, Tier B: 7+, Reject: <7)
 
 ### Direction Determination
 
 ```
-If price > EMA50 and pattern near highs: SHORT (distribution)
-If price < EMA50 and pattern near lows: LONG (accumulation)
+If price near 60d high and weakness signs: SHORT (distribution)
+If price near 60d low and strength signs: LONG (accumulation)
 ```
 
-### Dimension 1: TQ (Trend Quality)
+### Dimension 1: PL (Proximity to Level)
 
-**Scoring**:
-| Condition | Score |
-|-----------|-------|
-| Clear trend direction | 4.0 |
-| Mixed/sideways | 2.0 |
-| Against trend | 0 |
+**Distance Scoring**:
+| Distance from Level | Score |
+|---------------------|-------|
+| < 1% | 3.0 |
+| 1-2% | 2.0 |
+| 2-3% | 1.0 |
 
-### Dimension 2: VS (Volume Signal)
+**Test Interval Quality** (Expert suggestion B):
+| Avg Interval | Score |
+|--------------|-------|
+| > 10 days | 1.5 (high quality) |
+| 5-10 days | 1.0 |
+| < 5 days (≥2 tests) | 0.5 |
 
-**Distribution (Top) Pattern**:
-- High volume first top
-- Lower volume second top
-- Breakdown volume surge
+### Dimension 2: TS (Trend Structure) - STRicter Confirmation
 
-**Accumulation (Bottom) Pattern**:
-- High volume first bottom
-- Lower volume second bottom
-- Breakout volume surge
+**Left/Right Side Grading** (Expert suggestion A):
 
-**Scoring**:
-| Pattern Quality | Score |
-|-----------------|-------|
-| Classic volume pattern | 5.0 |
-| Partial match | 2.0-4.0 |
-| No pattern | 0 |
+| Side | Condition | Base Score | Max Score |
+|------|-----------|------------|-----------|
+| Right | EMA8 < EMA21 < EMA50 (confirmed) | 2.0-3.0 | 6.0 |
+| Transition | EMA8 < EMA21 but EMA21 > EMA50 | 1.5 | 4.0 |
+| Left | EMA8 > EMA21 > EMA50 + divergence | 2.0 | 3.0 |
 
-### Dimension 3: PD (Pattern Development)
-
-**Time Requirement**:
-```
-Min_days_between_tests = 20
-Max_days_between_tests = 120
-```
-
-**Scoring**:
+**Additional TS Components**:
 | Factor | Score |
 |--------|-------|
-| Proper time window | 1.0 |
-| RSI divergence | 1.0 |
-| Price level similarity (<5% diff) | 1.0 |
+| Price below EMA8 | 2.0 |
+| EMA21 slope < -0.2% | 1.5 |
+| EMA21 slope < 0% | 0.5 |
+| RSI in distribution zone (45-60) | 1.0 |
 
-### Dimension 4: TS (Test Strength)
+**Stricter Short Confirmation**:
+- **Without RSI divergence**: TS score capped at **4.0 points**
+- **With RSI divergence + death cross**: Full scoring allowed
+- **Left side**: Capped at **3.0 points** (Tier B max)
 
-**Test Count** (capped at 3 for scoring):
-```
-score = min(test_count, 3) × 1.0
-```
+### Dimension 3: VC (Volume Confirmation)
 
-**Test Quality Requirements**:
-- Interval ≥3 days between tests
-- Price within 5% of previous test
+**Volume Spike**:
+| Volume Ratio | Score |
+|--------------|-------|
+| > 1.5 | 2.0 |
+| > 1.2 | 1.0 |
+
+**Exhaustion Gap** (Expert suggestion C): +2.0 if detected
+
+**Institutional Intensity** (Expert suggestion D):
+| Intensity | Score |
+|-----------|-------|
+| > 1.5 | 1.5 |
+| > 1.0 | 1.0 |
 
 ### Entry/Exit Rules
 
 **Entry**:
-- Break of neckline (line connecting lows for top, highs for bottom)
-- Minimum 2 tests at level
-- Volume confirmation on break
+- Short: Price near 60d high, weakness signs (EMA8 < EMA21 or price < EMA8)
+- Long: Price near 60d low, strength signs (EMA8 > EMA21 or price > EMA8)
+- **Stricter for Short**: Requires EMA death cross (EMA8 < EMA21) + RSI divergence for max score
 
 **Stop Loss**:
 ```
 # For short (distribution)
-stop = second_top_high + 0.5 × ATR
+stop = 60d_high + 0.5 × ATR
 
 # For long (accumulation)
-stop = second_bottom_low - 0.5 × ATR
+stop = 60d_low - 0.5 × ATR
 ```
+
+**Position Sizing**:
+- Left side (early) signals capped at Tier B (5% max)
+- Right side (confirmed) signals allow full Tier S (20%)
 
 ---
 
 ## Strategy F: CapitulationRebound
 
 **Type**: Long Only  
-**Description**: Parabolic capitulation reversal
+**Description**: Capitulation bottom detection with volume climax
 
-### Scoring Dimensions (4D)
+### Scoring Dimensions (3D)
 
 | Dimension | Max Score | Description |
 |-----------|-----------|-------------|
-| TQ | 4.0 | Trend exhaustion |
-| VS | 5.0 | Volume climax |
-| PD | 3.0 | Pattern depth |
-| MC | 3.0 | Market context |
+| MO | 5.0 | Momentum Overextension (RSI divergence core) |
+| EX | 6.0 | Extension Level (distance from EMA, gaps) |
+| VC | 4.0 | Volume Confirmation (volume climax) |
+
+**Total**: 15 points (Tier S: 12+, Tier A: 9+, Tier B: 7+, Reject: <7)
+
+### Expert Suggestions Implemented
+
+| Suggestion | Implementation |
+|------------|----------------|
+| A. Volume Climax | Vol > 4x MA20 = +2 points (panic exhaustion) |
+| B. RSI Divergence Core | Price extreme + RSI divergence = MO +2 points |
+| C. VIX Second Wave Filter | VIX > 30 and rising = reject (don't catch falling knives) |
+
+### Dimension 1: MO (Momentum Overextension)
+
+**Core Concept**: Capitulation bottom detection with RSI divergence
+
+**RSI Oversold Scoring**:
+| RSI Value | Score |
+|-----------|-------|
+| < 15 | 3.0 (max) |
+| 15-20 | 2.0-3.0 (interpolate) |
+| 20-25 | 1.0-2.0 (interpolate) |
+| 25-30 | 0-1.0 (interpolate) |
+| > 30 | 0 |
+
+**RSI Bullish Divergence Bonus** (Expert suggestion B):
+```
+If bullish RSI divergence detected: +2.0 points
+Price lower low + RSI higher low = capitulation exhaustion
+```
+
+**Distance from EMA in ATR terms**:
+| ATR Multiple | Score |
+|--------------|-------|
+| > 10 ATR | 2.0 |
+| 7-10 ATR | 1.5-2.0 (interpolate) |
+| 5-7 ATR | 1.0-1.5 (interpolate) |
+| 3-5 ATR | 0-1.0 (interpolate) |
+| < 3 ATR | 0 |
+
+### Dimension 2: EX (Extension Level)
+
+**Distance from EMA50**:
+```
+Distance_pct = |Price - EMA50| / EMA50 × 100
+```
+
+**Scoring**:
+| Distance from EMA50 | Score |
+|---------------------|-------|
+| > 20% | 3.0 (max) |
+| 15-20% | 2.0-3.0 (interpolate) |
+| 10-15% | 1.0-2.0 (interpolate) |
+| < 10% | 0-1.0 (interpolate) |
+
+**Gaps Scoring** (acceleration confirmation):
+| Gaps in 5 Days | Score |
+|----------------|-------|
+| >= 4 gaps | 2.0 |
+| 3 gaps | 1.5 |
+| 2 gaps | 1.0 |
+| < 2 gaps | 0 |
+
+### Dimension 3: VC (Volume Confirmation)
+
+**Volume Climax Detection** (Expert suggestion A):
+```
+Volume_ratio = Volume_today / Volume_20d_avg
+```
+
+**Scoring**:
+| Volume Ratio | Score |
+|--------------|-------|
+| > 4.0x (climax) | 2.0 (max) |
+| 3.0x-4.0x | 1.5 |
+| 2.0x-3.0x | 1.0 |
+| 1.5x-2.0x | 0.5 |
+| < 1.5x | 0 |
+
+**Capitulation Candle Bonus**:
+```
+CLV = (Close - Low) / (High - Low)
+If CLV > 0.7 AND Volume_ratio > 1.5:
+    +2.0 points (long lower shadow + volume = capitulation)
+```
+
+Note: CLV > 0.7 indicates close near high (bullish reversal candle after decline)
 
 ### Pre-filter Requirements
 
-**Capitulation Criteria** (at least 3 of 5):
+**Capitulation Criteria** (ALL must be true for consideration):
 ```
-□ 1-month return > 50% (large cap) or > 200% (small cap)
-□ Consecutive up days ≥ 3
-□ Gap ups ≥ 2 in run
-□ Volume increasing days ≥ 2
-□ Price > 10 ATR above EMA50
-```
-
-### Dimension 1: TQ (Trend Exhaustion)
-
-**Momentum Calculation**:
-```
-Momentum_score = min(abs(R1m), 100) / 100 × 4.0
-
-Where R1m is 1-month return
+□ RSI < 20 (extreme oversold)
+□ Price < EMA50 - 5 × ATR (extended below EMA)
+□ Gaps >= 2 in last 5 days (acceleration)
+□ Dollar volume > $50M (liquidity)
+□ Listed > 50 days (avoid new issues)
 ```
 
-**Scoring**:
-| R1m | Score |
-|-----|-------|
-| >100% (small) / >50% (large) | 4.0 |
-| 50-100% / 30-50% | 2.0-4.0 |
-| <50% / <30% | 0-2.0 |
-
-### Dimension 2: VS (Volume Climax)
-
-**Climax Detection**:
+**VIX Filter** (Expert suggestion C):
 ```
-Volume_vs_20d = Volume_today / Volume_20d_avg
-Consecutive_increasing = days with increasing volume
-```
-
-**Scoring**:
-| Pattern | Score |
-|---------|-------|
-| Volume climax + exhaustion | 5.0 |
-| High volume (>3x) | 4.0 |
-| Above average (>2x) | 2.0 |
-| Normal volume | 0 |
-
-### Dimension 3: PD (Pattern Depth)
-
-**Extension Measurement**:
-```
-Extension = (Price_high - EMA50) / EMA50 × 100
-Extension_ATR = (Price_high - EMA50) / ATR
-```
-
-**Scoring**:
-| Extension | Score |
-|-----------|-------|
-| >50% price, >10 ATR | 3.0 |
-| 30-50% price, 7-10 ATR | 2.0 |
-| 20-30% price, 5-7 ATR | 1.0 |
-| <20% | 0 |
-
-### Dimension 4: MC (Market Context)
-
-**Market Filter**:
-```
-If SPY extended (>10% above EMA200): +1.0
-If VIX elevated (>25): +1.0
-If Sector rotation negative: +1.0
+□ VIX > 30 and rising: REJECT all signals
+□ VIX > 25: Limit to Tier B max (5%)
+□ Otherwise: Normal position sizing
 ```
 
 ### Entry/Exit Rules
 
-**Entry** (choose one):
+**Entry** (End-of-Day based):
 
-1. **Opening Range Break**:
-   - First 5-minute candle
-   - Break below opening range low
-   - Volume > 2x average
+Signal triggered when ALL conditions met:
+1. **RSI Oversold**: RSI < 20 (capitulation/extreme oversold)
+2. **Price Below EMA50**: Close price extended below EMA50 (> 5 ATR distance)
+3. **Volume Climax**: Volume > 4x 20-day average (panic exhaustion signal)
+4. **Multiple Gaps**: At least 2 gaps in last 5 days (acceleration confirmation)
 
-2. **VWAP Rejection**:
-   - First pullback to VWAP
-   - Rejection (red candle)
-   - Entry on break of pullback low
-
-**Stop Loss**:
+**Entry Price**: Daily close price (current EOD price)
 ```
-stop = day_high + 0.3 × ATR
+entry = close_price
+```
+
+**Stop Loss** (ATR-based):
+```
+stop = entry - 2.0 × ATR14
 ```
 
 **Target**:
 ```
-# Primary: EMA8
-# Secondary: EMA21 (if very weak)
+target = EMA50
 ```
+Primary target is EMA50, expecting mean reversion from capitulation extreme.
 
 **Time Stop**:
 ```
-If no move within 3 days: exit
+If no move toward target within 10 days: exit
 ```
+
+**VIX Filter**:
+- If VIX > 30 and rising: REJECT (don't catch falling knives during panic spread)
+- If VIX > 25: Limit position size to Tier B max (5%)
 
 ---
 

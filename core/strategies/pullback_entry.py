@@ -16,7 +16,7 @@ class PullbackEntryStrategy(BaseStrategy):
     NAME = "PullbackEntry"
     STRATEGY_TYPE = StrategyType.SHORYUKEN
     DESCRIPTION = "PullbackEntry v3.0 - Institutional Grade Pullback System"
-    DIMENSIONS = ['TI', 'RS', 'VC', 'BONUS']
+    DIMENSIONS = ['TI', 'RC', 'VC', 'BONUS']
 
     # Shoryuken Parameters
     PARAMS = {
@@ -192,12 +192,9 @@ class PullbackEntryStrategy(BaseStrategy):
         if ti_score == 0:
             return False
 
-        # Calculate RS score for filtering
-        rs_data = ind.calculate_retracement_structure()
-        rs_score = rs_data['total_score']
-
         # Filter out poor structure
-        if rs_score <= 0:
+        rc_data = ind.calculate_retracement_structure()
+        if rc_data['total_score'] <= 0:
             return False
 
         # Check gap veto
@@ -255,19 +252,19 @@ class PullbackEntryStrategy(BaseStrategy):
             }
         ))
 
-        # Dimension 2: Retracement Structure (RS) - 0-5 points
-        rs_data = ind.calculate_retracement_structure()
-        rs_score = rs_data['total_score']
+        # Dimension 2: Retracement Structure (RC) - 0-5 points
+        rc_data = ind.calculate_retracement_structure()
+        rc_score = rc_data['total_score']
         dimensions.append(ScoringDimension(
-            name='RS',
-            score=rs_score,
+            name='RC',
+            score=rc_score,
             max_score=5.0,
             details={
-                'tightness_score': rs_data.get('tightness_score', 0),
-                'support_score': rs_data.get('support_score', 0),
-                'price_range_pct': rs_data.get('price_range_pct', 0),
-                'ema8_current': rs_data.get('ema8_current', 0),
-                'low_min': rs_data.get('low_min', 0)
+                'tightness_score': rc_data.get('tightness_score', 0),
+                'support_score': rc_data.get('support_score', 0),
+                'price_range_pct': rc_data.get('price_range_pct', 0),
+                'ema8_current': rc_data.get('ema8_current', 0),
+                'low_min': rc_data.get('low_min', 0)
             }
         ))
 
@@ -371,7 +368,7 @@ class PullbackEntryStrategy(BaseStrategy):
     ) -> List[str]:
         """Build human-readable match reasons."""
         ti = next((d for d in dimensions if d.name == 'TI'), None)
-        rs = next((d for d in dimensions if d.name == 'RS'), None)
+        rc = next((d for d in dimensions if d.name == 'RC'), None)
         vc = next((d for d in dimensions if d.name == 'VC'), None)
         bonus = next((d for d in dimensions if d.name == 'BONUS'), None)
 
@@ -379,7 +376,7 @@ class PullbackEntryStrategy(BaseStrategy):
 
         reasons = [
             f"Score: {score:.0f}/15 (Tier {tier}-{position_pct*100:.0f}%)",
-            f"TI:{ti.score if ti else 0} RS:{rs.score if rs else 0} "
+            f"TI:{ti.score if ti else 0} RC:{rc.score if rc else 0} "
             f"VC:{vc.score if vc else 0} B:{bonus.score if bonus else 0}"
         ]
 
@@ -387,9 +384,9 @@ class PullbackEntryStrategy(BaseStrategy):
         if ti and 'slope_norm' in ti.details:
             reasons.append(f"EMA21 slope: {ti.details['slope_norm']:.2f}")
 
-        # Add RS detail
-        if rs and 'price_range_pct' in rs.details:
-            reasons.append(f"Range: {rs.details['price_range_pct']:.1f}%")
+        # Add RC detail
+        if rc and 'price_range_pct' in rc.details:
+            reasons.append(f"Range: {rc.details['price_range_pct']:.1f}%")
 
         # Add VC detail
         if vc and 'v_dry' in vc.details:
@@ -479,15 +476,15 @@ class PullbackEntryStrategy(BaseStrategy):
 
         # Add dimension-specific details
         ti = next((d for d in dimensions if d.name == 'TI'), None)
-        rs = next((d for d in dimensions if d.name == 'RS'), None)
+        rc = next((d for d in dimensions if d.name == 'RC'), None)
         vc = next((d for d in dimensions if d.name == 'VC'), None)
         bonus = next((d for d in dimensions if d.name == 'BONUS'), None)
 
         if ti:
             snapshot['ema21_slope_norm'] = ti.details.get('slope_norm', 0)
 
-        if rs:
-            snapshot['retracement_range_pct'] = rs.details.get('price_range_pct', 0)
+        if rc:
+            snapshot['retracement_range_pct'] = rc.details.get('price_range_pct', 0)
 
         if vc:
             snapshot['volume_dry_ratio'] = vc.details.get('v_dry', 0)

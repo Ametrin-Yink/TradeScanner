@@ -85,5 +85,26 @@ class MyStrategy(BaseStrategy):
 - **yfinance**: Wikipedia blocks (403), use Slickcharts for stock lists
 - **Memory**: Keep under 500MB, batch processing in 50s
 - **Server**: Port 19801 only (security group restriction)
-- **Formula Sync**: Update `Strategy_Description.md` when modifying calculations
 - **Subagent Deadlock Detection**: When dispatching subagents, implement timeout/watchdog mechanisms. If a subagent task hangs (>5 min without progress), kill and retry with reduced scope. Check TaskOutput with timeout parameter instead of blocking indefinitely.
+
+## Documentation Alignment Rule
+
+**Rule**: Strategy_Description.md must match actual code implementation.
+
+### Verification Process
+1. Before modifying strategy code, read the documentation section
+2. After modifying code, update documentation if behavior changed
+3. Document entry/exit rules must match calculate_entry_exit() implementation
+4. Dimension names in docs must match DIMENSIONS class variable
+
+### Common Mismatches to Avoid
+- Intraday vs EOD: Code uses daily data, docs must not describe intraday entries
+- Dimension abbreviations: Must match code exactly (e.g. RS vs RC)
+- Scoring formulas: Must match actual interpolation logic
+- Position tiers: Must match calculate_position_pct() implementation
+
+### Checklist Before Commit
+- [ ] Entry/exit rules verified against code
+- [ ] Dimension names match code
+- [ ] Scoring formulas match implementation
+- [ ] No intraday terminology in daily strategy docs
