@@ -74,7 +74,7 @@ python api/server.py
 ## Documentation
 
 - [CLAUDE.md](CLAUDE.md) - Development guidelines and architecture
-- [策略描述.md](策略描述.md) - Detailed strategy formulas (Chinese)
+- [Strategy_Description.md](Strategy_Description.md) - Detailed strategy formulas and specifications
 - [docs/STOCK_MANAGEMENT.md](docs/STOCK_MANAGEMENT.md) - Stock management procedures
 
 ## Performance
