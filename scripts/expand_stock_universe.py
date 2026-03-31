@@ -56,8 +56,7 @@ def expand_universe():
             if added % 100 == 0:
                 logger.info(f"Added {added}/{len(to_add)}...")
         except Exception as e:
-            logger.warning(f"Failed to add {ticker}: {e}
-
+            logger.warning(f"Failed to add {ticker}: {e}")
             continue
 
     logger.info(f"✓ Added {added} new stocks")
