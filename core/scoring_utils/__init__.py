@@ -268,6 +268,10 @@ def detect_market_direction(spy_df: pd.DataFrame) -> str:
         atr = spy_df['close'].rolling(14).apply(lambda x: (x.max() - x.min())).iloc[-1]
         open_price = spy_df['open'].iloc[-1]
 
+        # Bounds checking: handle NaN values
+        if pd.isna(current) or pd.isna(ema50) or pd.isna(open_price):
+            return 'neutral'
+
         # Short mode: distribution environment
         if current < ema50 or current < open_price * 0.99:
             return 'short'
@@ -301,6 +305,11 @@ def check_vix_filter(vix_df: Optional[pd.DataFrame], direction: str,
 
     try:
         current_vix = vix_df['close'].iloc[-1]
+
+        # Bounds checking: handle NaN values
+        if pd.isna(current_vix):
+            return 'normal'
+
         vix_5d_ago = vix_df['close'].iloc[-6] if len(vix_df) > 5 else current_vix
         vix_slope = (current_vix - vix_5d_ago) / 5
 

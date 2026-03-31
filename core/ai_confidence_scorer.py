@@ -402,7 +402,15 @@ IMPORTANT:
         response.raise_for_status()
         result = response.json()
 
-        return result['choices'][0]['message']['content']
+        try:
+            content = result.get('choices', [{}])[0].get('message', {}).get('content', '')
+            if not content:
+                logger.warning("Empty content in AI response")
+                return None
+            return content
+        except (AttributeError, IndexError) as e:
+            logger.error(f"Unexpected API response structure: {e}")
+            return None
 
     def _parse_ai_response(self, content: str) -> List[Dict]:
         """Parse AI response to extract scored data."""

@@ -1,11 +1,13 @@
 """Flask API server for trade scanner."""
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from flask import Flask, jsonify, request
 
+import os
 from config.settings import settings, REPORTS_DIR, CHARTS_DIR
 from data.db import Database
 from core.fetcher import DataFetcher
@@ -17,6 +19,14 @@ from core.reporter import ReportGenerator
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def validate_symbol(symbol: str) -> bool:
+    """Validate stock symbol format."""
+    if not symbol or len(symbol) > 10:
+        return False
+    return bool(re.match(r'^[A-Z0-9.]{1,10}$', symbol))
+
 
 app = Flask(__name__)
 db = Database()
@@ -41,7 +51,15 @@ def trigger_scan():
         mode = data.get('mode', 'full')  # quick, full
         symbols = data.get('symbols')
 
-        if not symbols:
+        if symbols:
+            # Validate all symbols
+            invalid_symbols = [s for s in symbols if not validate_symbol(s)]
+            if invalid_symbols:
+                return jsonify({
+                    'status': 'error',
+                    'message': f'Invalid stock symbols: {invalid_symbols}'
+                }), 400
+        else:
             symbols = db.get_active_stocks()
 
         # Run scan pipeline
@@ -176,6 +194,14 @@ def add_stock():
             return jsonify({'status': 'error', 'message': 'symbol required'}), 400
 
         symbol = data['symbol'].upper()
+
+        # Validate symbol format
+        if not validate_symbol(symbol):
+            return jsonify({
+                'status': 'error',
+                'message': f'Invalid stock symbol format: {symbol}'
+            }), 400
+
         name = data.get('name', '')
         sector = data.get('sector', '')
 
@@ -201,6 +227,13 @@ def remove_stock():
             return jsonify({'status': 'error', 'message': 'symbol required'}), 400
 
         symbol = data['symbol'].upper()
+
+        # Validate symbol format
+        if not validate_symbol(symbol):
+            return jsonify({
+                'status': 'error',
+                'message': f'Invalid stock symbol format: {symbol}'
+            }), 400
 
         # Soft delete by setting is_active = 0
         conn = db.get_connection()
@@ -293,13 +326,12 @@ def list_reports():
         logger.error(f"List reports failed: {e}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
-
-def run_server(host='0.0.0.0', port=None, debug=False):
+def run_server(host='0.0.0.0', port=None):
     """Run the Flask server."""
     port = port or settings.get('report', {}).get('web_port', 8080)
+    debug_mode = os.getenv('FLASK_DEBUG', 'false').lower() == 'true'
     logger.info(f"Starting API server on {host}:{port}")
-    app.run(host=host, port=port, debug=debug)
-
+    app.run(host=host, port=port, debug=debug_mode)
 
 if __name__ == '__main__':
     run_server()

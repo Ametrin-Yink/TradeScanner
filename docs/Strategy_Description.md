@@ -353,6 +353,11 @@ If SPY > EMA50 and trending up: reduce short exposure
 If SPY < EMA50 or flat: proceed
 ```
 
+**Market Direction Filter:**
+- Uses SPY trend analysis (price vs EMA50)
+- Long signals only in accumulation environment (price > EMA50)
+- Short signals only in distribution environment (price < EMA50)
+
 ### Dimension 1: TQ (Trend Quality)
 
 **Short Trend Requirements**:
@@ -460,6 +465,11 @@ If price near 60d high and weakness signs: SHORT (distribution)
 If price near 60d low and strength signs: LONG (accumulation)
 ```
 
+**Market Direction Filter:**
+- Uses SPY trend analysis (price vs EMA50)
+- Long signals only in accumulation environment (price > EMA50)
+- Short signals only in distribution environment (price < EMA50)
+
 ### Dimension 1: PL (Proximity to Level)
 
 **Distance Scoring**:
@@ -534,6 +544,10 @@ stop = 60d_low - 0.5 × ATR
 **Position Sizing**:
 - Left side (early) signals capped at Tier B (5% max)
 - Right side (confirmed) signals allow full Tier S (20%)
+
+**Position Size Limits:**
+- DoubleTopBottom: Left-side signals capped at Tier B (5%)
+- CapitulationRebound: VIX > 25 limits to Tier B maximum
 
 ---
 
@@ -653,6 +667,11 @@ Note: CLV > 0.7 indicates close near high (bullish reversal candle after decline
 □ VIX > 25: Limit to Tier B max (5%)
 □ Otherwise: Normal position sizing
 ```
+
+**VIX Risk Filter:**
+- VIX > 30 with positive slope: Reject signals (second wave risk)
+- VIX > 25: Limit position size to Tier B maximum (5%)
+- VIX < 25: Normal position sizing
 
 ### Entry/Exit Rules
 
