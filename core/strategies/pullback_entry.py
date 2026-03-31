@@ -10,12 +10,12 @@ from .base_strategy import BaseStrategy, StrategyMatch, ScoringDimension, Strate
 logger = logging.getLogger(__name__)
 
 
-class PullbackEntryStrategy(BaseStrategy):
+class ShoryukenStrategy(BaseStrategy):
     """Strategy C: Shoryuken v3.0 - Pullback to EMA with 4D scoring."""
 
-    NAME = "PullbackEntry"
+    NAME = "Shoryuken"
     STRATEGY_TYPE = StrategyType.SHORYUKEN
-    DESCRIPTION = "PullbackEntry v3.0 - Institutional Grade Pullback System"
+    DESCRIPTION = "Shoryuken v3.0 - Institutional Grade Pullback System"
     DIMENSIONS = ['TI', 'RS', 'VC', 'BONUS']
 
     # Shoryuken Parameters
@@ -84,8 +84,10 @@ class PullbackEntryStrategy(BaseStrategy):
         # Phase 0.5: Pre-filter by EMA21 trend (price > EMA21 and slope > 0)
         logger.info("Shoryuken: Phase 0.5 - Pre-filtering by EMA21 trend...")
         prefiltered_symbols = []
-        symbols_to_remove = []
-        for symbol, data in symbol_data.items():
+        symbols_to_remove = []  # Collect symbols to remove after iteration
+
+        # Use list() to create a copy for safe iteration
+        for symbol, data in list(symbol_data.items()):
             try:
                 df = data['df']
                 ind = data['ind']
@@ -101,19 +103,19 @@ class PullbackEntryStrategy(BaseStrategy):
                 if current_price > ema21 and ema_slope > 0:
                     prefiltered_symbols.append(symbol)
                 else:
-                    # Mark for removal (can't delete during iteration)
+                    # Mark for removal after iteration
                     symbols_to_remove.append(symbol)
             except Exception as e:
                 logger.debug(f"Error pre-filtering {symbol}: {e}")
                 symbols_to_remove.append(symbol)
                 continue
 
-        # Remove filtered symbols after iteration
+        # Remove filtered out symbols after iteration
         for symbol in symbols_to_remove:
-            del symbol_data[symbol]
+            symbol_data.pop(symbol, None)
 
 
-        logger.info(f"Shoryuken: {len(prefiltered_symbols)}/{len(symbol_data)} passed EMA21 trend pre-filter")
+        logger.info(f"Shoryuken: {len(prefiltered_symbols)}/{len(symbol_data) + len(prefiltered_symbols)} passed EMA21 trend pre-filter")
 
         # Get industry data for sector bonus
         try:
@@ -161,15 +163,21 @@ class PullbackEntryStrategy(BaseStrategy):
 
     def filter(self, symbol: str, df: pd.DataFrame) -> bool:
         """
-        Filter symbols based on Shoryuken criteria.
-
-        Args:
-            symbol: Stock symbol
-            df: OHLCV DataFrame
-
-        Returns:
-            True if symbol passes filters
+        Filter symbols based on Shoryuken criteria with Phase 0 fast pre-filter.
         """
+        # Phase 0: Fast pre-filter (O(1) checks before expensive calculations)
+        current_price = df['close'].iloc[-1]
+
+        # Skip penny stocks and extreme prices
+        if current_price < 2.0 or current_price > 3000.0:
+            return False
+
+        # Skip low volume stocks (avg volume < 100K)
+        avg_volume = df['volume'].tail(20).mean()
+        if avg_volume < 100000:
+            return False
+
+        # Skip insufficient data
         if len(df) < self.PARAMS['min_data_days']:
             return False
 
@@ -219,20 +227,14 @@ class PullbackEntryStrategy(BaseStrategy):
         ti_data = ind.calculate_normalized_ema_slope(self.market_atr_median)
         ti_score = ti_data['score']
 
-        # Calculate EMA21 touch count (deduct for multiple touches)
+        # Calculate EMA21 touch count (deduct for multiple touches) - VECTORIZED
         ema21 = ind.indicators.get('ema', {}).get('ema21', 0)
         touch_count = 0
         if ema21 > 0:
-            # Count how many times price crossed below EMA21 in last 20 days
-            for i in range(min(20, len(df))):
-                idx = -(i+1)
-                if idx < -len(df):
-                    break
-                low = df['low'].iloc[idx]
-                close = df['close'].iloc[idx]
-                # Price touched or went below EMA21 but closed above
-                if low <= ema21 and close > ema21 * 0.99:
-                    touch_count += 1
+            # Vectorized: Count how many times price crossed below EMA21 in last 20 days
+            last_20 = df.tail(20)
+            touched = (last_20['low'] <= ema21) & (last_20['close'] > ema21 * 0.99)
+            touch_count = touched.sum()
 
         # Deduct TI score for multiple touches (first touch is best)
         touch_deduction = min(1.5, (touch_count - 1) * 0.5) if touch_count > 1 else 0
@@ -376,7 +378,7 @@ class PullbackEntryStrategy(BaseStrategy):
         position_pct = self.calculate_position_pct(tier)
 
         reasons = [
-            f"Score: {score:.1f}/15 (Tier {tier}-{position_pct*100:.0f}%)",
+            f"Score: {score:.0f}/15 (Tier {tier}-{position_pct*100:.0f}%)",
             f"TI:{ti.score if ti else 0} RS:{rs.score if rs else 0} "
             f"VC:{vc.score if vc else 0} B:{bonus.score if bonus else 0}"
         ]

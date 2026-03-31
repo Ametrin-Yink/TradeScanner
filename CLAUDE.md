@@ -494,3 +494,37 @@ calculate_test_interval, calculate_institutional_intensity, detect_market_direct
 check_vix_filter, calculate_rs_score_weighted, calculate_volume_climax_score,
 calculate_normalized_ema_slope, calculate_linear_interpolation
 
+
+## Performance Optimization Patterns
+
+### Database Operations
+- Use `executemany()` instead of looped `execute()` for 10-50x speedup
+- Batch inserts: collect rows in list, then single `conn.executemany(sql, rows)`
+
+### Indicator Caching
+- Use class-level cache with data hash as key (not symbol) for cross-strategy sharing
+- Cache key format: `{first_date}_{last_date}_{rows}_{last_close}_{last_volume}`
+- Clear cache between screening sessions: `TechnicalIndicators.clear_cache()`
+
+### Shared Pre-calculations
+- Pre-calculate expensive metrics (RS scores) in screener and share via `strategy.rs_cache`
+- Avoid duplicate calculations across strategies (VCP-EP and Momentum both use RS)
+
+## Development Workflow
+
+### Isolated Development
+- Use `git worktree add .worktrees/<branch> -b <branch>` for major refactorings
+- Prevents conflicts with main working directory during long-running changes
+- Clean up after merge: `git worktree remove .worktrees/<branch>`
+
+### Quick Testing
+- Test with 10 symbols: `python scheduler.py --test --symbols AAPL,MSFT,NVDA...`
+- Verify cache working: check logs for "Cache hit/miss" messages
+- Syntax check: `python3 -m py_compile file.py`
+
+## External API Limitations
+
+### Polygon.io Free Tier
+- **Available**: Technical indicators (SMA, EMA, RSI) - 5 calls/minute
+- **Not Available**: Snapshot API (full market data) - requires paid subscription
+- **Recommendation**: Use only for validating top candidate indicators, not bulk fetching
