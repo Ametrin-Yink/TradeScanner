@@ -1,4 +1,4 @@
-"""Strategy F: Range Support/Resistance v2.1 - Bidirectional range trading with devil details."""
+"""Strategy F: Range Resistance Short - Short at resistance in bearish/neutral markets."""
 from typing import Dict, List, Optional, Tuple, Any
 import logging
 
@@ -14,14 +14,14 @@ logger = logging.getLogger(__name__)
 
 class RangeSupportStrategy(BaseStrategy):
     """
-    Strategy F: Range Support/Resistance v2.1
-    - Bidirectional: Long at support (uptrend), Short at resistance (downtrend)
+    Strategy F: Range Resistance Short
+    - Short-only: Short at resistance in bearish/neutral markets
     - Devil details: width constraint, relative weakness, time decay, stability filter, profit efficiency
     """
 
-    NAME = "RangeSupport"
+    NAME = "RangeShort"
     STRATEGY_TYPE = StrategyType.RANGE_SUPPORT
-    DESCRIPTION = "Range Support/Resistance v2.1 - Bidirectional range trading with quality filters"
+    DESCRIPTION = "RangeShort - Short-only at resistance in bearish/neutral markets"
     DIMENSIONS = ['TQ', 'RL', 'VC']
 
     PARAMS = {
@@ -29,7 +29,7 @@ class RangeSupportStrategy(BaseStrategy):
         'min_atr_pct': 0.015,
         'min_listing_days': 60,
         'min_touches': 3,
-        'max_distance_from_level': 0.03,  # 3% from support/resistance
+        'max_distance_from_level': 0.03,  # 3% from resistance
         'target_r_multiplier': 2.5,
         'support_tolerance_atr': 0.5,  # ±0.5 ATR for touch detection
         'min_test_interval_days': 3,  # Stability filter: min 3 days between tests
@@ -43,28 +43,50 @@ class RangeSupportStrategy(BaseStrategy):
     }
 
     def __init__(self, fetcher=None, db=None):
-        """Initialize with market direction cache."""
+        """Initialize with SPY return cache."""
         super().__init__(fetcher=fetcher, db=db)
-        self.market_direction = 'neutral'  # 'long', 'short', 'neutral'
         self.spy_return_1d = 0.0
+
+    def _is_short_environment(self, spy_df: pd.DataFrame) -> bool:
+        """
+        Check if market environment is suitable for shorting.
+        Returns True if SPY < EMA200 OR SPY is flat (|SPY_return_1d| < 0.3%)
+        """
+        if spy_df is None or len(spy_df) < 200:
+            return False
+
+        current = spy_df['close'].iloc[-1]
+        prev_close = spy_df['close'].iloc[-2] if len(spy_df) > 1 else current
+        ema200 = spy_df['close'].ewm(span=200).mean().iloc[-1]
+
+        self.spy_return_1d = (current - prev_close) / prev_close
+
+        # Short environment: bearish trend OR flat market
+        is_bearish = current < ema200
+        is_flat = abs(self.spy_return_1d) < 0.003  # 0.3%
+
+        return is_bearish or is_flat
 
     def screen(self, symbols: List[str]) -> List[StrategyMatch]:
         """
-        Screen symbols with Phase 0 market direction detection.
+        Screen symbols with Phase 0 market environment check.
         """
-        # Phase 0: Determine market direction
-        logger.info("RangeSupport: Phase 0 - Determining market direction...")
-        self._detect_market_direction()
+        # Phase 0: Check if short environment
+        logger.info("RangeSupport: Phase 0 - Checking short environment...")
 
-        if self.market_direction == 'neutral':
-            logger.info("RangeSupport: Market neutral, no trading")
+        spy_df = getattr(self, '_spy_df', None)
+        if spy_df is None:
+            spy_df = self._get_data('SPY')
+
+        if not self._is_short_environment(spy_df):
+            logger.info("RangeSupport: Not a short environment, skipping")
             return []
 
-        logger.info(f"RangeSupport: Market direction = {self.market_direction.upper()}")
+        logger.info(f"RangeSupport: Short environment confirmed (SPY return: {self.spy_return_1d*100:.2f}%)")
 
         # Phase 0.5: Pre-filter by trend and level existence
         prefiltered = []
-        logger.info(f"RangeSupport: Phase 0.5 - Pre-filtering for {self.market_direction} mode...")
+        logger.info("RangeSupport: Phase 0.5 - Pre-filtering for short mode...")
 
         for symbol in symbols:
             try:
@@ -84,44 +106,8 @@ class RangeSupportStrategy(BaseStrategy):
         # Use base class screen on pre-filtered symbols
         return super().screen(prefiltered)
 
-    def _detect_market_direction(self):
-        """
-        Detect market direction based on SPY trend.
-        Long: SPY > EMA200 AND close > open
-        Short: SPY < EMA200 OR close < open - 0.5%
-        """
-        try:
-            # Use cached SPY data from screener if available
-            spy_df = getattr(self, '_spy_df', None)
-            if spy_df is None:
-                spy_df = self._get_data('SPY')
-
-            if spy_df is None or len(spy_df) < 200:
-                self.market_direction = 'neutral'
-                return
-
-            current = spy_df['close'].iloc[-1]
-            prev_close = spy_df['close'].iloc[-2] if len(spy_df) > 1 else current
-            ema200 = spy_df['close'].ewm(span=200).mean().iloc[-1]
-            open_price = spy_df['open'].iloc[-1]
-
-            self.spy_return_1d = (current - prev_close) / prev_close
-
-            # Long mode: uptrend with positive momentum
-            if current > ema200 and current > open_price:
-                self.market_direction = 'long'
-            # Short mode: downtrend or weak momentum
-            elif current < ema200 or current < open_price * 0.995:
-                self.market_direction = 'short'
-            else:
-                self.market_direction = 'neutral'
-
-        except Exception as e:
-            logger.warning(f"Could not detect market direction: {e}")
-            self.market_direction = 'neutral'
-
     def _prefilter_symbol(self, symbol: str, df: pd.DataFrame) -> bool:
-        """Pre-filter symbol based on market direction."""
+        """Pre-filter symbol for short mode only."""
         ind = TechnicalIndicators(df)
         ind.calculate_all()
 
@@ -133,78 +119,40 @@ class RangeSupportStrategy(BaseStrategy):
         calc = SupportResistanceCalculator(df)
         sr_levels = calc.calculate_all()
 
-        if self.market_direction == 'long':
-            # Must be in uptrend
-            if not (current_price > ema21 > ema50):
+        # Must be in downtrend
+        if not (current_price < ema21 < ema50):
+            return False
+
+        # Must have resistance near price
+        resistances = sr_levels.get('resistance', [])
+        if not resistances:
+            return False
+
+        resistances_above = [r for r in resistances if r > current_price]
+        if not resistances_above:
+            return False
+
+        nearest_resistance = min(resistances_above)
+        distance_pct = (nearest_resistance - current_price) / current_price
+
+        if distance_pct > self.PARAMS['max_distance_from_level']:
+            return False
+
+        # Check width constraint
+        supports = sr_levels.get('support', [])
+        if supports:
+            nearest_support = max(s for s in supports if s < current_price) if any(s < current_price for s in supports) else nearest_resistance * 0.9
+            range_width = (nearest_resistance - nearest_support) / nearest_support
+            atr_pct = ind.indicators.get('atr', {}).get('atr_pct', 0.02)
+
+            if range_width < self.PARAMS['min_range_width_atr_multiple'] * atr_pct:
+                logger.debug(f"{symbol}: Range too narrow ({range_width:.3f})")
                 return False
-
-            # Must have support near price
-            supports = sr_levels.get('support', [])
-            if not supports:
-                return False
-
-            supports_below = [s for s in supports if s < current_price]
-            if not supports_below:
-                return False
-
-            nearest_support = max(supports_below)
-            distance_pct = (current_price - nearest_support) / current_price
-
-            if distance_pct > self.PARAMS['max_distance_from_level']:
-                return False
-
-            # Check width constraint (Devil Detail A)
-            resistances = sr_levels.get('resistance', [])
-            if resistances:
-                nearest_resistance = min(r for r in resistances if r > current_price) if any(r > current_price for r in resistances) else nearest_support * 1.1
-                range_width = (nearest_resistance - nearest_support) / nearest_support
-                atr_pct = ind.indicators.get('atr', {}).get('atr_pct', 0.02)
-
-                if range_width < self.PARAMS['min_range_width_atr_multiple'] * atr_pct:
-                    logger.debug(f"{symbol}: Range too narrow ({range_width:.3f} < {self.PARAMS['min_range_width_atr_multiple'] * atr_pct:.3f})")
-                    return False
-
-            # Check volume veto
-            volume_data = ind.indicators.get('volume', {})
-            volume_ratio = volume_data.get('volume_ratio', 1.0)
-            if volume_ratio > self.PARAMS['volume_veto_threshold']:
-                return False
-
-        elif self.market_direction == 'short':
-            # Must be in downtrend
-            if not (current_price < ema21 < ema50):
-                return False
-
-            # Must have resistance near price
-            resistances = sr_levels.get('resistance', [])
-            if not resistances:
-                return False
-
-            resistances_above = [r for r in resistances if r > current_price]
-            if not resistances_above:
-                return False
-
-            nearest_resistance = min(resistances_above)
-            distance_pct = (nearest_resistance - current_price) / current_price
-
-            if distance_pct > self.PARAMS['max_distance_from_level']:
-                return False
-
-            # Check width constraint
-            supports = sr_levels.get('support', [])
-            if supports:
-                nearest_support = max(s for s in supports if s < current_price) if any(s < current_price for s in supports) else nearest_resistance * 0.9
-                range_width = (nearest_resistance - nearest_support) / nearest_support
-                atr_pct = ind.indicators.get('atr', {}).get('atr_pct', 0.02)
-
-                if range_width < self.PARAMS['min_range_width_atr_multiple'] * atr_pct:
-                    logger.debug(f"{symbol}: Range too narrow ({range_width:.3f})")
-                    return False
 
         return True
 
     def filter(self, symbol: str, df: pd.DataFrame) -> bool:
-        """Filter with veto checks."""
+        """Filter with veto checks for short mode."""
         if len(df) < self.PARAMS['min_listing_days']:
             return False
 
@@ -222,49 +170,26 @@ class RangeSupportStrategy(BaseStrategy):
         calc = SupportResistanceCalculator(df)
         sr_levels = calc.calculate_all()
 
-        if self.market_direction == 'long':
-            # Find nearest support
-            supports = sr_levels.get('support', [])
-            if not supports:
-                return False
+        # Find nearest resistance
+        resistances = sr_levels.get('resistance', [])
+        if not resistances:
+            return False
 
-            supports_below = [s for s in supports if s < current_price]
-            if not supports_below:
-                return False
+        resistances_above = [r for r in resistances if r > current_price]
+        if not resistances_above:
+            return False
 
-            nearest_support = max(supports_below)
+        nearest_resistance = min(resistances_above)
 
-            # Veto: breakout below support with volume
-            if volume_ratio > self.PARAMS['volume_veto_threshold'] and current_price < nearest_support - self.PARAMS['breakout_threshold_atr'] * atr:
-                logger.debug(f"{symbol}: Support breakout veto")
-                return False
+        # Veto: breakout above resistance with volume
+        if volume_ratio > self.PARAMS['volume_veto_threshold'] and current_price > nearest_resistance + self.PARAMS['breakout_threshold_atr'] * atr:
+            logger.debug(f"{symbol}: Resistance breakout veto")
+            return False
 
-            # Check time decay (Devil Detail C)
-            if self._check_time_decay(df, nearest_support, atr, 'long'):
-                logger.debug(f"{symbol}: Time decay at support")
-                return False
-
-        elif self.market_direction == 'short':
-            # Find nearest resistance
-            resistances = sr_levels.get('resistance', [])
-            if not resistances:
-                return False
-
-            resistances_above = [r for r in resistances if r > current_price]
-            if not resistances_above:
-                return False
-
-            nearest_resistance = min(resistances_above)
-
-            # Veto: breakout above resistance with volume
-            if volume_ratio > self.PARAMS['volume_veto_threshold'] and current_price > nearest_resistance + self.PARAMS['breakout_threshold_atr'] * atr:
-                logger.debug(f"{symbol}: Resistance breakout veto")
-                return False
-
-            # Check time decay
-            if self._check_time_decay(df, nearest_resistance, atr, 'short'):
-                logger.debug(f"{symbol}: Time decay at resistance")
-                return False
+        # Check time decay
+        if self._check_time_decay(df, nearest_resistance, atr, 'short'):
+            logger.debug(f"{symbol}: Time decay at resistance")
+            return False
 
         return True
 
@@ -284,22 +209,13 @@ class RangeSupportStrategy(BaseStrategy):
 
             row = df.iloc[idx]
 
-            if direction == 'long':
-                # Check if low is near support
-                if abs(row['low'] - level) <= tolerance or row['low'] <= level + tolerance:
-                    consecutive_days += 1
-                    if first_day_open is None:
-                        first_day_open = row['open']
-                else:
-                    break
+            # Check if high is near resistance
+            if abs(row['high'] - level) <= tolerance or row['high'] >= level - tolerance:
+                consecutive_days += 1
+                if first_day_open is None:
+                    first_day_open = row['open']
             else:
-                # Check if high is near resistance
-                if abs(row['high'] - level) <= tolerance or row['high'] >= level - tolerance:
-                    consecutive_days += 1
-                    if first_day_open is None:
-                        first_day_open = row['open']
-                else:
-                    break
+                break
 
         if consecutive_days > self.PARAMS['time_decay_days'] and first_day_open is not None:
             current_close = df['close'].iloc[-1]
@@ -311,7 +227,7 @@ class RangeSupportStrategy(BaseStrategy):
         return False
 
     def calculate_dimensions(self, symbol: str, df: pd.DataFrame) -> List[ScoringDimension]:
-        """Calculate 3-dimensional scoring with devil details."""
+        """Calculate 3-dimensional scoring with devil details for short mode."""
         ind = TechnicalIndicators(df)
         ind.calculate_all()
 
@@ -323,29 +239,21 @@ class RangeSupportStrategy(BaseStrategy):
 
         dimensions = []
 
-        # Find the relevant level (support for long, resistance for short)
+        # Find the relevant resistance level
         level_info = None
         level_price = None
 
-        if self.market_direction == 'long':
-            supports = sr_levels.get('support', [])
-            if supports:
-                supports_below = [s for s in supports if s < current_price]
-                if supports_below:
-                    level_price = max(supports_below)
-                    level_info = self._calculate_level_info(df, level_price, atr, 'support')
-        else:
-            resistances = sr_levels.get('resistance', [])
-            if resistances:
-                resistances_above = [r for r in resistances if r > current_price]
-                if resistances_above:
-                    level_price = min(resistances_above)
-                    level_info = self._calculate_level_info(df, level_price, atr, 'resistance')
+        resistances = sr_levels.get('resistance', [])
+        if resistances:
+            resistances_above = [r for r in resistances if r > current_price]
+            if resistances_above:
+                level_price = min(resistances_above)
+                level_info = self._calculate_level_info(df, level_price, atr, 'resistance')
 
         if level_info is None:
             return []
 
-        # Dimension 1: TQ - Trend Quality (5 pts)
+        # Dimension 1: TQ - Trend Quality (5 pts) - short alignment only
         tq_score, tq_details = self._calculate_tq(ind, current_price)
         dimensions.append(ScoringDimension(
             name='TQ',
@@ -380,7 +288,7 @@ class RangeSupportStrategy(BaseStrategy):
         # Devil Detail D: Profit efficiency check
         total_score = tq_score + rl_score + vc_score
         entry = current_price
-        stop = level_price - atr * 0.5 if self.market_direction == 'long' else level_price + atr * 0.5
+        stop = level_price + atr * 0.5
         target1 = self._calculate_target1(df, level_info, current_price)
 
         if target1 and entry != stop:
@@ -410,11 +318,7 @@ class RangeSupportStrategy(BaseStrategy):
 
             # Check if price touched the level
             touched = False
-            if level_type == 'support':
-                if abs(row['low'] - level) <= tolerance or row['low'] <= level + tolerance:
-                    if row['close'] > level:  # Bounced
-                        touched = True
-            else:  # resistance
+            if level_type == 'resistance':
                 if abs(row['high'] - level) <= tolerance or row['high'] >= level - tolerance:
                     if row['close'] < level:  # Rejected
                         touched = True
@@ -429,20 +333,15 @@ class RangeSupportStrategy(BaseStrategy):
                     if i <= 30:
                         recent_30d_touches += 1
 
-                    # Calculate bounce/return strength
+                    # Calculate drop strength
                     if i > 3:  # Need 3 days after to measure
                         post_idx = idx + 3
                         if post_idx < 0:
-                            post_high = df['high'].iloc[post_idx] if level_type == 'support' else None
-                            post_low = df['low'].iloc[post_idx] if level_type == 'resistance' else None
+                            post_low = df['low'].iloc[post_idx]
                             close = row['close']
 
-                            if level_type == 'support' and post_high:
-                                bounce_ret = (post_high - close) / close
-                                bounce_returns.append(min(bounce_ret, 0.05))  # Cap at 5%
-                            elif level_type == 'resistance' and post_low:
-                                drop_ret = (close - post_low) / close
-                                bounce_returns.append(min(drop_ret, 0.05))
+                            drop_ret = (close - post_low) / close
+                            bounce_returns.append(min(drop_ret, 0.05))  # Cap at 5%
 
         avg_bounce = sum(bounce_returns) / len(bounce_returns) if bounce_returns else 0
 
@@ -456,7 +355,7 @@ class RangeSupportStrategy(BaseStrategy):
         }
 
     def _calculate_tq(self, ind: TechnicalIndicators, price: float) -> Tuple[float, Dict]:
-        """Trend Quality dimension (0-5)."""
+        """Trend Quality dimension (0-5) for short mode."""
         ema = ind.indicators.get('ema', {})
         ema8 = ema.get('ema8', price)
         ema21 = ema.get('ema21', price)
@@ -464,42 +363,29 @@ class RangeSupportStrategy(BaseStrategy):
 
         details = {
             'ema_alignment': False,
-            'price_vs_ema21': price > ema21 if self.market_direction == 'long' else price < ema21,
+            'price_vs_ema21': price < ema21,
             'ema21_slope': 0
         }
 
         tq_score = 0.0
 
-        # EMA alignment
-        if self.market_direction == 'long':
-            if ema8 > ema21 > ema50:
-                tq_score += 2.0
-                details['ema_alignment'] = True
-            elif ema21 > ema50:
-                tq_score += 1.5
+        # EMA alignment for short
+        if ema8 < ema21 < ema50:
+            tq_score += 2.0
+            details['ema_alignment'] = True
+        elif ema21 < ema50:
+            tq_score += 1.5
 
-            # Price vs EMA21
-            if price > ema21:
-                tq_score += 1.5
-        else:  # short
-            if ema8 < ema21 < ema50:
-                tq_score += 2.0
-                details['ema_alignment'] = True
-            elif ema21 < ema50:
-                tq_score += 1.5
-
-            # Price vs EMA21
-            if price < ema21:
-                tq_score += 1.5
+        # Price vs EMA21
+        if price < ema21:
+            tq_score += 1.5
 
         # EMA21 slope
         ema21_slope = ind.calculate_stable_ema_slope(period=21, comparison_days=3)
         slope_val = ema21_slope.get('slope', 0)
         details['ema21_slope'] = slope_val
 
-        if self.market_direction == 'long' and slope_val > 0:
-            tq_score += 1.5
-        elif self.market_direction == 'short' and slope_val < 0:
+        if slope_val < 0:
             tq_score += 1.5
 
         return round(min(5.0, tq_score), 2), details
@@ -535,7 +421,7 @@ class RangeSupportStrategy(BaseStrategy):
         elif recent_30d == 1:
             rl_score += 0.5
 
-        # Bounce/return strength (0-1.5 pts)
+        # Return strength (0-1.5 pts)
         if avg_bounce >= 0.02:  # 2%
             rl_score += 1.5
         elif avg_bounce >= 0.01:  # 1%
@@ -552,57 +438,29 @@ class RangeSupportStrategy(BaseStrategy):
 
         details = {
             'volume_ratio': volume_ratio,
-            'contraction_days': 0,
             'relative_weakness': 0.0
         }
 
         vc_score = 0.0
 
-        if self.market_direction == 'long':
-            # Volume contraction scoring
-            if volume_ratio < 0.7:
-                vc_score += 2.0
-            elif volume_ratio < 1.0:
-                vc_score += 1.0
+        # Relative weakness (Devil Detail B)
+        stock_return = df['close'].iloc[-1] / df['close'].iloc[-2] - 1 if len(df) > 1 else 0
 
-            # Consecutive contraction days
-            contraction_days = 0
-            for i in range(1, min(10, len(df))):
-                idx = -(i + 1)
-                if idx < -len(df) + 20:
-                    break
-                hist_vol = df['volume'].iloc[idx]
-                hist_ma = df['volume'].iloc[idx-20:idx].mean()
-                if hist_vol < hist_ma * 0.8:
-                    contraction_days += 1
-                else:
-                    break
+        # Relative weakness calculation
+        relative_weakness = self.spy_return_1d - stock_return
+        details['relative_weakness'] = relative_weakness
 
-            details['contraction_days'] = contraction_days
+        # If SPY up but stock not moving = distribution
+        if self.spy_return_1d > 0.01 and stock_return < 0.003:
+            vc_score += 2.0
+        elif self.spy_return_1d > 0.005 and stock_return < 0.002:
+            vc_score += 1.5
 
-            if contraction_days >= 3:
-                vc_score += 2.0
-            elif contraction_days == 2:
-                vc_score += 1.0
-
-        else:  # short mode - relative weakness (Devil Detail B)
-            stock_return = df['close'].iloc[-1] / df['close'].iloc[-2] - 1 if len(df) > 1 else 0
-
-            # Relative weakness calculation
-            relative_weakness = self.spy_return_1d - stock_return
-            details['relative_weakness'] = relative_weakness
-
-            # If SPY up but stock not moving = distribution
-            if self.spy_return_1d > 0.01 and stock_return < 0.003:
-                vc_score += 2.0
-            elif self.spy_return_1d > 0.005 and stock_return < 0.002:
-                vc_score += 1.5
-
-            # Volume confirmation
-            if volume_ratio > 1.3:
-                vc_score += 1.0
-            elif volume_ratio > 1.0:
-                vc_score += 0.5
+        # Volume confirmation
+        if volume_ratio > 1.3:
+            vc_score += 1.0
+        elif volume_ratio > 1.0:
+            vc_score += 0.5
 
         return round(min(4.0, vc_score), 2), details
 
@@ -612,23 +470,14 @@ class RangeSupportStrategy(BaseStrategy):
         sr_levels = calc.calculate_all()
 
         level_price = level_info['level_price']
-        level_type = level_info['level_type']
 
-        # Find opposite level
-        if level_type == 'support':
-            resistances = sr_levels.get('resistance', [])
-            if resistances:
-                resistances_above = [r for r in resistances if r > current_price]
-                if resistances_above:
-                    opposite = min(resistances_above)
-                    return (level_price + opposite) / 2  # Mid-range
-        else:
-            supports = sr_levels.get('support', [])
-            if supports:
-                supports_below = [s for s in supports if s < current_price]
-                if supports_below:
-                    opposite = max(supports_below)
-                    return (level_price + opposite) / 2
+        # Find opposite level (support for short)
+        supports = sr_levels.get('support', [])
+        if supports:
+            supports_below = [s for s in supports if s < current_price]
+            if supports_below:
+                opposite = max(supports_below)
+                return (level_price + opposite) / 2
 
         # Fallback to 20-day SMA
         return df['close'].tail(20).mean()
@@ -641,7 +490,7 @@ class RangeSupportStrategy(BaseStrategy):
         score: float,
         tier: str
     ) -> Tuple[float, float, float]:
-        """Calculate entry, stop, and target prices."""
+        """Calculate entry, stop, and target prices for short."""
         ind = TechnicalIndicators(df)
         ind.calculate_all()
 
@@ -651,16 +500,10 @@ class RangeSupportStrategy(BaseStrategy):
         # Get level price from RL dimension
         rl = next((d for d in dimensions if d.name == 'RL'), None)
         level_price = rl.details.get('level_price', current_price) if rl else current_price
-        level_type = rl.details.get('level_type', 'support') if rl else 'support'
 
         entry = round(current_price, 2)
-
-        if self.market_direction == 'long':
-            stop = round(level_price - atr * 0.5, 2)  # Below support
-            target = round(level_price + atr * self.PARAMS['target_r_multiplier'], 2)
-        else:
-            stop = round(level_price + atr * 0.5, 2)  # Above resistance
-            target = round(level_price - atr * self.PARAMS['target_r_multiplier'], 2)
+        stop = round(level_price + atr * 0.5, 2)  # Above resistance
+        target = round(level_price - atr * self.PARAMS['target_r_multiplier'], 2)
 
         return entry, stop, target
 
@@ -685,14 +528,13 @@ class RangeSupportStrategy(BaseStrategy):
         reasons = [
             f"Score: {score:.2f}/15 (Tier {tier}-{position_pct*100:.0f}%)",
             f"TQ:{tq.score:.2f} RL:{rl.score:.2f} VC:{vc.score:.2f}",
-            f"Direction: {self.market_direction.upper()}",
             f"Level tested {rl_details.get('touches', 0)}x ({rl_details.get('recent_30d_touches', 0)} in 30d)",
         ]
 
         if rl_details.get('avg_bounce_return', 0) > 0:
-            reasons.append(f"Avg bounce: {rl_details['avg_bounce_return']*100:.1f}%")
+            reasons.append(f"Avg drop: {rl_details['avg_bounce_return']*100:.1f}%")
 
-        if self.market_direction == 'short' and vc_details.get('relative_weakness', 0) > 0:
+        if vc_details.get('relative_weakness', 0) > 0:
             reasons.append(f"Weak vs SPY: {vc_details['relative_weakness']*100:.1f}%")
 
         return reasons

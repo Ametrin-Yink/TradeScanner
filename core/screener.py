@@ -23,7 +23,7 @@ __all__ = ['StrategyScreener', 'StrategyType', 'StrategyMatch']
 
 
 class StrategyScreener:
-    """Screen stocks using 8 trading strategies via plugin architecture."""
+    """Screen stocks using 6 trading strategies via plugin architecture."""
 
     # Dynamic allocation: total 30 candidates distributed by market regime
     TOTAL_CANDIDATES_TARGET = 30
@@ -37,9 +37,7 @@ class StrategyScreener:
     # Strategy group mapping for dynamic allocation
     STRATEGY_GROUPS = {
         StrategyType.EP: 'breakout_momentum',
-        StrategyType.MOMENTUM: 'breakout_momentum',
         StrategyType.SHORYUKEN: 'trend_pullback',
-        StrategyType.PULLBACKS: 'trend_pullback',
         StrategyType.UPTHRUST_REBOUND: 'rebound_range',
         StrategyType.RANGE_SUPPORT: 'rebound_range',
         StrategyType.DTSS: 'rebound_range',
@@ -69,7 +67,8 @@ class StrategyScreener:
 
         # Initialize all strategy plugins
         self._strategies = {}
-        for strategy_type in StrategyType:
+        for strategy_type in [StrategyType.EP, StrategyType.SHORYUKEN, StrategyType.UPTHRUST_REBOUND,
+                               StrategyType.RANGE_SUPPORT, StrategyType.DTSS, StrategyType.PARABOLIC]:
             self._strategies[strategy_type] = create_strategy(
                 strategy_type, fetcher=self.fetcher, db=self.db
             )
@@ -384,6 +383,45 @@ class StrategyScreener:
         except:
             return False
 
+    def screen(
+        self,
+        strategy_types: List[StrategyType],
+        symbols: List[str],
+        market_data: Optional[Dict[str, pd.DataFrame]] = None
+    ) -> List[StrategyMatch]:
+        """
+        Screen symbols using specific strategy types.
+
+        Args:
+            strategy_types: List of strategy types to screen with
+            symbols: List of stock symbols to screen
+            market_data: Optional pre-loaded market data cache
+
+        Returns:
+            List of StrategyMatch
+        """
+        self.market_data = market_data or {}
+
+        # Run Phase 0 pre-calculation
+        phase0_data = self._run_phase0_precalculation(symbols, self.market_data)
+
+        all_matches = []
+
+        for strategy_type in strategy_types:
+            strategy = self._strategies.get(strategy_type)
+            if not strategy:
+                continue
+
+            # Set SPY data for strategies that need it
+            if hasattr(strategy, '_spy_df'):
+                strategy._spy_df = self._spy_data
+
+            # Run strategy screen
+            matches = strategy.screen(symbols)
+            all_matches.extend(matches)
+
+        return all_matches
+
     def screen_all(
         self,
         symbols: List[str],
@@ -392,7 +430,7 @@ class StrategyScreener:
         strategy_weighting: Optional[Dict[str, float]] = None  # Dynamic strategy allocation
     ) -> List[StrategyMatch]:
         """
-        Screen all symbols using all 8 strategy plugins with unified Phase 0.
+        Screen all symbols using all 6 strategy plugins with unified Phase 0.
 
         Phase 0: Universal pre-calculation (price/volume/RS/SPY) - runs ONCE
         Phase 1: Strategy screening (global collection, no slot limits)

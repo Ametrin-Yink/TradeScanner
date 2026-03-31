@@ -1,7 +1,8 @@
-"""Strategy E: Upthrust & Rebound (U&R) - Near support with volume contraction."""
+"""Strategy E: 支撑回踩买入 (Support Rebound Buy) - Near support with volume contraction."""
 from ..scoring_utils import calculate_clv
 from typing import Dict, List, Optional, Tuple, Any
 import logging
+from datetime import datetime
 
 import pandas as pd
 
@@ -13,11 +14,11 @@ logger = logging.getLogger(__name__)
 
 
 class UpthrustReboundStrategy(BaseStrategy):
-    """Strategy E: Upthrust & Rebound - Price within 1% of support + volume contraction."""
+    """Strategy E: 支撑回踩买入 - 支撑位假跌破后反弹，区间存在加分（合并原Range多头）"""
 
-    NAME = "U&R"
+    NAME = "SupportBounce"
     STRATEGY_TYPE = StrategyType.UPTHRUST_REBOUND
-    DESCRIPTION = "Upthrust and Rebound near support level with volume contraction"
+    DESCRIPTION = "SupportBounce v2.0 - Support level false breakdown rebound, range existence bonus"
     DIMENSIONS = ['SQ', 'VD', 'RB']
 
     PARAMS = {
@@ -29,6 +30,9 @@ class UpthrustReboundStrategy(BaseStrategy):
         'support_tolerance_atr': 0.5,  # Support level ± 0.5 ATR
         'volume_veto_threshold': 1.5,  # Volume > 1.5x MA20 for veto
         'clv_veto_threshold': 0.3,  # CLV < 0.3 for veto
+        'time_stop_days': 5,  # Changed from 3 to 5
+        'time_stop_clv_min': 0.4,  # CLV avg > 0.4
+        'range_existence_bonus': 0.5,  # Range existence bonus from F
         'sector_etfs': {  # Sector ETF mapping
             'Technology': 'XLK',
             'Financials': 'XLF',
@@ -224,11 +228,13 @@ class UpthrustReboundStrategy(BaseStrategy):
 
         dimensions = []
 
-        # Dimension 1: Support Quality (SQ) - 6 points max
-        sq_score, sq_details = self._calculate_sq(
-            distance_pct, support_touches, recency_weight,
-            sector_alpha, atr, ind, df
-        )
+        # Dimension 1: Support Quality (SQ) - 6 points max with range bonus
+        sq_score, sq_details = self._calculate_sq_with_range_bonus(df, ind)
+        # Add sector alpha bonus if present
+        if sector_alpha > 0:
+            sq_score += sector_alpha
+            sq_details['sector_alpha'] = sector_alpha
+        sq_score = min(6.0, sq_score)
         dimensions.append(ScoringDimension(
             name='SQ',
             score=sq_score,
@@ -261,6 +267,111 @@ class UpthrustReboundStrategy(BaseStrategy):
 
         return dimensions
 
+
+    def _check_time_stop(self, symbol: str, entry_date: datetime,
+                         df: pd.DataFrame) -> bool:
+        """
+        Time stop check - 5 days without rebound exit.
+        Also check 5-day CLV avg > 0.4.
+        """
+        # Get post-entry data
+        entry_idx = df.index.get_indexer([entry_date], method='nearest')[0]
+        if entry_idx < 0 or entry_idx + 5 >= len(df):
+            return False
+
+        post_entry = df.iloc[entry_idx:entry_idx+5]
+
+        # Check if rebounded within 5 days
+        entry_price = df['close'].iloc[entry_idx]
+        max_price = post_entry['close'].max()
+
+        if max_price > entry_price:
+            return False  # Rebounded, no stop
+
+        # 5 days no rebound, check CLV avg
+        clv_values = []
+        for _, row in post_entry.iterrows():
+            high, low, close = row['high'], row['low'], row['close']
+            if high != low:
+                clv = (close - low) / (high - low)
+                clv_values.append(clv)
+
+        if clv_values and sum(clv_values) / len(clv_values) >= self.PARAMS['time_stop_clv_min']:
+            return False  # High CLV avg, no stop
+
+        return True  # Trigger time stop
+
+    def _detect_resistance_level(self, df: pd.DataFrame) -> Optional[float]:
+        """Detect clear resistance level above current price."""
+        calc = SupportResistanceCalculator(df)
+        sr_levels = calc.calculate_all()
+        resistances = sr_levels.get('resistance', [])
+
+        if not resistances:
+            return None
+
+        current_price = df['close'].iloc[-1]
+        resistances_above = [r for r in resistances if r > current_price]
+
+        if not resistances_above:
+            return None
+
+        return min(resistances_above)
+
+    def _detect_support_level(self, df: pd.DataFrame) -> Optional[float]:
+        """Detect clear support level below current price."""
+        calc = SupportResistanceCalculator(df)
+        sr_levels = calc.calculate_all()
+        supports = sr_levels.get('support', [])
+
+        if not supports:
+            return None
+
+        current_price = df['close'].iloc[-1]
+        supports_below = [s for s in supports if s < current_price]
+
+        if not supports_below:
+            return None
+
+        return max(supports_below)
+
+    def _calculate_sq_with_range_bonus(self, df: pd.DataFrame, ind: TechnicalIndicators) -> Tuple[float, Dict]:
+        """
+        Calculate SQ dimension with range existence bonus.
+        """
+        # Base SQ calculation
+        current_price = df['close'].iloc[-1]
+        atr = ind.indicators.get('atr', {}).get('atr', current_price * 0.02)
+
+        calc = SupportResistanceCalculator(df)
+        sr_levels = calc.calculate_all()
+        supports = sr_levels.get('support', [])
+
+        supports_below = [s for s in supports if s < current_price]
+        nearest_support = max(supports_below) if supports_below else current_price * 0.99
+        distance_pct = abs(current_price - nearest_support) / current_price
+
+        # Get support touches and recency
+        support_touches = self._calculate_support_touches(df, nearest_support, atr)
+        recency_weight = self._calculate_recency_weight(support_touches['last_touch_days'])
+
+        sq_score, sq_details = self._calculate_sq(
+            distance_pct, support_touches, recency_weight,
+            0.0, atr, ind, df
+        )
+
+        # Check if clear resistance level exists (range)
+        resistance = self._detect_resistance_level(df)
+        if resistance is not None:
+            support = self._detect_support_level(df)
+            if support is not None:
+                range_width = (resistance - support) / support
+                if 0.05 < range_width < 0.20:  # Reasonable range
+                    sq_score += self.PARAMS['range_existence_bonus']
+                    sq_details['range_bonus'] = self.PARAMS['range_existence_bonus']
+                    sq_details['range_width'] = range_width
+
+        return min(6.0, sq_score), sq_details
 
     def _calculate_support_touches(self, df: pd.DataFrame, support_level: float, atr: float) -> Dict:
         """Calculate support touches within tolerance (±0.5 ATR)."""

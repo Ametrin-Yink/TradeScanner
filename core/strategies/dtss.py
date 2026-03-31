@@ -23,9 +23,9 @@ class DTSSStrategy(BaseStrategy):
     D. Institutional intensity factor (VC dimension)
     """
 
-    NAME = "DTSS"
+    NAME = "DoubleTopBottom"
     STRATEGY_TYPE = StrategyType.DTSS
-    DESCRIPTION = "Distribution Top / Accumulation Bottom v2.1 with left/right side grading"
+    DESCRIPTION = "DoubleTopBottom v2.1 - Distribution top / accumulation bottom with left/right side grading"
     DIMENSIONS = ['PL', 'TS', 'VC']
 
     PARAMS = {

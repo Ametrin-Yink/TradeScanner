@@ -16,11 +16,9 @@ logger = logging.getLogger(__name__)
 
 
 class StrategyType(Enum):
-    """8 trading strategies."""
+    """6 trading strategies."""
     EP = "EP"  # Earnings Play
-    MOMENTUM = "Momentum"  # Momentum Breakout
     SHORYUKEN = "Shoryuken"  # Pullback to EMA
-    PULLBACKS = "Pullbacks"  # Buying Pullbacks
     UPTHRUST_REBOUND = "U&R"  # Upthrust & Rebound
     RANGE_SUPPORT = "RangeSupport"  # Range bottom support
     DTSS = "DTSS"  # Distribution Top Sell Signal
