@@ -38,6 +38,7 @@ class MomentumStrategy(BaseStrategy):
         'volume_ratio': 1.8,                 # Volume > 1.8x 20d SMA
         'atr_multiplier': 3.0,               # Chandelier Exit: 3x ATR
         'min_data_days': 200,                # Need 200 days for RS calculation
+        'adr_min': 0.03,                     # ADR > 3% filter
     }
 
     def filter(self, symbol: str, df: pd.DataFrame) -> bool:
@@ -464,7 +465,7 @@ class MomentumStrategy(BaseStrategy):
                 ind = TechnicalIndicators(df)
                 ind.calculate_all()
                 adr_pct = ind.indicators.get('adr', {}).get('adr_pct', 0)
-                if adr_pct and adr_pct > 0.03:  # ADR > 3%
+                if adr_pct and adr_pct > self.PARAMS['adr_min']:  # ADR > 3%
                     adr_filtered.append(item)
             except Exception as e:
                 logger.debug(f"Error checking ADR for {item['symbol']}: {e}")
