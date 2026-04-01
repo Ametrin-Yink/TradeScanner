@@ -1,20 +1,21 @@
-"""Memory-optimized scheduler with streaming processing for 2C2G VPS."""
+"""Complete 5-phase workflow scheduler for 6 AM automated execution."""
 import argparse
 import logging
 import sys
 import gc
 from datetime import datetime
-from typing import Optional, List, Iterator
+from typing import Optional, List, Dict
 
 from config.settings import settings
 from data.db import Database
-from core.fetcher import DataFetcher
-from core.screener import StrategyScreener, StrategyMatch
+from core.premarket_prep import PreMarketPrep
 from core.market_analyzer import MarketAnalyzer
+from core.screener import StrategyScreener, StrategyMatch
 from core.selector import CandidateSelector
 from core.ai_confidence_scorer import ScoredCandidate
 from core.analyzer import OpportunityAnalyzer
 from core.reporter import ReportGenerator
+from core.notifier import MultiNotifier
 
 logging.basicConfig(
     level=logging.INFO,
@@ -23,34 +24,52 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-class MemoryOptimizedScanner:
-    """Memory-optimized trade scanner for low-resource VPS."""
+class CompleteScanner:
+    """Complete 5-phase workflow scanner for daily 6 AM execution.
 
-    # Keep 280 trading days of history (52 weeks + buffer for calculations)
-    MAX_HISTORY_DAYS = 280
+    Phase 0: Data Preparation (15-20 min)
+        - Fetch universe from Finviz
+        - Sync with database
+        - Fetch Tier 3 market data
+        - Calculate Tier 1 universal metrics
+
+    Phase 1: Market Sentiment (2-3 min)
+        - Analyze market sentiment using Tavily + DashScope
+
+    Phase 2: Strategy Screening (10-15 min)
+        - Screen all symbols using pre-calculated Tier 1/3 data
+        - Lazy Tier 2 calculations for candidates only
+
+    Phase 3: AI Analysis (15-20 min)
+        - Deep analysis of top 10 candidates
+
+    Phase 4: Report Generation (2-3 min)
+        - Generate HTML report
+
+    Phase 5: Push Notifications (1 min)
+        - Send notifications to WeChat and Discord
+    """
 
     def __init__(self):
         """Initialize scanner components."""
         self.db = Database()
-        self.fetcher = DataFetcher(
-            db=self.db,
-            max_workers=1,  # Reduced to 1 worker for memory
-            max_history_days=self.MAX_HISTORY_DAYS  # Keep 150 trading days
-        )
-        self.screener = StrategyScreener(fetcher=self.fetcher, db=self.db)
+        self.prep = PreMarketPrep(db=self.db)
         self.market_analyzer = MarketAnalyzer()
+        self.screener = StrategyScreener(db=self.db)
         self.selector = CandidateSelector()
-        self.opportunity_analyzer = OpportunityAnalyzer(fetcher=self.fetcher)
-        self.reporter = ReportGenerator(fetcher=self.fetcher)
+        self.opportunity_analyzer = OpportunityAnalyzer()
+        self.reporter = ReportGenerator()
+        self.notifier = MultiNotifier(
+            discord_webhook=getattr(settings, 'DISCORD_WEBHOOK', None),
+            wechat_webhook=getattr(settings, 'WECHAT_WEBHOOK', None)
+        )
 
-        # Cache for symbol data to avoid re-fetching
-        self._symbol_data_cache: Dict[str, pd.DataFrame] = {}
+        # Phase timing tracking
+        self._phase_times: Dict[str, int] = {}
 
     def is_trading_day(self) -> bool:
         """Check if today is a US trading day."""
-        from datetime import datetime
         import pytz
-
         ny_tz = pytz.timezone('America/New_York')
         now = datetime.now(ny_tz)
 
@@ -60,266 +79,385 @@ class MemoryOptimizedScanner:
 
         return True
 
-    def fetch_symbols_streaming(
-        self,
-        symbols: List[str],
-        batch_size: int = 50
-    ) -> Iterator[tuple]:
-        """
-        Fetch data in batches with incremental updates.
-
-        Yields:
-            Tuple of (list of (symbol, DataFrame) tuples, list of failed symbols)
-        """
-        total = len(symbols)
-        fetched = 0
-        cached_count = 0
-        failed_symbols = []
-
-        for i in range(0, total, batch_size):
-            batch = symbols[i:i + batch_size]
-            batch_num = i // batch_size + 1
-            total_batches = (total - 1) // batch_size + 1
-            logger.info(f"Fetching batch {batch_num}/{total_batches} ({len(batch)} symbols)")
-
-            # Fetch this batch with incremental updates
-            batch_data = []
-            batch_failed = []
-            for symbol in batch:
-                # This will use cache and fetch only new data
-                df = self.fetcher.fetch_stock_data(
-                    symbol,
-                    period="7mo",  # Fetch enough to get 150 trading days
-                    interval="1d",
-                    use_cache=True  # Enable incremental update
-                )
-                if df is not None and not df.empty:
-                    batch_data.append((symbol, df))
-                    if len(df) >= self.MAX_HISTORY_DAYS - 5:  # Approximately cached
-                        cached_count += 1
-                else:
-                    batch_failed.append(symbol)
-                fetched += 1
-
-            failed_symbols.extend(batch_failed)
-            logger.info(f"Batch {batch_num}: fetched {len(batch_data)}/{len(batch)} symbols")
-
-            yield batch_data, batch_failed
-
-            # Force garbage collection after each batch
-            del batch_data
-            gc.collect()
-
-        logger.info(f"Total fetched: {fetched} symbols, ~{cached_count} from cache, {len(failed_symbols)} failed")
-
-    def screen_symbols_streaming(
-        self,
-        symbols: List[str]
-    ) -> tuple:
-        """
-        Screen symbols using streaming to limit memory.
-
-        Args:
-            symbols: List of symbols to screen
-
-        Returns:
-            Tuple of (candidates list, failed symbols list)
-        """
-        all_candidates = []
-        all_failed = []
-        batch_size = 50
-
-        # Clear data cache for this scan
-        self._symbol_data_cache.clear()
-
-        for batch_data, batch_failed in self.fetch_symbols_streaming(symbols, batch_size):
-            all_failed.extend(batch_failed)
-
-            if not batch_data:
-                continue
-
-            # Create temporary market_data dict for this batch
-            batch_market_data = {sym: df for sym, df in batch_data}
-
-            # Cache data for later use (reporter, analyzer)
-            self._symbol_data_cache.update(batch_market_data)
-
-            # Screen this batch
-            batch_symbols = list(batch_market_data.keys())
-            candidates = self.screener.screen_all(
-                symbols=batch_symbols,
-                market_data=batch_market_data
-            )
-
-            all_candidates.extend(candidates)
-            logger.info(f"Batch screening: found {len(candidates)} candidates (total: {len(all_candidates)})")
-
-            # Clear batch data and force GC (but keep cache)
-            batch_market_data.clear()
-            del batch_data
-            gc.collect()
-
-        logger.info(f"Cached {len(self._symbol_data_cache)} symbols for report generation")
-        return all_candidates, all_failed
-
-    def run_scan(
+    def run_complete_workflow(
         self,
         symbols: Optional[List[str]] = None,
         skip_market_hours_check: bool = False
     ) -> Optional[str]:
         """
-        Run memory-optimized scan pipeline.
+        Run complete 5-phase workflow.
 
         Args:
-            symbols: Optional list of symbols
+            symbols: Optional list of symbols (uses universe sync if None)
             skip_market_hours_check: Skip trading day check
 
         Returns:
             Path to generated report or None if failed
         """
+        workflow_start = datetime.now()
+        run_date = workflow_start.strftime('%Y-%m-%d')
+
+        # Initialize workflow status
+        self.db.save_workflow_status({
+            'run_date': run_date,
+            'start_time': workflow_start.strftime('%H:%M:%S'),
+            'status': 'running'
+        })
+
         try:
             if not skip_market_hours_check and not self.is_trading_day():
-                logger.info("Not a trading day, skipping scan")
+                logger.info("Not a trading day, skipping workflow")
+                self._update_workflow_status(run_date, status='skipped')
                 return None
 
-            symbols = symbols or self.db.get_active_stocks()
-            if not symbols:
-                logger.error("No symbols to scan")
+            logger.info("=" * 60)
+            logger.info("STARTING COMPLETE 5-PHASE WORKFLOW")
+            logger.info("=" * 60)
+
+            # Phase 0: Data Preparation
+            phase0_result = self._phase0_data_prep(symbols)
+            if not phase0_result['success']:
+                logger.error("Phase 0 failed, aborting workflow")
+                self._update_workflow_status(
+                    run_date,
+                    status='failed',
+                    error_message='Phase 0 failed'
+                )
                 return None
 
-            logger.info(f"Starting memory-optimized scan of {len(symbols)} symbols")
-            logger.info(f"Batch size: 50, Max workers: 1, History: {self.MAX_HISTORY_DAYS} trading days")
-            scan_start = datetime.now()
+            symbols = phase0_result['symbols']
 
-            # Step 1: Market sentiment
-            logger.info("Step 1/5: Analyzing market sentiment...")
-            sentiment_result = self.market_analyzer.analyze_sentiment()
-            market_sentiment = sentiment_result.get('sentiment', 'neutral')
-            logger.info(f"Market sentiment: {market_sentiment}")
+            # Phase 1: Market Sentiment
+            sentiment = self._phase1_market_sentiment()
 
-            # Step 2: Screen symbols (streaming with incremental data)
-            logger.info(f"Step 2/5: Screening symbols with 6 strategies (incremental update)...")
-            logger.info(f"Target: {len(symbols)} symbols, keeping {self.MAX_HISTORY_DAYS} trading days of history")
-            candidates, fail_symbols = self.screen_symbols_streaming(symbols)
-            success_count = len(symbols) - len(fail_symbols)
-            fail_count = len(fail_symbols)
-            logger.info(f"Found {len(candidates)} total candidates ({success_count} success, {fail_count} failed)")
+            # Phase 2: Strategy Screening
+            phase2_result = self._phase2_screening(symbols)
+            candidates = phase2_result['candidates']
+            fail_symbols = phase2_result['fail_symbols']
 
             if not candidates:
                 logger.warning("No candidates found, generating empty report")
-                # Generate a report showing no opportunities
-                report_path = self.reporter.generate_report(
-                    opportunities=[],
-                    all_candidates=[],
-                    market_sentiment=market_sentiment,
-                    total_stocks=len(symbols),
-                    success_count=success_count,
-                    fail_count=fail_count,
-                    fail_symbols=fail_symbols,
-                    sentiment_result=sentiment_result
+                report_path = self._phase4_report(
+                    [], candidates, sentiment, symbols, fail_symbols
                 )
-                scan_duration = (datetime.now() - scan_start).total_seconds()
-                logger.info(f"Scan complete in {scan_duration:.1f}s - no opportunities")
-                logger.info(f"Report: {report_path}")
+                self._phase5_notify(report_path, sentiment, [])
+                self._update_workflow_status(
+                    run_date,
+                    status='completed',
+                    report_path=report_path
+                )
                 return report_path
 
-            # Step 3: Select and score top 10
-            logger.info("Step 3/5: AI scoring and selecting top 10...")
-            top_10_scored = self.selector.select_top_10(candidates, market_sentiment)
-            logger.info(f"Selected {len(top_10_scored)} opportunities")
+            # Phase 3: AI Analysis
+            analyzed = self._phase3_ai_analysis(candidates, sentiment)
 
-            if top_10_scored:
-                confidences = [c.confidence for c in top_10_scored]
-                logger.info(f"Confidence: {min(confidences)}-{max(confidences)}%, avg: {sum(confidences)/len(confidences):.1f}%")
-
-            # Step 4: Deep analysis (one by one to save memory)
-            logger.info("Step 4/5: Running deep AI analysis...")
-            analyzed = []
-            for i, match in enumerate(top_10_scored):
-                try:
-                    logger.info(f"Analyzing {match.symbol} ({i+1}/{len(top_10_scored)})...")
-                    # Pass cached data to avoid re-fetching
-                    analysis = self.opportunity_analyzer.analyze_opportunity(
-                        match, market_sentiment,
-                        cached_data=self._symbol_data_cache.get(match.symbol)
-                    )
-                    analyzed.append(analysis)
-                    gc.collect()  # Clean up after each analysis
-                except Exception as e:
-                    logger.error(f"Failed to analyze {match.symbol}: {e}")
-                    # Create basic analysis
-                    from core.analyzer import AnalyzedOpportunity
-                    analyzed.append(AnalyzedOpportunity(
-                        symbol=match.symbol,
-                        strategy=match.strategy,
-                        entry_price=match.entry_price,
-                        stop_loss=match.stop_loss,
-                        take_profit=match.take_profit,
-                        confidence=match.confidence,
-                        match_reasons=match.match_reasons
-                    ))
-
-            logger.info(f"Analyzed {len(analyzed)} opportunities")
-
-            # Step 5: Generate report
-            logger.info("Step 5/5: Generating report...")
-            report_path = self.reporter.generate_report(
-                opportunities=analyzed,
-                all_candidates=candidates,
-                market_sentiment=market_sentiment,
-                total_stocks=len(symbols),
-                success_count=success_count,
-                fail_count=fail_count,
-                fail_symbols=fail_symbols,
-                sentiment_result=sentiment_result,
-                symbol_data_cache=self._symbol_data_cache
+            # Phase 4: Report Generation
+            report_path = self._phase4_report(
+                analyzed, candidates, sentiment, symbols, fail_symbols
             )
 
-            # Save scan result
-            scan_result = {
-                'scan_date': scan_start.strftime('%Y-%m-%d'),
-                'scan_time': scan_start.strftime('%H:%M:%S'),
-                'market_sentiment': market_sentiment,
-                'top_opportunities': [{
-                    'symbol': o.symbol,
-                    'strategy': o.strategy,
-                    'entry_price': o.entry_price,
-                    'stop_loss': o.stop_loss,
-                    'take_profit': o.take_profit,
-                    'confidence': o.confidence
-                } for o in analyzed],
-                'all_candidates': [{
-                    'symbol': o.symbol,
-                    'strategy': o.strategy,
-                    'confidence': o.confidence
-                } for o in candidates],
-                'total_stocks': len(symbols),
-                'success_count': success_count,
-                'fail_count': fail_count,
-                'fail_symbols': fail_symbols,
-                'report_path': report_path
-            }
-            self.db.save_scan_result(scan_result)
+            # Phase 5: Push Notifications
+            self._phase5_notify(report_path, sentiment, analyzed)
 
-            scan_duration = (datetime.now() - scan_start).total_seconds()
-            logger.info(f"Scan complete in {scan_duration:.1f}s")
-            logger.info(f"Report: {report_path}")
+            # Finalize workflow status
+            total_duration = (datetime.now() - workflow_start).total_seconds()
+            self._update_workflow_status(
+                run_date,
+                status='completed',
+                report_path=report_path,
+                candidates_count=len(analyzed)
+            )
+
+            logger.info("=" * 60)
+            logger.info(f"WORKFLOW COMPLETE in {total_duration:.0f}s")
+            logger.info("=" * 60)
 
             return report_path
 
         except Exception as e:
-            logger.error(f"Scan failed: {e}", exc_info=True)
+            logger.error(f"Workflow failed: {e}", exc_info=True)
+            self._update_workflow_status(
+                run_date,
+                status='failed',
+                error_message=str(e)
+            )
             return None
+
+    def _phase0_data_prep(self, symbols: Optional[List[str]]) -> Dict:
+        """Phase 0: Data Preparation.
+
+        Args:
+            symbols: Optional pre-defined symbols list
+
+        Returns:
+            Phase result dict
+        """
+        logger.info("\n" + "=" * 60)
+        logger.info("PHASE 0: Data Preparation")
+        logger.info("=" * 60)
+
+        phase_start = datetime.now()
+
+        # If symbols provided (test mode), skip universe sync
+        if symbols is not None:
+            logger.info(f"Using provided symbols: {len(symbols)}")
+            # Still fetch Tier 3 data
+            tier3_data = self.prep._fetch_tier3_data()
+            logger.info(f"Tier 3 data fetched: {len(tier3_data)} symbols")
+            # Calculate Tier 1 for provided symbols
+            tier1_count = self.prep._calculate_tier1_cache(symbols)
+            logger.info(f"Tier 1 cache calculated: {tier1_count} symbols")
+
+            duration = (datetime.now() - phase_start).total_seconds()
+            self._phase_times['phase0'] = int(duration)
+
+            return {
+                'success': True,
+                'symbols': symbols,
+                'duration': int(duration)
+            }
+
+        # Full Phase 0 with universe sync
+        result = self.prep.run_phase0()
+        duration = (datetime.now() - phase_start).total_seconds()
+        self._phase_times['phase0'] = int(duration)
+
+        logger.info(f"Phase 0 complete in {duration:.1f}s")
+
+        return result
+
+    def _phase1_market_sentiment(self) -> str:
+        """Phase 1: Market Sentiment Analysis.
+
+        Returns:
+            Market sentiment string
+        """
+        logger.info("\n" + "=" * 60)
+        logger.info("PHASE 1: Market Sentiment Analysis")
+        logger.info("=" * 60)
+
+        phase_start = datetime.now()
+
+        try:
+            sentiment_result = self.market_analyzer.analyze_sentiment()
+            sentiment = sentiment_result.get('sentiment', 'neutral')
+            logger.info(f"Market sentiment: {sentiment.upper()}")
+        except Exception as e:
+            logger.error(f"Market sentiment analysis failed: {e}")
+            sentiment = 'neutral'
+
+        duration = (datetime.now() - phase_start).total_seconds()
+        self._phase_times['phase1'] = int(duration)
+        logger.info(f"Phase 1 complete in {duration:.1f}s")
+
+        return sentiment
+
+    def _phase2_screening(self, symbols: List[str]) -> Dict:
+        """Phase 2: Strategy Screening.
+
+        Args:
+            symbols: List of symbols to screen
+
+        Returns:
+            Dict with candidates and fail_symbols
+        """
+        logger.info("\n" + "=" * 60)
+        logger.info("PHASE 2: Strategy Screening")
+        logger.info("=" * 60)
+
+        phase_start = datetime.now()
+
+        logger.info(f"Screening {len(symbols)} symbols with 6 strategies")
+
+        # Screen all symbols using pre-calculated Tier 1 data
+        # The screener will use cached Tier 1/Tier 3 data
+        candidates = self.screener.screen_all(symbols=symbols)
+
+        # For now, we don't track individual failures in the new flow
+        # Could be enhanced later
+        fail_symbols = []
+
+        duration = (datetime.now() - phase_start).total_seconds()
+        self._phase_times['phase2'] = int(duration)
+
+        logger.info(f"Found {len(candidates)} candidates")
+        logger.info(f"Phase 2 complete in {duration:.1f}s")
+
+        return {
+            'candidates': candidates,
+            'fail_symbols': fail_symbols
+        }
+
+    def _phase3_ai_analysis(
+        self,
+        candidates: List,
+        sentiment: str
+    ) -> List:
+        """Phase 3: AI Analysis of top candidates.
+
+        Args:
+            candidates: List of strategy matches
+            sentiment: Market sentiment
+
+        Returns:
+            List of analyzed opportunities
+        """
+        logger.info("\n" + "=" * 60)
+        logger.info("PHASE 3: AI Analysis")
+        logger.info("=" * 60)
+
+        phase_start = datetime.now()
+
+        # Select top 10
+        top_10 = self.selector.select_top_10(candidates, sentiment)
+        logger.info(f"Selected {len(top_10)} opportunities for deep analysis")
+
+        # Analyze each one
+        analyzed = []
+        for i, match in enumerate(top_10):
+            try:
+                logger.info(f"Analyzing {match.symbol} ({i+1}/{len(top_10)})...")
+                analysis = self.opportunity_analyzer.analyze_opportunity(match, sentiment)
+                analyzed.append(analysis)
+                gc.collect()
+            except Exception as e:
+                logger.error(f"Failed to analyze {match.symbol}: {e}")
+
+        duration = (datetime.now() - phase_start).total_seconds()
+        self._phase_times['phase3'] = int(duration)
+
+        logger.info(f"Analyzed {len(analyzed)} opportunities")
+        logger.info(f"Phase 3 complete in {duration:.1f}s")
+
+        return analyzed
+
+    def _phase4_report(
+        self,
+        analyzed: List,
+        candidates: List,
+        sentiment: str,
+        symbols: List[str],
+        fail_symbols: List[str]
+    ) -> str:
+        """Phase 4: Report Generation.
+
+        Args:
+            analyzed: List of analyzed opportunities
+            candidates: All candidates found
+            sentiment: Market sentiment
+            symbols: All symbols screened
+            fail_symbols: Failed symbols
+
+        Returns:
+            Path to generated report
+        """
+        logger.info("\n" + "=" * 60)
+        logger.info("PHASE 4: Report Generation")
+        logger.info("=" * 60)
+
+        phase_start = datetime.now()
+
+        report_path = self.reporter.generate_report(
+            opportunities=analyzed,
+            all_candidates=candidates,
+            market_sentiment=sentiment,
+            total_stocks=len(symbols),
+            success_count=len(symbols) - len(fail_symbols),
+            fail_count=len(fail_symbols),
+            fail_symbols=fail_symbols
+        )
+
+        duration = (datetime.now() - phase_start).total_seconds()
+        self._phase_times['phase4'] = int(duration)
+
+        logger.info(f"Report generated: {report_path}")
+        logger.info(f"Phase 4 complete in {duration:.1f}s")
+
+        return report_path
+
+    def _phase5_notify(
+        self,
+        report_path: str,
+        sentiment: str,
+        analyzed: List
+    ):
+        """Phase 5: Push Notifications.
+
+        Args:
+            report_path: Path to report
+            sentiment: Market sentiment
+            analyzed: List of analyzed opportunities
+        """
+        logger.info("\n" + "=" * 60)
+        logger.info("PHASE 5: Push Notifications")
+        logger.info("=" * 60)
+
+        phase_start = datetime.now()
+
+        scan_date = datetime.now().strftime('%Y-%m-%d')
+
+        # Send notifications
+        results = self.notifier.send_scan_summary(
+            scan_date=scan_date,
+            market_sentiment=sentiment,
+            top_opportunities=analyzed,
+            report_url=report_path
+        )
+
+        duration = (datetime.now() - phase_start).total_seconds()
+        self._phase_times['phase5'] = int(duration)
+
+        logger.info(f"Discord: {'sent' if results.get('discord') else 'failed'}")
+        logger.info(f"WeChat: {'sent' if results.get('wechat') else 'failed'}")
+        logger.info(f"Phase 5 complete in {duration:.1f}s")
+
+    def _update_workflow_status(
+        self,
+        run_date: str,
+        status: str,
+        report_path: Optional[str] = None,
+        error_message: Optional[str] = None,
+        candidates_count: int = 0
+    ):
+        """Update workflow status in database.
+
+        Args:
+            run_date: Date string
+            status: Workflow status
+            report_path: Optional report path
+            error_message: Optional error message
+            candidates_count: Number of candidates
+        """
+        total_duration = sum(self._phase_times.values())
+
+        self.db.save_workflow_status({
+            'run_date': run_date,
+            'status': status,
+            'phase0_duration': self._phase_times.get('phase0'),
+            'phase1_duration': self._phase_times.get('phase1'),
+            'phase2_duration': self._phase_times.get('phase2'),
+            'phase3_duration': self._phase_times.get('phase3'),
+            'phase4_duration': self._phase_times.get('phase4'),
+            'phase5_duration': self._phase_times.get('phase5'),
+            'total_duration': total_duration,
+            'symbols_count': getattr(self, '_symbols_count', 0),
+            'candidates_count': candidates_count,
+            'report_path': report_path,
+            'error_message': error_message
+        })
 
     def run_test_scan(self, test_symbols: List[str]) -> Optional[str]:
         """Run test scan with limited symbols."""
         logger.info(f"Running test scan with {len(test_symbols)} symbols")
-        return self.run_scan(symbols=test_symbols, skip_market_hours_check=True)
+        return self.run_complete_workflow(
+            symbols=test_symbols,
+            skip_market_hours_check=True
+        )
 
 
 def main():
     """Main entry point."""
-    parser = argparse.ArgumentParser(description='Trade Scanner (Memory Optimized)')
+    parser = argparse.ArgumentParser(description='Trade Scanner - Complete Workflow')
     parser.add_argument('--test', action='store_true', help='Run test scan')
     parser.add_argument('--symbols', type=str, help='Comma-separated symbols for test')
     parser.add_argument('--force', action='store_true', help='Skip trading day check')
@@ -332,19 +470,19 @@ def main():
         run_server()
         return
 
-    scanner = MemoryOptimizedScanner()
+    scanner = CompleteScanner()
 
     if args.test:
         symbols = args.symbols.split(',') if args.symbols else ['AAPL', 'MSFT', 'NVDA']
         report_path = scanner.run_test_scan(symbols)
     else:
-        report_path = scanner.run_scan(skip_market_hours_check=args.force)
+        report_path = scanner.run_complete_workflow(skip_market_hours_check=args.force)
 
     if report_path:
-        print(f"\n✅ Scan complete!")
+        print(f"\n✅ Workflow complete!")
         print(f"📄 Report: {report_path}")
     else:
-        print("\n❌ Scan failed or skipped")
+        print("\n❌ Workflow failed or skipped")
         sys.exit(1)
 
 

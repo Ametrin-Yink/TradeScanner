@@ -83,38 +83,75 @@ class StrategyScreener:
         """
         Phase 0: Universal pre-calculation for all symbols.
 
-        This runs ONCE before any strategy screening and computes:
-        1. Basic filters: price ($2-3000), volume (>100K)
-        2. Technical indicators: ATR, ADR, EMAs
-        3. RS scores: 3m/6m/12m returns + percentile ranking
-        4. SPY data: 5-day return for relative strength
-        5. 52-week metrics: distance from high
+        Uses cached Tier 1 data from database if available (set by PreMarketPrep),
+        otherwise calculates on-the-fly for backward compatibility.
 
         Returns:
             Dict mapping symbol to pre-calculated data
         """
-        logger.info(f"Phase 0: Starting universal pre-calculation for {len(symbols)} symbols...")
+        logger.info(f"Phase 0: Universal pre-calculation for {len(symbols)} symbols...")
 
-        # Get SPY data first (for RS calculations)
-        self._spy_data = self._get_data('SPY')
+        # Try to load Tier 3 data (SPY) from cache first
+        self._spy_data = self._load_tier3_data('SPY') or self._get_data('SPY')
+
         if self._spy_data is not None and len(self._spy_data) >= 5:
             spy_current = self._spy_data['close'].iloc[-1]
-            spy_5d_ago = self._spy_data['close'].iloc[-5] if len(self._spy_data) >= 5 else self._spy_data['close'].iloc[0]
+            spy_5d_ago = self._spy_data['close'].iloc[-5]
             self._spy_return_5d = (spy_current - spy_5d_ago) / spy_5d_ago if spy_5d_ago > 0 else 0.0
             logger.info(f"Phase 0: SPY 5-day return = {self._spy_return_5d:.2%}")
-        elif self._spy_data is not None and len(self._spy_data) > 0:
-            logger.warning(f"Phase 0: SPY data has only {len(self._spy_data)} days, skipping 5-day return calculation")
+
+        # Try to load cached Tier 1 data
+        cached_tier1 = self._load_tier1_cache(symbols)
+        logger.info(f"Phase 0: Loaded {len(cached_tier1)} symbols from Tier 1 cache")
 
         phase0_data = {}
         rs_scores = []
         passed_basic = 0
+        used_cache = 0
+        calculated = 0
 
         for symbol in symbols:
+            # First try cached Tier 1 data
+            if symbol in cached_tier1:
+                cache_entry = cached_tier1[symbol]
+                try:
+                    # Get DataFrame from market_data or fetch
+                    df = market_data.get(symbol) or self._get_data(symbol)
+                    if df is None or len(df) < 50:
+                        continue
+
+                    # Build phase0 data from cache
+                    phase0_data[symbol] = {
+                        'df': df,
+                        'ind': None,  # Will be calculated lazily if needed
+                        'current_price': cache_entry.get('current_price', 0),
+                        'avg_volume': cache_entry.get('avg_volume_20d', 0),
+                        'adr_pct': cache_entry.get('adr_pct', 0),
+                        'atr': cache_entry.get('atr', 0),
+                        'ret_3m': cache_entry.get('ret_3m', 0) or 0,
+                        'ret_6m': cache_entry.get('ret_6m', 0) or 0,
+                        'ret_12m': cache_entry.get('ret_12m', 0) or 0,
+                        'ret_5d': cache_entry.get('ret_5d', 0) or 0,
+                        'rs_raw': cache_entry.get('rs_raw', 0) or 0,
+                        'rs_percentile': cache_entry.get('rs_percentile', 50),
+                        'distance_from_52w_high': cache_entry.get('distance_from_52w_high', 0),
+                        'ema21': cache_entry.get('ema21', 0),
+                        'ema50': cache_entry.get('ema50', 0),
+                        'ema200': cache_entry.get('ema200', 0),
+                        'high_50d': cache_entry.get('high_60d', 0),
+                        'volume_sma20': cache_entry.get('volume_sma', 0),
+                        'data_days': cache_entry.get('data_days', len(df)),
+                    }
+                    rs_scores.append({'symbol': symbol, 'rs': phase0_data[symbol]['rs_raw']})
+                    used_cache += 1
+                    continue  # Skip calculation
+                except Exception as e:
+                    logger.debug(f"Failed to use cache for {symbol}: {e}")
+
+            # Fall back to calculation
             df = market_data.get(symbol)
             if df is None or len(df) < self.MIN_HISTORY_DAYS:
                 continue
-            if len(df) < self.MIN_HISTORY_DAYS:
-                logger.debug(f"Phase 0: {symbol} has {len(df)} days (< {self.MIN_HISTORY_DAYS}), limited indicators")
 
             try:
                 current_price = df['close'].iloc[-1]
@@ -127,24 +164,25 @@ class StrategyScreener:
                     continue
 
                 passed_basic += 1
+                calculated += 1
 
                 # Phase 0.2: Calculate technical indicators
                 ind = TechnicalIndicators(df)
                 ind.calculate_all()
 
-                # Phase 0.3: Calculate RS metrics only for periods with sufficient data
+                # Phase 0.3: Calculate RS metrics
                 returns = {}
-                if len(df) >= 64:  # Need at least 63 days back + current day
+                if len(df) >= 64:
                     price_3m_ago = df['close'].iloc[-63]
                     returns['3m'] = (current_price - price_3m_ago) / price_3m_ago
-                if len(df) >= 127:  # Need at least 126 days back + current day
+                if len(df) >= 127:
                     price_6m_ago = df['close'].iloc[-126]
                     returns['6m'] = (current_price - price_6m_ago) / price_6m_ago
-                if len(df) >= 253:  # Need at least 252 days back + current day
+                if len(df) >= 253:
                     price_12m_ago = df['close'].iloc[-252]
                     returns['12m'] = (current_price - price_12m_ago) / price_12m_ago
 
-                # 5-day return (most stocks should have this)
+                # 5-day return
                 if len(df) >= 6:
                     price_5d_ago = df['close'].iloc[-5]
                 elif len(df) > 1:
@@ -153,7 +191,7 @@ class StrategyScreener:
                     price_5d_ago = current_price
                 ret_5d = (current_price - price_5d_ago) / price_5d_ago if price_5d_ago > 0 else 0.0
 
-                # Weighted average of available returns (reweights if some missing)
+                # Weighted average of available returns
                 weights = {'3m': 0.4, '6m': 0.3, '12m': 0.3}
                 total_weight = sum(weights.get(k, 0) for k in returns.keys())
                 if total_weight > 0:
@@ -161,7 +199,6 @@ class StrategyScreener:
                 else:
                     rs_raw = 0.0
 
-                # Extract available returns (0.0 if not enough data)
                 ret_3m = returns.get('3m', 0.0)
                 ret_6m = returns.get('6m', 0.0)
                 ret_12m = returns.get('12m', 0.0)
@@ -188,7 +225,7 @@ class StrategyScreener:
                     'ema200': ind.indicators.get('ema', {}).get('ema200', 0),
                     'high_50d': df['high'].tail(50).max(),
                     'volume_sma20': df['volume'].tail(20).mean(),
-                    'data_days': len(df),  # Metadata for strategy filtering
+                    'data_days': len(df),
                 }
 
                 rs_scores.append({'symbol': symbol, 'rs': rs_raw})
@@ -197,24 +234,61 @@ class StrategyScreener:
                 logger.warning(f"Phase 0: Error processing {symbol}: {e}")
                 continue
 
-        logger.info(f"Phase 0: {passed_basic}/{len(symbols)} symbols passed basic filters")
+        logger.info(f"Phase 0: {used_cache} from cache, {calculated} calculated, {len(phase0_data)} total")
 
-        # Phase 0.5: Calculate RS percentiles - O(n log n) using sorting
+        # Phase 0.5: Calculate RS percentiles
         if rs_scores:
-            # Sort by RS value
             sorted_scores = sorted(rs_scores, key=lambda x: x['rs'])
             n = len(sorted_scores)
 
-            # Calculate percentile based on position in sorted array
             for i, item in enumerate(sorted_scores):
-                # Use (i+1)/n to avoid 0 percentile for lowest stock
-                # This ensures even the lowest RS stock gets some percentile > 0
                 percentile = ((i + 1) / n) * 100
                 if item['symbol'] in phase0_data:
                     phase0_data[item['symbol']]['rs_percentile'] = min(99.9, percentile)
 
-        logger.info(f"Phase 0: Pre-calculation complete for {len(phase0_data)} symbols")
+        logger.info(f"Phase 0: Complete for {len(phase0_data)} symbols")
         return phase0_data
+
+    def _load_tier1_cache(self, symbols: List[str]) -> Dict[str, Dict]:
+        """Load Tier 1 cache from database for given symbols.
+
+        Args:
+            symbols: List of symbols to load
+
+        Returns:
+            Dict mapping symbol to cached Tier 1 data
+        """
+        cached = {}
+        today = datetime.now().date().isoformat()
+
+        for symbol in symbols:
+            try:
+                data = self.db.get_tier1_cache(symbol)
+                if data and data.get('cache_date') == today:
+                    cached[symbol] = data
+            except Exception as e:
+                logger.debug(f"Failed to load Tier 1 cache for {symbol}: {e}")
+
+        return cached
+
+    def _load_tier3_data(self, symbol: str) -> Optional[pd.DataFrame]:
+        """Load Tier 3 market data from cache.
+
+        Args:
+            symbol: Symbol to load (e.g., SPY, VIX)
+
+        Returns:
+            DataFrame or None
+        """
+        try:
+            df = self.db.get_tier3_cache(symbol)
+            if df is not None and not df.empty:
+                logger.debug(f"Loaded Tier 3 cache for {symbol}: {len(df)} rows")
+                return df
+        except Exception as e:
+            logger.debug(f"Failed to load Tier 3 cache for {symbol}: {e}")
+
+        return None
 
     def _get_market_regime(self) -> str:
         """
