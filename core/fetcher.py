@@ -35,7 +35,7 @@ class DataFetcher:
             max_workers: Max concurrent threads
             request_delay: Delay between requests in seconds
             max_retries: Max retry attempts for failed requests
-            max_history_days: Maximum days of history to keep (150 trading days)
+            max_history_days: Maximum days of history to keep (280 trading days)
         """
         self.db = db or Database()
         self.max_workers = max_workers

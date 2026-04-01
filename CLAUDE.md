@@ -57,7 +57,7 @@ Automated US stock trading opportunity scanner analyzing stocks with market cap 
 - **Universe**: finvizfinance for >$2B market cap stocks, synced daily
 - **AI**: Alibaba DashScope (OpenAI-compatible)
 - **Scale**: Dynamic universe (~2500 stocks), ~45-60 min total workflow
-- **Caching**: Tier 1/3 pre-calculation, 150 trading days retained
+- **Caching**: Tier 1/3 pre-calculation, 280 trading days retained
 - **Charts**: matplotlib with Agg backend
 
 ## Database Schema

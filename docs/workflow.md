@@ -296,7 +296,7 @@ Recommended cron schedule (US market hours):
 ### Database
 - **Location**: `data/market_data.db`
 - **Contents**: Historical price data, Tier 1/3 cache, scan logs, workflow status
-- **Retention**: 150 trading days for price data, daily for cache
+- **Retention**: 280 trading days for price data, daily for cache
 
 ---
 
@@ -319,7 +319,7 @@ Recommended cron schedule (US market hours):
 Key settings in `config/settings.py`:
 - `max_workers`: 2-4 for data fetching
 - `batch_size`: 50 symbols
-- `max_history_days`: 150 trading days
+- `max_history_days`: 280 trading days
 - `retention_days`: 15 days
 - `ai.model`: qwen-max
 - `ai.timeout`: 60 seconds
