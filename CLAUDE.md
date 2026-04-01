@@ -6,7 +6,7 @@ Trade Scanner - Current State Reference
 
 Automated US stock trading opportunity scanner analyzing stocks with market cap >$2B daily using 6 trading strategies. Generates web-based reports with AI-powered analysis.
 
-## Current Architecture (v3.0)
+## Current Architecture (v4.0)
 
 **6 Strategy Plugins** (`core/strategies/`):
 | Strategy | File | Type | Description |
@@ -18,18 +18,61 @@ Automated US stock trading opportunity scanner analyzing stocks with market cap 
 | DoubleTopBottom | double_top_bottom.py | Both | Distribution/accumulation |
 | CapitulationRebound | capitulation_rebound.py | Long | Capitulation reversal |
 
+**5-Phase Daily Workflow** (runs at 6 AM ET):
+| Phase | Component | Duration | Description |
+|-------|-----------|----------|-------------|
+| 0 | PreMarketPrep | 15-20 min | Universe sync, Tier 1/3 pre-calculation |
+| 1 | MarketAnalyzer | 2-3 min | Sentiment analysis (Tavily + AI) |
+| 2 | StrategyScreener | 10-15 min | Screen with cached Tier 1/3 data |
+| 3 | OpportunityAnalyzer | 15-20 min | Deep AI analysis of top 10 |
+| 4 | ReportGenerator | 2-3 min | HTML report generation |
+| 5 | MultiNotifier | 1 min | WeChat + Discord notifications |
+
 **Pipeline**:
-- `fetcher.py` → `screener.py` → `analyzer.py` → `reporter.py`
-- Database: SQLite (`data/stocks.db`)
+- `stock_universe.py` → `premarket_prep.py` → `market_analyzer.py` → `screener.py` → `analyzer.py` → `reporter.py` → `notifier.py`
+- Database: SQLite (`data/market_data.db`)
 - Web: Flask on port 19801
+
+## 3-Tier Pre-Calculation Architecture
+
+**Tier 1 (Universal Metrics)**: Calculated for ALL symbols at 6 AM
+- Price, Volume, EMAs (8/21/50/200), ATR/ADR
+- Returns (3m/6m/12m/5d), RS scores, 52-week metrics
+- Stored in `tier1_cache` table
+
+**Tier 2 (Strategy-Specific)**: Calculated LAZY during screening
+- VCP platform detection, S/R levels
+- RSI divergence, EMA slopes
+- Calculated only for candidates passing Tier 1 filters
+
+**Tier 3 (Market Data)**: Fetched once at 6 AM, shared
+- SPY, QQQ, IWM (benchmarks)
+- VIXY, UVXY (volatility)
+- XLK, XLF, XLE, etc. (sectors)
+- Stored in `tier3_cache` table as pickled DataFrames
 
 ## Key Technical Decisions
 
-- **Data**: yfinance (free), threads=False, 0.5s delay
+- **Data**: yfinance (free), threads=False, 0.5s delay, incremental updates
+- **Universe**: finvizfinance for >$2B market cap stocks, synced daily
 - **AI**: Alibaba DashScope (OpenAI-compatible)
-- **Scale**: Dynamic universe (market cap >$2B), ~70-80 min first run, ~20-25 min cached
+- **Scale**: Dynamic universe (~2500 stocks), ~45-60 min total workflow
+- **Caching**: Tier 1/3 pre-calculation, 150 trading days retained
 - **Charts**: matplotlib with Agg backend
-- **Caching**: 150 trading days retained
+
+## Database Schema
+
+**Core Tables**:
+- `stocks` - symbol, name, sector, is_active
+- `market_data` - OHLCV data by symbol/date
+- `scan_results` - scan history
+- `system_status` - last scan info
+
+**New Tables (v4.0)**:
+- `universe_sync` - sync history (date, added, removed, total)
+- `tier1_cache` - universal metrics (symbol, price, EMAs, RS, etc.)
+- `tier3_cache` - market data (SPY, VIX, ETFs as pickled DataFrames)
+- `workflow_status` - 6-phase execution tracking
 
 ## Scoring System
 
@@ -47,11 +90,14 @@ Automated US stock trading opportunity scanner analyzing stocks with market cap 
 ## Commands
 
 ```bash
-# Test scan
+# Test scan (uses provided symbols, skips universe sync)
 python scheduler.py --test --symbols AAPL,MSFT,NVDA
 
-# Full scan
+# Full 6-phase workflow (runs at 6 AM ET via cron)
 python scheduler.py
+
+# Phase 0 only (universe sync + Tier 1/3 pre-calc)
+python -c "from core.premarket_prep import run_premarket_prep; run_premarket_prep()"
 
 # Web server
 python api/server.py
@@ -68,11 +114,22 @@ class MyStrategy(BaseStrategy):
     NAME = "StrategyName"
     STRATEGY_TYPE = StrategyType.XXX
     DIMENSIONS = ['D1', 'D2', 'D3', 'D4']
-    
-    def filter(self, symbol, df) -> bool: ...
+
+    def filter(self, symbol, df, tier1_data=None, tier3_data=None) -> bool: ...
     def calculate_dimensions(self, symbol, df) -> List[ScoringDimension]: ...
     def calculate_entry_exit(self, symbol, df, dims, score, tier) -> Tuple[float, float, float]: ...
     def build_match_reasons(self, symbol, df, dims, score, tier) -> List[str]: ...
+```
+
+**Pre-calculation Access** (from `core/premarket_prep.py`):
+```python
+from data.db import db
+
+# Get cached Tier 1 metrics
+tier1 = db.get_tier1_cache('AAPL')  # Returns dict with price, EMAs, RS, etc.
+
+# Get cached Tier 3 market data
+spy_df = db.get_tier3_cache('SPY')  # Returns DataFrame
 ```
 
 **Shared Utilities** (`core/scoring_utils.py`):
@@ -85,6 +142,7 @@ class MyStrategy(BaseStrategy):
 - **yfinance**: Wikipedia blocks (403), use Slickcharts for stock lists
 - **Memory**: Keep under 500MB, batch processing in 50s
 - **Server**: Port 19801 only (security group restriction)
+- **Cron**: 6 AM ET daily: `0 6 * * 1-5 cd /path && python scheduler.py >> /var/log/trade_scanner.log 2>&1`
 - **Subagent Deadlock Detection**: When dispatching subagents, implement timeout/watchdog mechanisms. If a subagent task hangs (>5 min without progress), kill and retry with reduced scope. Check TaskOutput with timeout parameter instead of blocking indefinitely.
 
 ## Documentation Alignment Rule
