@@ -394,21 +394,16 @@ class TechnicalIndicators:
         return 0.0
 
     def detect_vcp_platform(self, lookback_range=(15, 30), max_range_pct=0.12,
-                            concentration_band=0.025, concentration_threshold=0.50) -> Optional[Dict]:
+                        concentration_band=0.025, concentration_threshold=0.50) -> Optional[Dict]:
         """
         Detect Volatility Contraction Pattern (VCP) platform.
-
-        Args:
-            lookback_range: (min_days, max_days) for platform detection
-            max_range_pct: Maximum platform range as percentage (e.g., 0.12 = 12%)
-            concentration_band: Price band around midpoint for concentration check
-            concentration_threshold: Minimum ratio of days within band (e.g., 0.50 = 50%)
-
-        Returns:
-            Dict with platform metrics or None if no valid platform found
+        RELAXED: Uses scoring system (2 of 3 criteria) instead of strict AND gate.
         """
-        if len(self.df) < lookback_range[1] + 5:  # Need extra days for volume check
+        if len(self.df) < lookback_range[1] + 5:
             return None
+
+        best_platform = None
+        best_score = 0
 
         # Try different platform lengths within range
         for platform_days in range(lookback_range[1], lookback_range[0] - 1, -1):
@@ -418,9 +413,14 @@ class TechnicalIndicators:
             platform_low = platform_df['low'].min()
             platform_range_pct = (platform_high - platform_low) / platform_low
 
-            # Check amplitude constraint
-            if platform_range_pct > max_range_pct:
-                continue
+            # CRITERION 1: Range tightness (relaxed from 12% to 15%)
+            range_score = 0
+            if platform_range_pct < 0.08:  # Excellent
+                range_score = 3
+            elif platform_range_pct < 0.12:  # Good
+                range_score = 2
+            elif platform_range_pct < 0.15:  # Acceptable
+                range_score = 1
 
             # Calculate midpoint and concentration
             midpoint = (platform_high + platform_low) / 2
@@ -429,39 +429,72 @@ class TechnicalIndicators:
 
             # Count days with close within band
             closes_in_band = platform_df[(platform_df['close'] >= lower_band) &
-                                         (platform_df['close'] <= upper_band)]
+                                     (platform_df['close'] <= upper_band)]
             concentration_ratio = len(closes_in_band) / platform_days
 
-            if concentration_ratio < concentration_threshold:
-                continue
+            # CRITERION 2: Concentration (relaxed from 50% to 40%)
+            concentration_score = 0
+            if concentration_ratio >= 0.60:
+                concentration_score = 3
+            elif concentration_ratio >= 0.50:
+                concentration_score = 2
+            elif concentration_ratio >= 0.40:
+                concentration_score = 1
 
             # Calculate volume metrics
             platform_volume_mean = platform_df['volume'].mean()
             last_5d_volume_mean = platform_df['volume'].tail(5).mean()
             volume_contraction_ratio = last_5d_volume_mean / platform_volume_mean if platform_volume_mean > 0 else 1.0
 
-            # Calculate volume vs 20-day SMA
-            volume_sma20 = self.df['volume'].tail(20).mean()
-            volume_vs_sma20 = platform_volume_mean / volume_sma20 if volume_sma20 > 0 else 1.0
+            # CRITERION 3: Volume contraction
+            volume_score = 0
+            if volume_contraction_ratio < 0.50:
+                volume_score = 3
+            elif volume_contraction_ratio < 0.70:
+                volume_score = 2
+            elif volume_contraction_ratio < 0.85:
+                volume_score = 1
 
-            # NEW: Calculate contraction sequence quality (建议#1)
-            contraction_quality = self._calculate_contraction_quality(platform_df)
+            # RELAXED: Require 2 of 3 criteria with at least score 1 each
+            total_score = range_score + concentration_score + volume_score
+            criteria_met = sum([range_score > 0, concentration_score > 0, volume_score > 0])
 
-            return {
-                'platform_days': platform_days,
-                'platform_high': float(platform_high),
-                'platform_low': float(platform_low),
-                'platform_range_pct': float(platform_range_pct),
-                'midpoint': float(midpoint),
-                'concentration_ratio': float(concentration_ratio),
-                'volume_contraction_ratio': float(volume_contraction_ratio),
-                'volume_vs_sma20': float(volume_vs_sma20),
-                'platform_volume_mean': float(platform_volume_mean),
-                'contraction_quality': float(contraction_quality),  # NEW
-                'is_valid': True
-            }
+            # DEBUG logging for VCP detection
+            if platform_days == lookback_range[1]:  # Log first attempt only
+                logger.debug(f"VCP_DEBUG: {self.symbol} - Range:{platform_range_pct:.3f}(s:{range_score}), "
+                            f"Conc:{concentration_ratio:.2f}(s:{concentration_score}), "
+                            f"Vol:{volume_contraction_ratio:.2f}(s:{volume_score}), "
+                            f"Total:{total_score}, Criteria:{criteria_met}")
 
-        return None
+            # Require at least 2 criteria with minimum quality
+            if criteria_met >= 2 and total_score >= 3:
+                if total_score > best_score:
+                    best_score = total_score
+                    contraction_quality = self._calculate_contraction_quality(platform_df)
+
+                    best_platform = {
+                        'platform_days': platform_days,
+                        'platform_high': float(platform_high),
+                        'platform_low': float(platform_low),
+                        'platform_range_pct': float(platform_range_pct),
+                        'midpoint': float(midpoint),
+                        'concentration_ratio': float(concentration_ratio),
+                        'volume_contraction_ratio': float(volume_contraction_ratio),
+                        'platform_volume_mean': float(platform_volume_mean),
+                        'contraction_quality': float(contraction_quality),
+                        'range_score': range_score,
+                        'concentration_score': concentration_score,
+                        'volume_score': volume_score,
+                        'is_valid': True
+                    }
+
+        if best_platform:
+            logger.debug(f"VCP_FOUND: {self.symbol} - Score:{best_score}, Days:{best_platform['platform_days']}, "
+                        f"Range:{best_platform['platform_range_pct']:.3f}")
+        else:
+            logger.debug(f"VCP_NONE: {self.symbol} - No valid platform found")
+
+        return best_platform
 
     def _calculate_contraction_quality(self, platform_df) -> float:
         """
