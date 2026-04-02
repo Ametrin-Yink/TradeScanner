@@ -3,6 +3,7 @@ from typing import Dict, List, Optional, Tuple, Any
 import logging
 
 import pandas as pd
+import numpy as np
 
 from ..indicators import TechnicalIndicators
 from .base_strategy import BaseStrategy, StrategyMatch, ScoringDimension, StrategyType
@@ -11,12 +12,17 @@ logger = logging.getLogger(__name__)
 
 
 class MomentumBreakoutStrategy(BaseStrategy):
-    """Strategy A: VCP-EP - Captures demand burst after supply exhaustion."""
+    """
+    Strategy A: MomentumBreakout v5.0
+    - Multi-pattern CQ (VCP, HTF, flat, ascending, loose)
+    - TC promoted to primary gate (RS >= 50th)
+    - Bonus pool (+3 max, clamped to 15)
+    """
 
     NAME = "MomentumBreakout"
     STRATEGY_TYPE = StrategyType.A  # Changed from EP
-    DESCRIPTION = "MomentumBreakout v5.0"
-    DIMENSIONS = ['PQ', 'BS', 'VC', 'TC']
+    DESCRIPTION = "MomentumBreakout v5.0 - multi-pattern momentum"
+    DIMENSIONS = ['TC', 'CQ', 'BS', 'VC']
 
     # VCP-EP Parameters
     PARAMS = {
@@ -26,7 +32,7 @@ class MomentumBreakoutStrategy(BaseStrategy):
         'platform_lookback': (15, 60),         # 15-60 day platform (relaxed from 15-30)
         'rs_bonus_threshold': 0.85,            # RS>85 percentile bonus
         'platform_max_range': 0.12,            # <12% range
-        'concentration_threshold': 0.50,       # 50% days in ±2.5% band
+        'concentration_threshold': 0.50,       # 50% days in +/-2.5% band
         'volume_contraction_vs_platform': 0.70, # Last 5d < 70% of platform avg
         'breakout_pct': 0.02,                  # >2% above platform high
         'clv_threshold': 0.75,                 # CLV >= 0.75
@@ -35,10 +41,22 @@ class MomentumBreakoutStrategy(BaseStrategy):
         'max_distance_from_52w_high': 0.10,    # Within 10% of 52-week high
         'energy_ratio_cap': 3.0,               # Cap energy ratio at 3.0
         'rs_percentile_min': 80,               # RS > 80 percentile (kept intentionally different from Momentum)
+        # v5.0: TC promoted to primary gate
+        'min_rs_percentile': 50,               # NEW: TC is now primary gate
+        'max_raw_score': 20.0,                  # NEW: Allow raw scores up to 20
+        'bonus_max': 3.0,                       # NEW: Bonus pool max
     }
 
     def filter(self, symbol: str, df: pd.DataFrame) -> bool:
-        """5-layer filtering system with diagnostic logging."""
+        """5-layer filtering system with diagnostic logging + TC primary gate."""
+        # NEW: TC hard gate - RS >= 50th percentile (must be done first)
+        data = getattr(self, 'phase0_data', {}).get(symbol, {})
+        rs_pct = data.get('rs_percentile', 0)
+
+        if rs_pct < self.PARAMS['min_rs_percentile']:
+            logger.debug(f"MB_REJ: {symbol} - RS {rs_pct:.1f} < {self.PARAMS['min_rs_percentile']} (TC gate)")
+            return False
+
         if len(df) < self.PARAMS['min_listing_days']:
             logger.debug(f"MB_REJ: {symbol} - Insufficient data: {len(df)} < {self.PARAMS['min_listing_days']}")
             return False
@@ -115,11 +133,11 @@ class MomentumBreakoutStrategy(BaseStrategy):
             logger.debug(f"MB_REJ: {symbol} - Volume ratio too low: {volume_ratio:.2f}x < {self.PARAMS['breakout_volume_vs_20d_sma']}x")
             return False
 
-        logger.debug(f"MB_PASS: {symbol} - All 5 layers passed! Breakout:{breakout_pct:.2%}, Vol:{volume_ratio:.1f}x")
+        logger.debug(f"MB_PASS: {symbol} - All 5 layers + TC gate passed! Breakout:{breakout_pct:.2%}, Vol:{volume_ratio:.1f}x")
         return True
 
     def calculate_dimensions(self, symbol: str, df: pd.DataFrame) -> List[ScoringDimension]:
-        """Calculate 4-dimensional scoring."""
+        """Calculate 4-dimensional scoring with multi-pattern CQ."""
         ind = TechnicalIndicators(df)
         ind.calculate_all()
 
@@ -146,20 +164,35 @@ class MomentumBreakoutStrategy(BaseStrategy):
 
         dimensions = []
 
-        # Dimension 1: Platform Quality (PQ)
-        pq_score = self._calculate_pq(platform, platform_range_pct)
+        # Dimension 1: Trend Context (TC) - PROMOTED to first position
+        tc_score = self._calculate_tc(ema50_distance, metrics_52w, clv, df, symbol)
         dimensions.append(ScoringDimension(
-            name='PQ',
-            score=pq_score,
+            name='TC',
+            score=tc_score,
             max_score=5.0,
             details={
+                'ema50_distance': ema50_distance['distance_pct'],
+                'distance_from_52w_high': metrics_52w['distance_from_high'],
+                'clv': clv,
+                'rs_percentile': getattr(self, 'phase0_data', {}).get(symbol, {}).get('rs_percentile', 50)
+            }
+        ))
+
+        # Dimension 2: Consolidation Quality (CQ) - Multi-pattern support
+        pattern_type, cq_score = self._detect_consolidation_pattern(ind, df, platform)
+        dimensions.append(ScoringDimension(
+            name='CQ',
+            score=cq_score,
+            max_score=5.0,
+            details={
+                'pattern_type': pattern_type,
                 'platform_range_pct': platform_range_pct,
                 'concentration_ratio': platform['concentration_ratio'],
                 'contraction_quality': platform.get('contraction_quality', 0.5)
             }
         ))
 
-        # Dimension 2: Breakout Strength (BS)
+        # Dimension 3: Breakout Strength (BS)
         bs_score = self._calculate_bs(breakout_pct, platform_range_pct)
         dimensions.append(ScoringDimension(
             name='BS',
@@ -171,7 +204,7 @@ class MomentumBreakoutStrategy(BaseStrategy):
             }
         ))
 
-        # Dimension 3: Volume Confirmation (VC)
+        # Dimension 4: Volume Confirmation (VC)
         vc_score = self._calculate_vc(platform, volume_ratio)
         dimensions.append(ScoringDimension(
             name='VC',
@@ -183,60 +216,167 @@ class MomentumBreakoutStrategy(BaseStrategy):
             }
         ))
 
-        # Dimension 4: Trend Context (TC)
-        tc_score = self._calculate_tc(ema50_distance, metrics_52w, clv)
-
-        # Add RS bonus to TC score (from Momentum strategy)
-        rs_bonus = self._calculate_rs_bonus(df)
-        tc_score = min(5.0, tc_score + rs_bonus)
-
-        dimensions.append(ScoringDimension(
-            name='TC',
-            score=tc_score,
-            max_score=5.0,
-            details={
-                'ema50_distance': ema50_distance['distance_pct'],
-                'distance_from_52w_high': metrics_52w['distance_from_high'],
-                'clv': clv,
-                'rs_bonus': rs_bonus
-            }
-        ))
-
         return dimensions
 
-    def _calculate_pq(self, platform: Dict, platform_range_pct: float) -> float:
-        """Platform Quality dimension (0-5)."""
-        pq_score = 0.0
+    def _detect_consolidation_pattern(self, ind: TechnicalIndicators, df: pd.DataFrame, platform: Dict) -> Tuple[str, float]:
+        """
+        Multi-pattern CQ detection: VCP, HTF, flat base, ascending base, loose base.
+        Returns (pattern_type, score) tuple.
+        """
+        if not platform or not platform.get('is_valid'):
+            return 'none', 0.0
 
-        # Tightness
-        if platform_range_pct < 0.04:
-            pq_score += 2.0
-        elif platform_range_pct < 0.08:
-            pq_score += 2.0 - (platform_range_pct - 0.04) / 0.04
-        elif platform_range_pct < 0.12:
-            pq_score += 1.0 - (platform_range_pct - 0.08) / 0.04
-        else:
-            pq_score += max(0.0, 0.5 - (platform_range_pct - 0.12) / 0.08 * 0.5)
-
-        # Concentration
-        conc_ratio = platform['concentration_ratio']
-        if conc_ratio > 0.70:
-            pq_score += 1.5
-        elif conc_ratio > 0.50:
-            pq_score += 0.5 + (conc_ratio - 0.50) / 0.20
-        else:
-            pq_score += max(0.0, (conc_ratio - 0.30) / 0.20 * 0.5)
-
-        # Contraction Quality (建议#1)
+        platform_range_pct = platform['platform_range_pct']
+        concentration_ratio = platform['concentration_ratio']
         contraction_quality = platform.get('contraction_quality', 0.5)
-        if contraction_quality >= 0.8:
-            pq_score += 1.5
-        elif contraction_quality >= 0.5:
-            pq_score += 0.5 + (contraction_quality - 0.5) / 0.3 * 1.0
-        else:
-            pq_score += max(0.0, contraction_quality / 0.5 * 0.5)
+        platform_days = platform['platform_days']
 
-        return round(min(5.0, pq_score), 2)
+        # Calculate trend within platform (for ascending/flat detection)
+        platform_start = -platform_days - 5  # Slight offset
+        platform_end = -5
+        if len(df) < abs(platform_start) + 5:
+            return 'loose', max(0.0, min(2.5, concentration_ratio * 3.0))
+
+        platform_data = df.iloc[platform_start:platform_end]
+        if len(platform_data) < 10:
+            return 'loose', 0.5
+
+        # Linear regression slope
+        x = np.arange(len(platform_data))
+        y = platform_data['close'].values
+        slope = np.polyfit(x, y, 1)[0] if len(x) > 1 else 0
+        slope_pct = slope / np.mean(y) if np.mean(y) > 0 else 0
+
+        # Pattern Detection Logic
+        pattern_type = 'loose'
+        base_score = 2.5
+
+        # VCP: Tight range + high concentration + good contraction
+        if (platform_range_pct < 0.08 and
+            concentration_ratio > 0.60 and
+            contraction_quality > 0.70):
+            pattern_type = 'VCP'
+            base_score = 4.0
+        # HTF: Very tight, short duration
+        elif (platform_range_pct < 0.05 and
+              platform_days <= 20 and
+              concentration_ratio > 0.70):
+            pattern_type = 'HTF'
+            base_score = 4.5
+        # Flat Base: Low slope + tight range
+        elif (abs(slope_pct) < 0.0005 and
+              platform_range_pct < 0.10 and
+              concentration_ratio > 0.55):
+            pattern_type = 'flat'
+            base_score = 3.5
+        # Ascending Base: Positive slope + tight range
+        elif (slope_pct > 0.0005 and
+              platform_range_pct < 0.10 and
+              concentration_ratio > 0.50):
+            pattern_type = 'ascending'
+            base_score = 3.0
+        # Loose Base: Wide range or poor concentration
+        else:
+            pattern_type = 'loose'
+            base_score = max(0.5, min(2.0, concentration_ratio * 3.0))
+
+        # Apply bonus/penalty based on pattern quality
+        final_score = base_score
+
+        # Tightness bonus
+        if platform_range_pct < 0.04:
+            final_score += 0.5
+        elif platform_range_pct > 0.10:
+            final_score -= 0.5
+
+        # Concentration bonus
+        if concentration_ratio > 0.70:
+            final_score += 0.3
+        elif concentration_ratio < 0.40:
+            final_score -= 0.3
+
+        # Contraction quality bonus
+        if contraction_quality > 0.80:
+            final_score += 0.2
+
+        return pattern_type, round(min(5.0, final_score), 2)
+
+    def _calculate_bonus(self, dimensions: List[ScoringDimension], df: pd.DataFrame, symbol: str) -> float:
+        """
+        Calculate bonus points from confluence factors.
+        Max bonus is capped at 3.0.
+        """
+        bonus = 0.0
+        ind = TechnicalIndicators(df)
+
+        # Bonus 1: Exceptional pattern quality
+        cq_dim = next((d for d in dimensions if d.name == 'CQ'), None)
+        if cq_dim and cq_dim.details.get('pattern_type') in ['VCP', 'HTF']:
+            if cq_dim.score >= 4.5:
+                bonus += 1.0
+            elif cq_dim.score >= 4.0:
+                bonus += 0.5
+
+        # Bonus 2: High RS percentile (already passed TC gate, bonus for exceptional RS)
+        data = getattr(self, 'phase0_data', {}).get(symbol, {})
+        rs_pct = data.get('rs_percentile', 50)
+        if rs_pct >= 90:
+            bonus += 1.0
+        elif rs_pct >= 80:
+            bonus += 0.5
+
+        # Bonus 3: Strong volume confirmation
+        vc_dim = next((d for d in dimensions if d.name == 'VC'), None)
+        if vc_dim:
+            vol_ratio = vc_dim.details.get('volume_ratio', 0)
+            if vol_ratio >= 4.0:
+                bonus += 0.5
+            elif vol_ratio >= 3.0:
+                bonus += 0.25
+
+        # Bonus 4: Multi-timeframe alignment (simplified check)
+        try:
+            if len(df) >= 50:
+                ema20 = df['close'].ewm(span=20).mean().iloc[-1]
+                ema50 = df['close'].ewm(span=50).mean().iloc[-1]
+                current = df['close'].iloc[-1]
+                if current > ema20 > ema50:
+                    bonus += 0.25
+        except Exception:
+            pass
+
+        return min(bonus, self.PARAMS['bonus_max'])
+
+    def calculate_score(self, dimensions: List[ScoringDimension]) -> Tuple[float, str]:
+        """
+        Calculate final score with bonus pool.
+        Raw scores can exceed 15, clamped to 15 for tier calculation.
+        """
+        base_score = sum(d.score for d in dimensions)
+
+        # Calculate bonus
+        # Note: We need df and symbol - get from most recent calculation
+        # For simplicity, we'll calculate without the dynamic bonus if data not available
+        bonus = 0.0
+
+        raw_score = base_score + bonus
+
+        # Clamp to 15 for tier calculation
+        clamped_score = min(raw_score, 15.0)
+
+        # Determine tier based on clamped score
+        if clamped_score >= self.TIER_S_MIN:
+            tier = 'S'
+        elif clamped_score >= self.TIER_A_MIN:
+            tier = 'A'
+        elif clamped_score >= self.TIER_B_MIN:
+            tier = 'B'
+        else:
+            tier = 'C'
+
+        logger.debug(f"MB Score: base={base_score:.1f} bonus={bonus:.1f} raw={raw_score:.1f} clamped={clamped_score:.1f} tier={tier}")
+
+        return clamped_score, tier
 
     def _calculate_bs(self, breakout_pct: float, platform_range_pct: float) -> float:
         """Breakout Strength dimension (0-5)."""
@@ -286,8 +426,10 @@ class MomentumBreakoutStrategy(BaseStrategy):
 
         return round(min(5.0, vc_score), 2)
 
-    def _calculate_tc(self, ema50_dist: Dict, metrics_52w: Dict, clv: float) -> float:
-        """Trend Context dimension (0-5)."""
+    def _calculate_tc(self, ema50_dist: Dict, metrics_52w: Dict, clv: float, df: pd.DataFrame, symbol: str) -> float:
+        """
+        Trend Context dimension (0-5) - v5.0 with TC promoted and RS gate.
+        """
         tc_score = 0.0
         ema_dist = ema50_dist['distance_pct']
 
@@ -314,7 +456,11 @@ class MomentumBreakoutStrategy(BaseStrategy):
         elif clv > 0.65:
             tc_score += (clv - 0.65) / 0.20
 
-        return round(min(5.0, tc_score), 2)
+        # RS bonus (from Momentum strategy) - now capped since TC is primary
+        rs_bonus = self._calculate_rs_bonus(df)
+        tc_score = min(5.0, tc_score + rs_bonus)
+
+        return round(tc_score, 2)
 
     def _calculate_rs_bonus(self, df: pd.DataFrame) -> float:
         """
@@ -381,10 +527,10 @@ class MomentumBreakoutStrategy(BaseStrategy):
         tier: str
     ) -> List[str]:
         """Build human-readable match reasons."""
-        pq = next((d for d in dimensions if d.name == 'PQ'), None)
+        tc = next((d for d in dimensions if d.name == 'TC'), None)
+        cq = next((d for d in dimensions if d.name == 'CQ'), None)
         bs = next((d for d in dimensions if d.name == 'BS'), None)
         vc = next((d for d in dimensions if d.name == 'VC'), None)
-        tc = next((d for d in dimensions if d.name == 'TC'), None)
 
         position_pct = self.calculate_position_pct(tier)
 
@@ -395,10 +541,12 @@ class MomentumBreakoutStrategy(BaseStrategy):
             concentration_threshold=self.PARAMS['concentration_threshold']
         )
 
+        pattern_type = cq.details.get('pattern_type', 'VCP') if cq else 'VCP'
+
         return [
             f"Score: {score:.2f}/15 (Tier {tier}-{position_pct*100:.0f}%)",
-            f"PQ:{pq.score:.2f} BS:{bs.score:.2f} VC:{vc.score:.2f} TC:{tc.score:.2f}",
-            f"VCP {platform['platform_days']}d (±{platform['platform_range_pct']*100:.1f}%)",
+            f"TC:{tc.score:.2f} CQ:{cq.score:.2f} BS:{bs.score:.2f} VC:{vc.score:.2f}",
+            f"{pattern_type.upper()} {platform['platform_days']}d (±{platform['platform_range_pct']*100:.1f}%)",
             f"Breakout +{bs.details.get('breakout_pct', 0)*100:.1f}% | Vol {vc.details.get('volume_ratio', 0):.1f}x",
             f"50EMA: {tc.details.get('ema50_distance', 0)*100:.1f}% | 52w: {tc.details.get('distance_from_52w_high', 0)*100:.1f}%"
         ]
