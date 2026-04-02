@@ -10,6 +10,7 @@ import pandas as pd
 
 from core.fetcher import DataFetcher
 from core.indicators import TechnicalIndicators
+from core.market_regime import REGIME_SCALARS, EXTREME_EXEMPT_STRATEGIES
 from data.db import Database
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,7 @@ class StrategyMatch:
     confidence: int  # 0-100
     match_reasons: List[str] = field(default_factory=list)
     technical_snapshot: Dict[str, Any] = field(default_factory=dict)
+    regime: str = 'neutral'  # NEW: for position sizing reference
 
 
 @dataclass
@@ -63,6 +65,9 @@ class BaseStrategy(ABC):
     TIER_S_MIN: float = 12.0
     TIER_A_MIN: float = 9.0
     TIER_B_MIN: float = 7.0
+
+    # Direction: 'long' or 'short' - used for regime-adaptive position sizing
+    DIRECTION: str = 'long'
 
     def __init__(self, fetcher: Optional[DataFetcher] = None, db: Optional[Database] = None):
         """Initialize strategy with data fetcher and database."""
@@ -120,9 +125,31 @@ class BaseStrategy(ABC):
         else:
             return total, 'C'  # Reject
 
-    def calculate_position_pct(self, tier: str) -> float:
-        """Get position size percentage based on tier."""
-        return {'S': 0.20, 'A': 0.10, 'B': 0.05, 'C': 0.0}.get(tier, 0.0)
+    def calculate_position_pct(self, tier: str, regime: str = 'neutral') -> float:
+        """
+        Calculate position size percentage with regime scalar.
+
+        Args:
+            tier: 'S', 'A', 'B', or 'C'
+            regime: Market regime from MarketRegimeDetector
+
+        Returns:
+            Position size as decimal (e.g., 0.20 for 20%)
+        """
+        base = {'S': 0.20, 'A': 0.10, 'B': 0.05, 'C': 0.0}.get(tier, 0.0)
+
+        if base == 0.0:
+            return 0.0
+
+        # Get scalar
+        if regime == 'extreme_vix' and self.NAME in EXTREME_EXEMPT_STRATEGIES:
+            scalar = 1.0
+        else:
+            scalar = REGIME_SCALARS.get(regime, {}).get(self.DIRECTION, 1.0)
+
+        final = base * scalar
+        logger.debug(f"{self.NAME} position: tier={tier} base={base} regime={regime} scalar={scalar} final={final:.3f}")
+        return final
 
     @abstractmethod
     def calculate_entry_exit(
