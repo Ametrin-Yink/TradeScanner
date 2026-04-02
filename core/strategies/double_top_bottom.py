@@ -35,7 +35,7 @@ class DoubleTopBottomStrategy(BaseStrategy):
         'max_distance_from_level': 0.03,  # 3% from 60d high/low
         'target_r_multiplier': 3.0,
         'support_tolerance_atr': 0.5,
-        'min_test_interval_days': 10,  # Expert suggestion B: quality test interval
+        'min_test_interval_days': 7,  # RELAXED: Was 10 days, now 7 days
         'volume_veto_threshold': 1.5,
         'breakout_threshold_atr': 0.5,
         'time_decay_days': 3,
@@ -123,7 +123,7 @@ class DoubleTopBottomStrategy(BaseStrategy):
             self.market_direction = 'neutral'
 
     def _prefilter_symbol(self, symbol: str, df: pd.DataFrame) -> bool:
-        """Pre-filter symbol based on market direction."""
+        """Pre-filter symbol based on market direction with logging."""
         ind = TechnicalIndicators(df)
         ind.calculate_all()
 
@@ -134,10 +134,12 @@ class DoubleTopBottomStrategy(BaseStrategy):
             # Distribution top mode
             high_60d = price_metrics.get('high_60d')
             if high_60d is None:
+                logger.debug(f"DTB_REJ: {symbol} - No 60d high available")
                 return False
 
             distance = abs(high_60d - current_price) / current_price
             if distance > self.PARAMS['max_distance_from_level']:
+                logger.debug(f"DTB_REJ: {symbol} - Too far from 60d high: {distance:.2%} > {self.PARAMS['max_distance_from_level']:.2%}")
                 return False
 
             # Check for weakness
@@ -147,16 +149,21 @@ class DoubleTopBottomStrategy(BaseStrategy):
 
             weakness = ema8 < ema21 or current_price < ema8
             if not weakness:
+                logger.debug(f"DTB_REJ: {symbol} - No weakness signal (EMA8 {ema8:.2f} vs EMA21 {ema21:.2f})")
                 return False
+
+            logger.debug(f"DTB_PASS: {symbol} - Near 60d high {high_60d:.2f}, showing weakness")
 
         else:  # long mode
             # Accumulation bottom mode
             low_60d = price_metrics.get('low_60d')
             if low_60d is None:
+                logger.debug(f"DTB_REJ: {symbol} - No 60d low available")
                 return False
 
             distance = abs(current_price - low_60d) / current_price
             if distance > self.PARAMS['max_distance_from_level']:
+                logger.debug(f"DTB_REJ: {symbol} - Too far from 60d low: {distance:.2%} > {self.PARAMS['max_distance_from_level']:.2%}")
                 return False
 
             # Check for strength
@@ -166,7 +173,10 @@ class DoubleTopBottomStrategy(BaseStrategy):
 
             strength = ema8 > ema21 or current_price > ema8
             if not strength:
+                logger.debug(f"DTB_REJ: {symbol} - No strength signal (EMA8 {ema8:.2f} vs EMA21 {ema21:.2f})")
                 return False
+
+            logger.debug(f"DTB_PASS: {symbol} - Near 60d low {low_60d:.2f}, showing strength")
 
         return True
 
