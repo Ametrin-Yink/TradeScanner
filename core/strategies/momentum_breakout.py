@@ -38,8 +38,9 @@ class MomentumBreakoutStrategy(BaseStrategy):
     }
 
     def filter(self, symbol: str, df: pd.DataFrame) -> bool:
-        """5-layer filtering system."""
+        """5-layer filtering system with diagnostic logging."""
         if len(df) < self.PARAMS['min_listing_days']:
+            logger.debug(f"MB_REJ: {symbol} - Insufficient data: {len(df)} < {self.PARAMS['min_listing_days']}")
             return False
 
         ind = TechnicalIndicators(df)
@@ -50,26 +51,32 @@ class MomentumBreakoutStrategy(BaseStrategy):
         # Layer 1: Liquidity
         dollar_volume = current_price * df['volume'].iloc[-1]
         if dollar_volume < self.PARAMS['min_dollar_volume']:
+            logger.debug(f"MB_REJ: {symbol} - Low dollar volume: ${dollar_volume/1e6:.1f}M < ${self.PARAMS['min_dollar_volume']/1e6:.0f}M")
             return False
 
         adr_pct = ind.indicators.get('adr', {}).get('adr_pct', 0)
         if adr_pct < self.PARAMS['min_atr_pct']:
+            logger.debug(f"MB_REJ: {symbol} - Low ADR: {adr_pct:.3f} < {self.PARAMS['min_atr_pct']}")
             return False
 
         # Layer 2: 50EMA deadzone filter
         ema50_distance = ind.distance_from_ema50()
         if ema50_distance['distance_pct'] > self.PARAMS['max_distance_from_50ema']:
+            logger.debug(f"MB_REJ: {symbol} - Far from 50EMA: {ema50_distance['distance_pct']:.3f} > {self.PARAMS['max_distance_from_50ema']}")
             return False
 
         ema50_slope = ind.calculate_stable_ema_slope(period=50, comparison_days=3)
         if not ema50_slope['is_uptrend']:
+            logger.debug(f"MB_REJ: {symbol} - EMA50 not in uptrend")
             return False
 
         # Layer 3: 52-week high proximity
         metrics_52w = ind.calculate_52w_metrics()
         if metrics_52w['distance_from_high'] is None:
+            logger.debug(f"MB_REJ: {symbol} - Cannot calculate 52w metrics")
             return False
         if metrics_52w['distance_from_high'] > self.PARAMS['max_distance_from_52w_high']:
+            logger.debug(f"MB_REJ: {symbol} - Far from 52w high: {metrics_52w['distance_from_high']:.3f} > {self.PARAMS['max_distance_from_52w_high']}")
             return False
 
         # Layer 4: VCP Platform Detection
@@ -80,9 +87,11 @@ class MomentumBreakoutStrategy(BaseStrategy):
         )
 
         if platform is None or not platform.get('is_valid'):
+            logger.debug(f"MB_REJ: {symbol} - No valid VCP platform detected")
             return False
 
         if platform['volume_contraction_ratio'] > self.PARAMS['volume_contraction_vs_platform']:
+            logger.debug(f"MB_REJ: {symbol} - Poor volume contraction: {platform['volume_contraction_ratio']:.2f} > {self.PARAMS['volume_contraction_vs_platform']}")
             return False
 
         # Layer 5: EP Breakout Confirmation
@@ -90,10 +99,12 @@ class MomentumBreakoutStrategy(BaseStrategy):
         breakout_pct = (current_price - platform_high) / platform_high
 
         if breakout_pct < self.PARAMS['breakout_pct']:
+            logger.debug(f"MB_REJ: {symbol} - Breakout too small: {breakout_pct:.3f} < {self.PARAMS['breakout_pct']}")
             return False
 
         clv = ind.calculate_clv()
         if clv < self.PARAMS['clv_threshold']:
+            logger.debug(f"MB_REJ: {symbol} - CLV too low: {clv:.3f} < {self.PARAMS['clv_threshold']}")
             return False
 
         current_volume = df['volume'].iloc[-1]
@@ -101,8 +112,10 @@ class MomentumBreakoutStrategy(BaseStrategy):
         volume_ratio = current_volume / volume_sma20 if volume_sma20 > 0 else 0
 
         if volume_ratio < self.PARAMS['breakout_volume_vs_20d_sma']:
+            logger.debug(f"MB_REJ: {symbol} - Volume ratio too low: {volume_ratio:.2f}x < {self.PARAMS['breakout_volume_vs_20d_sma']}x")
             return False
 
+        logger.debug(f"MB_PASS: {symbol} - All 5 layers passed! Breakout:{breakout_pct:.2%}, Vol:{volume_ratio:.1f}x")
         return True
 
     def calculate_dimensions(self, symbol: str, df: pd.DataFrame) -> List[ScoringDimension]:
