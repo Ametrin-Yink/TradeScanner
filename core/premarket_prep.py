@@ -365,6 +365,36 @@ class PreMarketPrep:
             logger.debug(f"Failed to get data for {symbol}: {e}")
             return None
 
+    def _calculate_accum_ratio(self, df: pd.DataFrame, days: int = 15) -> float:
+        """
+        Calculate accumulation ratio: avg volume on up-days / avg volume on down-days.
+        """
+        if len(df) < days:
+            return 1.0
+
+        recent = df.tail(days).copy()
+
+        # Handle multi-level columns from yfinance
+        if isinstance(recent.columns, pd.MultiIndex):
+            close_col = ('close', recent.columns[0][1]) if recent.columns[0][1] else 'close'
+            volume_col = ('volume', recent.columns[0][1]) if recent.columns[0][1] else 'volume'
+            recent['price_change'] = recent[close_col].diff()
+            up_days = recent[recent['price_change'] > 0]
+            down_days = recent[recent['price_change'] < 0]
+            avg_vol_up = up_days[volume_col].mean() if len(up_days) > 0 else 0
+            avg_vol_down = down_days[volume_col].mean() if len(down_days) > 0 else 0
+        else:
+            recent['price_change'] = recent['close'].diff()
+            up_days = recent[recent['price_change'] > 0]
+            down_days = recent[recent['price_change'] < 0]
+            avg_vol_up = up_days['volume'].mean() if len(up_days) > 0 else 0
+            avg_vol_down = down_days['volume'].mean() if len(down_days) > 0 else 0
+
+        if avg_vol_down == 0:
+            return 1.0
+
+        return avg_vol_up / avg_vol_down
+
     def _calculate_tier1_metrics(self, symbol: str, df: pd.DataFrame) -> Optional[Dict]:
         """Calculate Tier 1 universal metrics for a symbol.
 
@@ -432,6 +462,21 @@ class PreMarketPrep:
             # RSI
             rsi = ind.get('rsi', {}).get('rsi14', 50)
 
+            # NEW: Calculate accum_ratio_15d (for Strategy H)
+            accum_ratio = self._calculate_accum_ratio(df, days=15)
+
+            # NEW: Calculate gap metrics (for Strategy G)
+            gap_1d_pct = (df['open'].iloc[-1] / df['close'].iloc[-2] - 1) if len(df) >= 2 else 0
+            gap_direction = 'up' if gap_1d_pct > 0.02 else ('down' if gap_1d_pct < -0.02 else 'none')
+
+            # NEW: Fetch earnings date
+            earnings_date = self.fetcher.fetch_earnings_date(symbol)
+            days_to_earnings = None
+            if earnings_date:
+                ed = datetime.fromisoformat(earnings_date).date()
+                today = datetime.now().date()
+                days_to_earnings = (ed - today).days
+
             return {
                 'cache_date': datetime.now().date().isoformat(),
                 'current_price': current_price,
@@ -457,7 +502,12 @@ class PreMarketPrep:
                 'low_60d': low_60d,
                 'gaps_5d': int(gaps_5d),
                 'rsi_14': rsi,
-                'data_days': len(df)
+                'data_days': len(df),
+                'accum_ratio_15d': accum_ratio,
+                'days_to_earnings': days_to_earnings,
+                'earnings_date': earnings_date,
+                'gap_1d_pct': gap_1d_pct,
+                'gap_direction': gap_direction,
             }
 
         except Exception as e:

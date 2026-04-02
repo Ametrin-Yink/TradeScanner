@@ -436,6 +436,38 @@ class DataFetcher:
         except Exception as e:
             logger.error(f"Failed to fetch Dow Jones symbols: {e}")
             return []
+    def fetch_earnings_date(self, symbol: str) -> Optional[str]:
+        """
+        Fetch next earnings date for symbol.
+
+        Returns:
+            ISO date string (YYYY-MM-DD) or None
+        """
+        try:
+            ticker = yf.Ticker(symbol)
+            earnings_dates = ticker.earnings_dates
+
+            if earnings_dates is None or earnings_dates.empty:
+                return None
+
+            # Find first future earnings date
+            from datetime import datetime
+            today = datetime.now().date()
+
+            for date_idx in earnings_dates.index:
+                if hasattr(date_idx, 'date'):
+                    date = date_idx.date()
+                else:
+                    date = date_idx
+
+                if date >= today:
+                    return date.isoformat()
+
+            return None
+        except Exception as e:
+            logger.debug(f"Failed to fetch earnings date for {symbol}: {e}")
+            return None
+
     def fetch_stock_info(self, symbol: str) -> Dict[str, str]:
         """
         Fetch stock info including sector and industry from yfinance.
