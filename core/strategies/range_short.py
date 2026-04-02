@@ -107,7 +107,7 @@ class RangeShortStrategy(BaseStrategy):
         return super().screen(prefiltered)
 
     def _prefilter_symbol(self, symbol: str, df: pd.DataFrame) -> bool:
-        """Pre-filter symbol for short mode only."""
+        """Pre-filter symbol for short mode only with relaxed criteria."""
         ind = TechnicalIndicators(df)
         ind.calculate_all()
 
@@ -119,36 +119,43 @@ class RangeShortStrategy(BaseStrategy):
         calc = SupportResistanceCalculator(df)
         sr_levels = calc.calculate_all()
 
-        # Must be in downtrend
-        if not (current_price < ema21 < ema50):
+        # RELAXED: Must be below EMA50 (don't require EMA21 in between)
+        # Original: if not (current_price < ema21 < ema50):
+        if current_price >= ema50:
+            logger.debug(f"RS_REJ: {symbol} - Price {current_price:.2f} >= EMA50 {ema50:.2f}")
             return False
 
         # Must have resistance near price
         resistances = sr_levels.get('resistance', [])
         if not resistances:
+            logger.debug(f"RS_REJ: {symbol} - No resistance levels")
             return False
 
         resistances_above = [r for r in resistances if r > current_price]
         if not resistances_above:
+            logger.debug(f"RS_REJ: {symbol} - No resistance above price {current_price:.2f}")
             return False
 
         nearest_resistance = min(resistances_above)
         distance_pct = (nearest_resistance - current_price) / current_price
 
         if distance_pct > self.PARAMS['max_distance_from_level']:
+            logger.debug(f"RS_REJ: {symbol} - Resistance too far: {distance_pct:.2%} > {self.PARAMS['max_distance_from_level']:.2%}")
             return False
 
-        # Check width constraint
+        # RELAXED: Check width constraint
         supports = sr_levels.get('support', [])
         if supports:
             nearest_support = max(s for s in supports if s < current_price) if any(s < current_price for s in supports) else nearest_resistance * 0.9
             range_width = (nearest_resistance - nearest_support) / nearest_support
             atr_pct = ind.indicators.get('atr', {}).get('atr_pct', 0.02)
 
-            if range_width < self.PARAMS['min_range_width_atr_multiple'] * atr_pct:
-                logger.debug(f"{symbol}: Range too narrow ({range_width:.3f})")
+            # RELAXED: From 1.5x to 1.0x ATR multiple
+            if range_width < self.PARAMS['min_range_width_atr_multiple'] * 0.67 * atr_pct:
+                logger.debug(f"RS_REJ: {symbol} - Range too narrow: {range_width:.3f}")
                 return False
 
+        logger.debug(f"RS_PASS: {symbol} - Resistance at {nearest_resistance:.2f}, distance {distance_pct:.2%}")
         return True
 
     def filter(self, symbol: str, df: pd.DataFrame) -> bool:
