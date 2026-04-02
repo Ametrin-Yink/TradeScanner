@@ -17,8 +17,8 @@ class SupportBounceStrategy(BaseStrategy):
     """Strategy E: 支撑回踩买入 - 支撑位假跌破后反弹，区间存在加分（合并原Range多头）"""
 
     NAME = "SupportBounce"
-    STRATEGY_TYPE = StrategyType.UPTHRUST_REBOUND
-    DESCRIPTION = "SupportBounce v2.0 - Support level false breakdown rebound, range existence bonus"
+    STRATEGY_TYPE = StrategyType.C  # Changed from UPTHRUST_REBOUND
+    DESCRIPTION = "SupportBounce v5.0"
     DIMENSIONS = ['SQ', 'VD', 'RB']
 
     PARAMS = {

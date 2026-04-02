@@ -23,8 +23,8 @@ class CapitulationReboundStrategy(BaseStrategy):
     """
 
     NAME = "CapitulationRebound"
-    STRATEGY_TYPE = StrategyType.PARABOLIC
-    DESCRIPTION = "CapitulationRebound v2.1 - Capitulation bottom detection with volume climax"
+    STRATEGY_TYPE = StrategyType.F  # Changed from PARABOLIC
+    DESCRIPTION = "CapitulationRebound v5.0"
     DIMENSIONS = ['MO', 'EX', 'VC']
 
     PARAMS = {

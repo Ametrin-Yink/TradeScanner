@@ -17,13 +17,15 @@ logger = logging.getLogger(__name__)
 
 
 class StrategyType(Enum):
-    """6 trading strategies."""
-    EP = "EP"  # Earnings Play
-    SHORYUKEN = "Shoryuken"  # Pullback to EMA
-    UPTHRUST_REBOUND = "U&R"  # Upthrust & Rebound
-    RANGE_SUPPORT = "RangeSupport"  # Range bottom support
-    DTSS = "DTSS"  # Distribution Top Sell Signal
-    PARABOLIC = "Parabolic"  # Parabolic short
+    """8 trading strategies - clean A-H naming."""
+    A = "A"  # MomentumBreakout
+    B = "B"  # PullbackEntry
+    C = "C"  # SupportBounce
+    D = "D"  # DistributionTop (short)
+    E = "E"  # AccumulationBottom (long)
+    F = "F"  # CapitulationRebound
+    G = "G"  # EarningsGap
+    H = "H"  # RelativeStrengthLong
 
 
 @dataclass

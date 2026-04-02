@@ -14,8 +14,8 @@ class PullbackEntryStrategy(BaseStrategy):
     """Strategy C: Shoryuken v3.0 - Pullback to EMA with 4D scoring."""
 
     NAME = "PullbackEntry"
-    STRATEGY_TYPE = StrategyType.SHORYUKEN
-    DESCRIPTION = "PullbackEntry v3.0 - Institutional Grade Pullback System"
+    STRATEGY_TYPE = StrategyType.B  # Changed from SHORYUKEN
+    DESCRIPTION = "PullbackEntry v4.0 (unchanged)"
     DIMENSIONS = ['TI', 'RC', 'VC', 'BONUS']
 
     # Shoryuken Parameters

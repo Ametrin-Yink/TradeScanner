@@ -303,14 +303,14 @@ def test_screen_all(mock_momentum, mock_ep, mock_fetcher, mock_db):
 def test_strategy_types():
     """Test all strategy types are defined."""
     strategies = [
-        StrategyType.EP,
-        StrategyType.MOMENTUM,
-        StrategyType.SHORYUKEN,
-        StrategyType.PULLBACKS,
-        StrategyType.UPTHRUST_REBOUND,
-        StrategyType.RANGE_SUPPORT,
-        StrategyType.DTSS,
-        StrategyType.PARABOLIC,
+        StrategyType.A,
+        StrategyType.B,
+        StrategyType.C,
+        StrategyType.D,
+        StrategyType.E,
+        StrategyType.F,
+        StrategyType.G,
+        StrategyType.H,
     ]
 
     assert len(strategies) == 8

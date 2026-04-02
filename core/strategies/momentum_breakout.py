@@ -14,8 +14,8 @@ class MomentumBreakoutStrategy(BaseStrategy):
     """Strategy A: VCP-EP - Captures demand burst after supply exhaustion."""
 
     NAME = "MomentumBreakout"
-    STRATEGY_TYPE = StrategyType.EP
-    DESCRIPTION = "MomentumBreakout v2.0 - VCP platform + volume breakout, RS>85 percentile bonus"
+    STRATEGY_TYPE = StrategyType.A  # Changed from EP
+    DESCRIPTION = "MomentumBreakout v5.0"
     DIMENSIONS = ['PQ', 'BS', 'VC', 'TC']
 
     # VCP-EP Parameters

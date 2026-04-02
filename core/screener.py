@@ -42,9 +42,11 @@ class StrategyScreener:
         "MomentumBreakout": "breakout_momentum",
         "PullbackEntry": "trend_pullback",
         "SupportBounce": "rebound_range",
-        "RangeShort": "rebound_range",
-        "DoubleTopBottom": "rebound_range",
+        "DistributionTop": "distribution_top",
+        "AccumulationBottom": "accumulation_bottom",
         "CapitulationRebound": "extreme_reversal",
+        "EarningsGap": "breakout_momentum",
+        "RelativeStrengthLong": "trend_pullback",
     }
 
     # Phase 0: Data requirements
@@ -70,8 +72,8 @@ class StrategyScreener:
 
         # Initialize all strategy plugins
         self._strategies = {}
-        for strategy_type in [StrategyType.EP, StrategyType.SHORYUKEN, StrategyType.UPTHRUST_REBOUND,
-                               StrategyType.RANGE_SUPPORT, StrategyType.DTSS, StrategyType.PARABOLIC]:
+        for strategy_type in [StrategyType.A, StrategyType.B, StrategyType.C,
+                               StrategyType.D, StrategyType.E, StrategyType.F]:
             self._strategies[strategy_type] = create_strategy(
                 strategy_type, fetcher=self.fetcher, db=self.db
             )
@@ -346,77 +348,72 @@ class StrategyScreener:
             self._market_regime = 'neutral'
             return 'neutral'
 
-    def _allocate_candidates(
+    def _allocate_candidates_by_strategy(
         self,
         all_candidates: List[StrategyMatch],
-        group_slots: Dict[str, int]
+        strategy_slots: Dict[str, int]
     ) -> List[StrategyMatch]:
         """
-        Allocate 30 candidates from global pool based on group slots.
-
-        Phase 2: Dynamic allocation from global candidate pool.
+        Allocate 30 candidates from global pool based on per-strategy slots.
 
         Args:
             all_candidates: All candidates from all strategies (global pool)
-            group_slots: Target slots per strategy group (e.g., {'breakout_momentum': 15, ...})
+            strategy_slots: Target slots per strategy (e.g., {'MomentumBreakout': 4, ...})
 
         Returns:
             List of 30 selected StrategyMatch objects
         """
         from collections import defaultdict
 
-        # Group candidates by strategy group
-        group_candidates = defaultdict(list)
-
+        # Group candidates by strategy name
+        strategy_candidates = defaultdict(list)
         for candidate in all_candidates:
-            # Find which group this strategy belongs to using strategy name
-            group = self.STRATEGY_NAME_TO_GROUP.get(candidate.strategy)
-            if group:
-                group_candidates[group].append(candidate)
+            strategy_candidates[candidate.strategy].append(candidate)
 
         selected = []
         selected_symbols_strategies = set()  # Track (symbol, strategy) pairs
 
-        # Phase 2.1: Select from each group according to slots (minimum diversity)
-        for group, slots in group_slots.items():
-            candidates = group_candidates.get(group, [])
+        # Phase 2.1: Select from each strategy according to slots
+        for strategy, slots in strategy_slots.items():
+            candidates = strategy_candidates.get(strategy, [])
 
             # Sort by score descending
             candidates.sort(key=lambda x: x.technical_snapshot.get('score', 0), reverse=True)
 
-            # Select top N for this group
+            # Select top N for this strategy (up to slot limit)
+            selected_from_strategy = 0
             for candidate in candidates:
                 if len(selected) >= self.TOTAL_CANDIDATES_TARGET:
+                    break
+                if selected_from_strategy >= slots:
                     break
                 key = (candidate.symbol, candidate.strategy)
                 if key not in selected_symbols_strategies:
                     selected.append(candidate)
                     selected_symbols_strategies.add(key)
+                    selected_from_strategy += 1
 
-            selected_from_group = len([c for c in selected
-                                      if self.STRATEGY_NAME_TO_GROUP.get(c.strategy) == group])
-            logger.info(f"[{group}] Selected {selected_from_group}/{len(candidates)} candidates (target: {slots})")
+            logger.info(f"[{strategy}] Selected {selected_from_strategy}/{len(candidates)} candidates (target: {slots})")
 
-        # Phase 2.2: If underfilled, add from underrepresented groups first
+        # Phase 2.2: If underfilled, add from underrepresented strategies first
         if len(selected) < self.TOTAL_CANDIDATES_TARGET:
             needed = self.TOTAL_CANDIDATES_TARGET - len(selected)
 
-            # Calculate how underfilled each group is
-            group_fill_ratio = {}
-            for group, slots in group_slots.items():
-                group_count = len([c for c in selected
-                                  if self.STRATEGY_NAME_TO_GROUP.get(c.strategy) == group])
-                group_fill_ratio[group] = group_count / slots if slots > 0 else 1.0
+            # Calculate how underfilled each strategy is
+            strategy_fill_ratio = {}
+            for strategy, slots in strategy_slots.items():
+                strategy_count = len([c for c in selected if c.strategy == strategy])
+                strategy_fill_ratio[strategy] = strategy_count / slots if slots > 0 else 1.0
 
-            # Sort groups by fill ratio (most underfilled first)
-            underfilled_groups = sorted(group_fill_ratio.keys(), key=lambda g: group_fill_ratio[g])
+            # Sort strategies by fill ratio (most underfilled first)
+            underfilled_strategies = sorted(strategy_fill_ratio.keys(), key=lambda s: strategy_fill_ratio[s])
 
-            # Add from underfilled groups first
-            for group in underfilled_groups:
+            # Add from underfilled strategies first
+            for strategy in underfilled_strategies:
                 if len(selected) >= self.TOTAL_CANDIDATES_TARGET:
                     break
 
-                candidates = [c for c in group_candidates.get(group, [])
+                candidates = [c for c in strategy_candidates.get(strategy, [])
                              if (c.symbol, c.strategy) not in selected_symbols_strategies]
                 candidates.sort(key=lambda x: x.technical_snapshot.get('score', 0), reverse=True)
 
@@ -540,47 +537,23 @@ class StrategyScreener:
         """
         self.market_data = market_data or {}
 
-        # Map strategy names to group slots
-        # Strategy name -> group mapping
-        STRATEGY_TO_GROUP = {
-            'MomentumBreakout': 'breakout_momentum',
-            'PullbackEntry': 'trend_pullback',
-            'SupportBounce': 'rebound_range',
-            'RangeShort': 'rebound_range',
-            'DoubleTopBottom': 'rebound_range',
-            'CapitulationRebound': 'extreme_reversal',
-        }
-
-        # Calculate group slots from AI allocation
+        # Use AI allocation directly (per-strategy slots)
         if strategy_allocation:
-            # Sum allocations by group
-            group_slots = defaultdict(int)
-            for strategy_name, slots in strategy_allocation.items():
-                group = STRATEGY_TO_GROUP.get(strategy_name)
-                if group:
-                    group_slots[group] += slots
-
-            # Convert to regular dict and validate
-            group_slots = dict(group_slots)
-            total = sum(group_slots.values())
-
-            if total != self.TOTAL_CANDIDATES_TARGET:
-                logger.warning(f"Allocation total is {total}, adjusting to {self.TOTAL_CANDIDATES_TARGET}")
-                # Adjust largest group
-                if group_slots:
-                    largest = max(group_slots, key=group_slots.get)
-                    group_slots[largest] += self.TOTAL_CANDIDATES_TARGET - total
-
-            logger.info(f"AI group allocation: {group_slots}")
+            strategy_slots = strategy_allocation
+            logger.info(f"AI strategy allocation: {strategy_slots}")
         else:
-            # Default equal allocation across 4 groups
-            group_slots = {
-                'breakout_momentum': 8,
-                'trend_pullback': 8,
-                'rebound_range': 7,
-                'extreme_reversal': 7
+            # Default equal allocation across 8 strategies
+            strategy_slots = {
+                'MomentumBreakout': 4,
+                'PullbackEntry': 4,
+                'SupportBounce': 4,
+                'DistributionTop': 4,
+                'AccumulationBottom': 4,
+                'CapitulationRebound': 4,
+                'EarningsGap': 3,
+                'RelativeStrengthLong': 3
             }
-            logger.info(f"Default group allocation: {group_slots}")
+            logger.info(f"Default strategy allocation: {strategy_slots}")
 
         # Load earnings if not already loaded
         if not self.earnings_calendar:
@@ -732,13 +705,13 @@ class StrategyScreener:
 
         # ============================================================
         # PHASE 2: Dynamic Allocation from Global Pool
-        # Select 30 candidates based on group slots allocation
+        # Select 30 candidates based on per-strategy slots allocation
         # ============================================================
         logger.info("=" * 60)
         logger.info("PHASE 2: Dynamic Allocation (30 slots)")
         logger.info("=" * 60)
 
-        selected_candidates = self._allocate_candidates(all_candidates, group_slots)
+        selected_candidates = self._allocate_candidates_by_strategy(all_candidates, strategy_slots)
 
         logger.info(f"=" * 60)
         logger.info(f"TOTAL: {len(selected_candidates)} candidates selected")
