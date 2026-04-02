@@ -60,12 +60,23 @@ class CompleteScanner:
         self.opportunity_analyzer = OpportunityAnalyzer()
         self.reporter = ReportGenerator()
         self.notifier = MultiNotifier(
-            discord_webhook=getattr(settings, 'DISCORD_WEBHOOK', None),
-            wechat_webhook=getattr(settings, 'WECHAT_WEBHOOK', None)
+            discord_webhook=settings.get_secret('discord.webhook_url'),
+            wechat_webhook=settings.get_secret('wechat.webhook_url')
         )
 
         # Phase timing tracking
         self._phase_times: Dict[str, int] = {}
+        self._sentiment_result: Optional[Dict] = None
+
+        # Strategy descriptions for AI allocation
+        self.STRATEGY_DESCRIPTIONS = {
+            "MomentumBreakout": "VCP platform + volume breakout with RS>85 percentile bonus - for momentum plays",
+            "PullbackEntry": "Institutional Grade Pullback System - buying pullbacks to EMA support",
+            "SupportBounce": "Support level false breakdown rebound - range existence bonus",
+            "RangeShort": "Short-only at resistance in bearish/neutral markets",
+            "DoubleTopBottom": "Distribution top / accumulation bottom with left/right side grading",
+            "CapitulationRebound": "Capitulation bottom detection with volume climax"
+        }
 
     def is_trading_day(self) -> bool:
         """Check if today is a US trading day."""
@@ -127,11 +138,13 @@ class CompleteScanner:
 
             symbols = phase0_result['symbols']
 
-            # Phase 1: Market Sentiment
-            sentiment = self._phase1_market_sentiment()
+            # Phase 1: Market Sentiment & Strategy Allocation
+            phase1_result = self._phase1_market_sentiment()
+            sentiment = phase1_result['sentiment']
+            strategy_allocation = phase1_result['allocation']
 
-            # Phase 2: Strategy Screening
-            phase2_result = self._phase2_screening(symbols)
+            # Phase 2: Strategy Screening with AI-driven allocation
+            phase2_result = self._phase2_screening(symbols, strategy_allocation)
             candidates = phase2_result['candidates']
             fail_symbols = phase2_result['fail_symbols']
 
@@ -226,11 +239,11 @@ class CompleteScanner:
 
         return result
 
-    def _phase1_market_sentiment(self) -> str:
-        """Phase 1: Market Sentiment Analysis.
+    def _phase1_market_sentiment(self) -> Dict:
+        """Phase 1: Market Sentiment Analysis with Strategy Allocation.
 
         Returns:
-            Market sentiment string
+            Dict with 'sentiment' and 'allocation'
         """
         logger.info("\n" + "=" * 60)
         logger.info("PHASE 1: Market Sentiment Analysis")
@@ -239,24 +252,60 @@ class CompleteScanner:
         phase_start = datetime.now()
 
         try:
+            # Get market sentiment
             sentiment_result = self.market_analyzer.analyze_sentiment()
             sentiment = sentiment_result.get('sentiment', 'neutral')
             logger.info(f"Market sentiment: {sentiment.upper()}")
+
+            # Store sentiment_result for use in report generation
+            self._sentiment_result = sentiment_result
+
+            # Get AI-driven strategy allocation
+            logger.info("\nRequesting AI strategy allocation...")
+            allocation = self.market_analyzer.analyze_strategy_allocation(
+                sentiment=sentiment,
+                strategy_descriptions=self.STRATEGY_DESCRIPTIONS
+            )
+
+            # Validate allocation
+            total_slots = sum(allocation.values())
+            logger.info(f"Strategy allocation: {allocation}")
+            logger.info(f"Total slots: {total_slots}")
+
         except Exception as e:
-            logger.error(f"Market sentiment analysis failed: {e}")
+            logger.error(f"Market sentiment/allocation analysis failed: {e}")
             sentiment = 'neutral'
+            self._sentiment_result = {
+                'sentiment': 'neutral',
+                'confidence': 50,
+                'reasoning': f'Analysis failed: {str(e)}',
+                'key_factors': []
+            }
+            # Equal fallback allocation
+            allocation = {
+                "MomentumBreakout": 5,
+                "PullbackEntry": 5,
+                "SupportBounce": 5,
+                "RangeShort": 5,
+                "DoubleTopBottom": 5,
+                "CapitulationRebound": 5
+            }
 
         duration = (datetime.now() - phase_start).total_seconds()
         self._phase_times['phase1'] = int(duration)
         logger.info(f"Phase 1 complete in {duration:.1f}s")
 
-        return sentiment
+        return {
+            'sentiment': sentiment,
+            'allocation': allocation
+        }
 
-    def _phase2_screening(self, symbols: List[str]) -> Dict:
+    def _phase2_screening(self, symbols: List[str], strategy_allocation: Optional[Dict[str, int]] = None) -> Dict:
         """Phase 2: Strategy Screening.
 
         Args:
             symbols: List of symbols to screen
+            strategy_allocation: Optional dict mapping strategy names to slot counts
 
         Returns:
             Dict with candidates and fail_symbols
@@ -268,10 +317,15 @@ class CompleteScanner:
         phase_start = datetime.now()
 
         logger.info(f"Screening {len(symbols)} symbols with 6 strategies")
+        if strategy_allocation:
+            logger.info(f"AI allocation: {strategy_allocation}")
 
         # Screen all symbols using pre-calculated Tier 1 data
-        # The screener will use cached Tier 1/Tier 3 data
-        candidates = self.screener.screen_all(symbols=symbols)
+        # Pass allocation to screener for dynamic slot allocation
+        candidates = self.screener.screen_all(
+            symbols=symbols,
+            strategy_allocation=strategy_allocation
+        )
 
         # For now, we don't track individual failures in the new flow
         # Could be enhanced later
@@ -293,7 +347,7 @@ class CompleteScanner:
         candidates: List,
         sentiment: str
     ) -> List:
-        """Phase 3: AI Analysis of top candidates.
+        """Phase 3: AI Analysis of top candidates (parallelized).
 
         Args:
             candidates: List of strategy matches
@@ -302,6 +356,8 @@ class CompleteScanner:
         Returns:
             List of analyzed opportunities
         """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
         logger.info("\n" + "=" * 60)
         logger.info("PHASE 3: AI Analysis")
         logger.info("=" * 60)
@@ -311,17 +367,40 @@ class CompleteScanner:
         # Select top 10
         top_10 = self.selector.select_top_10(candidates, sentiment)
         logger.info(f"Selected {len(top_10)} opportunities for deep analysis")
+        logger.info(f"Analyzing with 2 parallel workers...")
 
-        # Analyze each one
+        # Analyze in parallel with 2 workers (for 2-core server)
         analyzed = []
-        for i, match in enumerate(top_10):
+        completed = 0
+
+        def analyze_single(match):
+            """Analyze a single opportunity."""
             try:
-                logger.info(f"Analyzing {match.symbol} ({i+1}/{len(top_10)})...")
                 analysis = self.opportunity_analyzer.analyze_opportunity(match, sentiment)
-                analyzed.append(analysis)
-                gc.collect()
+                return analysis
             except Exception as e:
                 logger.error(f"Failed to analyze {match.symbol}: {e}")
+                return None
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            # Submit all tasks
+            future_to_match = {
+                executor.submit(analyze_single, match): match
+                for match in top_10
+            }
+
+            # Collect results as they complete
+            for future in as_completed(future_to_match):
+                match = future_to_match[future]
+                try:
+                    result = future.result()
+                    if result is not None:
+                        analyzed.append(result)
+                except Exception as e:
+                    logger.error(f"Error analyzing {match.symbol}: {e}")
+
+                completed += 1
+                logger.info(f"Analyzed {match.symbol} ({completed}/{len(top_10)})...")
 
         duration = (datetime.now() - phase_start).total_seconds()
         self._phase_times['phase3'] = int(duration)
@@ -361,6 +440,7 @@ class CompleteScanner:
             opportunities=analyzed,
             all_candidates=candidates,
             market_sentiment=sentiment,
+            sentiment_result=getattr(self, '_sentiment_result', None),
             total_stocks=len(symbols),
             success_count=len(symbols) - len(fail_symbols),
             fail_count=len(fail_symbols),
@@ -396,12 +476,18 @@ class CompleteScanner:
 
         scan_date = datetime.now().strftime('%Y-%m-%d')
 
+        # Convert local file path to web URL
+        # From: /home/admin/Projects/TradeChanceScreen/web/reports/report_YYYY-MM-DD.html
+        # To: http://47.90.229.136:19801/reports/report_YYYY-MM-DD.html
+        report_filename = report_path.split('/')[-1]  # report_YYYY-MM-DD.html
+        report_url = f"http://47.90.229.136:19801/reports/{report_filename}"
+
         # Send notifications
         results = self.notifier.send_scan_summary(
             scan_date=scan_date,
             market_sentiment=sentiment,
             top_opportunities=analyzed,
-            report_url=report_path
+            report_url=report_url
         )
 
         duration = (datetime.now() - phase_start).total_seconds()

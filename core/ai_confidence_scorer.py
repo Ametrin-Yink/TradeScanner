@@ -6,11 +6,27 @@ from typing import List, Dict, Optional
 from dataclasses import dataclass
 
 import requests
+import numpy as np
 
 from core.screener import StrategyMatch
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
+
+
+def convert_to_native(obj):
+    """Convert numpy types to Python native types for JSON serialization."""
+    if isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, dict):
+        return {k: convert_to_native(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_to_native(v) for v in obj]
+    return obj
 
 
 @dataclass
@@ -264,12 +280,12 @@ class AIConfidenceScorer:
                 "symbol": c.symbol,
                 "strategy": c.strategy,
                 "strategy_description": self.STRATEGY_DESCRIPTIONS.get(c.strategy, ""),
-                "entry_price": c.entry_price,
-                "stop_loss": c.stop_loss,
-                "take_profit": c.take_profit,
-                "r_r_ratio": r_r_ratio,
+                "entry_price": float(c.entry_price),
+                "stop_loss": float(c.stop_loss),
+                "take_profit": float(c.take_profit),
+                "r_r_ratio": float(r_r_ratio),
                 "match_reasons": c.match_reasons,
-                "technical_snapshot": c.technical_snapshot
+                "technical_snapshot": convert_to_native(c.technical_snapshot)
             })
 
         # Get market guidance

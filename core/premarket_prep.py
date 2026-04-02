@@ -1,7 +1,8 @@
 """Phase 0: Pre-market data preparation.
 
-Fetches universe, syncs database, fetches Tier 3 market data,
-and calculates Tier 1 universal metrics for all symbols.
+Initializes stock database, fetches Tier 3 market data,
+fetches market data for all stocks, and calculates Tier 1 universal metrics.
+Stocks with market cap <$2B are filtered out during pre-calculation.
 """
 import logging
 from datetime import datetime, timedelta
@@ -12,7 +13,7 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
-from core.stock_universe import StockUniverseManager
+from core.stock_universe import StockUniverseManager, get_all_market_etfs
 from core.fetcher import DataFetcher
 from core.indicators import TechnicalIndicators
 from data.db import Database
@@ -25,19 +26,23 @@ class PreMarketPrep:
     """Phase 0: Prepare all data before market opens at 6 AM ET.
 
     Steps:
-    1. Fetch stock universe (>$2B market cap) from Finviz
-    2. Sync with local database
-    3. Fetch Tier 3 market data (SPY, VIX, Sector ETFs)
-    4. Calculate Tier 1 universal metrics for all symbols
+    1. Initialize stock database from CSV (stocks + market ETFs)
+    2. Fetch Tier 3 market data (SPY, VIX, Sector ETFs)
+    3. Fetch market data for all stocks
+    4. Update market cap from yfinance
+    5. Filter stocks by market cap (>=$2B)
+    6. Calculate Tier 1 universal metrics for qualifying stocks
     """
 
-    # Tier 3 symbols (market data)
-    TIER3_SYMBOLS = {
-        'benchmarks': ['SPY', 'QQQ', 'IWM'],
-        'volatility': ['VIXY', 'UVXY'],
-        'sectors': ['XLK', 'XLF', 'XLE', 'XLI', 'XLP', 'XLY', 'XLB', 'XLU', 'XLV',
-                   'XBI', 'SMH', 'IGV', 'IYT', 'KRE', 'XRT']
-    }
+    # Minimum market cap for screening ($2B)
+    MIN_MARKET_CAP = 2e9
+
+    # Price range filter
+    MIN_PRICE = 2.0
+    MAX_PRICE = 3000.0
+
+    # Minimum average volume (100K)
+    MIN_AVG_VOLUME = 100000
 
     def __init__(
         self,
@@ -57,9 +62,11 @@ class PreMarketPrep:
         Returns:
             Dict with phase results:
                 - success: bool
-                - symbols: List[str] - active universe symbols
+                - symbols: List[str] - stocks passing market cap filter
+                - etfs: List[str] - market index ETFs
                 - tier3_data: Dict[str, pd.DataFrame] - market data
                 - tier1_cache_count: int - number of symbols with Tier 1 cache
+                - market_cap_filtered: int - number of stocks filtered out
                 - duration: int - execution time in seconds
                 - errors: List[str] - any errors encountered
         """
@@ -70,48 +77,64 @@ class PreMarketPrep:
         logger.info("PHASE 0: Pre-Market Data Preparation")
         logger.info("=" * 50)
 
-        # Step 1: Sync stock universe
-        logger.info("\n[1/4] Syncing stock universe from Finviz...")
+        # Step 1: Initialize stock database
+        logger.info("\n[1/5] Initializing stock database...")
         try:
-            sync_result = self.universe_manager.sync_universe()
-            symbols = sync_result['symbols']
-            logger.info(f"✓ Universe synced: {len(symbols)} symbols")
+            init_result = self.universe_manager.initialize_database()
+            all_stocks = init_result['symbols']
+            logger.info(f"✓ Database initialized: {len(all_stocks)} total symbols")
+            logger.info(f"  - Stocks: {self.universe_manager.get_stocks_count()}")
+            logger.info(f"  - ETFs: {self.universe_manager.get_etfs_count()}")
         except Exception as e:
-            logger.error(f"✗ Universe sync failed: {e}")
-            errors.append(f"Universe sync: {e}")
-            # Fall back to existing symbols
-            symbols = self.db.get_active_stocks()
-            logger.info(f"Using existing {len(symbols)} symbols from database")
+            logger.error(f"✗ Database initialization failed: {e}")
+            errors.append(f"Database init: {e}")
+            all_stocks = self.db.get_active_stocks()
 
         # Step 2: Fetch Tier 3 market data
-        logger.info("\n[2/4] Fetching Tier 3 market data...")
+        logger.info("\n[2/5] Fetching Tier 3 market data...")
         tier3_data = self._fetch_tier3_data()
         logger.info(f"✓ Tier 3 data fetched: {len(tier3_data)} symbols")
 
-        # Step 3: Update market data for all symbols
-        logger.info("\n[3/4] Updating market data for all symbols...")
-        fetch_stats = self._update_market_data(symbols)
+        # Step 3: Update market data for all symbols (stocks + ETFs)
+        logger.info("\n[3/5] Updating market data for all symbols...")
+        all_symbols = self.db.get_active_stocks()
+        fetch_stats = self._update_market_data(all_symbols)
         logger.info(f"✓ Market data updated: {fetch_stats['success']}/{fetch_stats['total']} symbols")
         if fetch_stats['failed'] > 0:
             logger.warning(f"  Failed: {fetch_stats['failed']} symbols")
             errors.extend(fetch_stats['errors'])
 
-        # Step 4: Calculate Tier 1 universal metrics
-        logger.info("\n[4/4] Calculating Tier 1 universal metrics...")
-        tier1_count = self._calculate_tier1_cache(symbols)
+        # Step 4: Apply pre-filter (market cap, price, volume)
+        logger.info("\n[4/5] Applying pre-filter criteria...")
+        prefilter_stats = self._apply_prefilter()
+        qualifying_stocks = prefilter_stats['qualifying_stocks']
+        logger.info(f"✓ Pre-filter: {len(qualifying_stocks)} stocks passed")
+        logger.info(f"  (market cap >=$2B, price $2-3000, volume >=100K)")
+
+        # Step 5: Calculate Tier 1 universal metrics
+        logger.info("\n[5/5] Calculating Tier 1 universal metrics...")
+        tier1_count = self._calculate_tier1_cache(qualifying_stocks)
         logger.info(f"✓ Tier 1 cache calculated: {tier1_count} symbols")
 
         duration = (datetime.now() - start_time).total_seconds()
 
         logger.info("\n" + "=" * 50)
         logger.info(f"PHASE 0 Complete in {duration:.1f}s")
+        logger.info(f"  Stocks for screening: {len(qualifying_stocks)}")
+        logger.info(f"  Market ETFs: {len(self.universe_manager.get_market_etfs())}")
         logger.info("=" * 50)
 
+        # Phase 0 is successful if we have qualifying stocks and Tier 1 cache
+        # Some errors (e.g., delisted stocks) are expected and shouldn't fail the phase
+        phase0_success = len(qualifying_stocks) > 0 and tier1_count > 0
+
         return {
-            'success': len(errors) == 0,
-            'symbols': symbols,
+            'success': phase0_success,
+            'symbols': qualifying_stocks,
+            'etfs': self.universe_manager.get_market_etfs(),
             'tier3_data': tier3_data,
             'tier1_cache_count': tier1_count,
+            'prefilter_stats': prefilter_stats,
             'duration': int(duration),
             'errors': errors,
             'fetch_stats': fetch_stats
@@ -124,13 +147,9 @@ class PreMarketPrep:
             Dict mapping symbol to DataFrame
         """
         tier3_data = {}
-        all_symbols = (
-            self.TIER3_SYMBOLS['benchmarks'] +
-            self.TIER3_SYMBOLS['volatility'] +
-            self.TIER3_SYMBOLS['sectors']
-        )
+        etf_symbols = get_all_market_etfs()
 
-        for symbol in all_symbols:
+        for symbol in etf_symbols:
             try:
                 df = self.fetcher.fetch_stock_data(symbol, period="13mo", interval="1d")
                 if df is not None and not df.empty:
@@ -187,6 +206,99 @@ class PreMarketPrep:
             'success': success,
             'failed': failed,
             'errors': errors[:10]  # First 10 errors only
+        }
+
+    def _apply_prefilter(self) -> Dict:
+        """Apply pre-filter criteria to select stocks for screening.
+
+        Criteria:
+        - Market cap >= $2B (always fetched from yfinance)
+        - Price between $2-$3000 (from latest market data)
+        - Average volume >= 100K (from latest 20 days)
+
+        Returns:
+            Dict with:
+                - qualifying_stocks: List of symbols passing all filters
+                - filtered_by_cap: Count filtered by market cap
+                - filtered_by_price: Count filtered by price
+                - filtered_by_volume: Count filtered by volume
+                - total_stocks: Total stocks checked
+        """
+        from data.db import db
+
+        stocks = self.universe_manager.get_stocks(min_market_cap=None)
+        total_stocks = len(stocks)
+
+        logger.info(f"Applying pre-filter to {total_stocks} stocks...")
+        logger.info(f"  Criteria: market cap >= $2B, price ${self.MIN_PRICE}-{self.MAX_PRICE}, volume >= {self.MIN_AVG_VOLUME:,}")
+
+        qualifying_stocks = []
+        filtered_by_cap = 0
+        filtered_by_price = 0
+        filtered_by_volume = 0
+
+        for i, symbol in enumerate(stocks):
+            if (i + 1) % 500 == 0:
+                logger.info(f"  Checked {i + 1}/{total_stocks} stocks...")
+
+            try:
+                # Get latest market data
+                conn = db.get_connection()
+                cursor = conn.execute(
+                    """SELECT close, volume FROM market_data
+                    WHERE symbol = ? ORDER BY date DESC LIMIT 20""",
+                    (symbol,)
+                )
+                rows = cursor.fetchall()
+
+                if len(rows) < 5:  # Need at least 5 days of data
+                    continue
+
+                latest_price = rows[0][0]
+                avg_volume = sum(r[1] for r in rows) / len(rows)
+
+                # Check 1: Price range ($2 - $3000)
+                if latest_price < self.MIN_PRICE or latest_price > self.MAX_PRICE:
+                    filtered_by_price += 1
+                    continue
+
+                # Check 2: Volume (>= 100K average)
+                if avg_volume < self.MIN_AVG_VOLUME:
+                    filtered_by_volume += 1
+                    continue
+
+                # Check 3: Market cap (>= $2B) - use cached value from database
+                # Market cap is fetched during data fetch phase (fetcher.py:211)
+                # This avoids 2,921 individual HTTP requests to yfinance!
+                stock_info = self.db.get_stock_info_full(symbol)
+                market_cap = stock_info.get('market_cap', 0) if stock_info else 0
+
+                if market_cap < self.MIN_MARKET_CAP:
+                    filtered_by_cap += 1
+                    continue
+
+                # All checks passed
+                qualifying_stocks.append(symbol)
+
+            except Exception as e:
+                logger.debug(f"Could not pre-filter {symbol}: {e}")
+                continue
+
+        total_filtered = total_stocks - len(qualifying_stocks)
+
+        logger.info(f"Pre-filter complete:")
+        logger.info(f"  Total stocks: {total_stocks}")
+        logger.info(f"  Qualifying: {len(qualifying_stocks)}")
+        logger.info(f"  Filtered by market cap (<$2B): {filtered_by_cap}")
+        logger.info(f"  Filtered by price (not $2-3000): {filtered_by_price}")
+        logger.info(f"  Filtered by volume (<100K): {filtered_by_volume}")
+
+        return {
+            'qualifying_stocks': qualifying_stocks,
+            'filtered_by_cap': filtered_by_cap,
+            'filtered_by_price': filtered_by_price,
+            'filtered_by_volume': filtered_by_volume,
+            'total_stocks': total_stocks
         }
 
     def _calculate_tier1_cache(self, symbols: List[str]) -> int:

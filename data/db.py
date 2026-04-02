@@ -2,6 +2,7 @@
 import sqlite3
 import json
 import pickle
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional, Any
@@ -9,6 +10,8 @@ from typing import List, Dict, Optional, Any
 import pandas as pd
 
 from config.settings import DATA_DIR
+
+logger = logging.getLogger(__name__)
 
 DB_PATH = DATA_DIR / "market_data.db"
 
@@ -22,6 +25,21 @@ class Database:
     def _init_db(self):
         with sqlite3.connect(self.db_path) as conn:
             conn.executescript(SCHEMA)
+            self._migrate_db(conn)
+
+    def _migrate_db(self, conn: sqlite3.Connection):
+        """Migrate database schema if needed."""
+        # Check if stocks table has category column
+        cursor = conn.execute("PRAGMA table_info(stocks)")
+        columns = [row[1] for row in cursor.fetchall()]
+
+        if 'category' not in columns:
+            logger.info("Migrating stocks table: adding category column")
+            conn.execute("ALTER TABLE stocks ADD COLUMN category TEXT DEFAULT 'stocks'")
+
+        if 'market_cap' not in columns:
+            logger.info("Migrating stocks table: adding market_cap column")
+            conn.execute("ALTER TABLE stocks ADD COLUMN market_cap REAL")
 
     def get_connection(self):
         return sqlite3.connect(self.db_path)
@@ -267,11 +285,108 @@ class Database:
 
             return dict(row)
 
+    def add_stock_with_category(
+        self,
+        symbol: str,
+        name: str = "",
+        sector: str = "",
+        category: str = "stocks",
+        market_cap: Optional[float] = None
+    ):
+        """Add stock with category and market cap information.
+
+        Args:
+            symbol: Stock symbol
+            name: Company name
+            sector: Industry sector
+            category: 'stocks' or 'market_index_etf'
+            market_cap: Market cap in USD (optional)
+        """
+        with self.get_connection() as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO stocks
+                (symbol, name, sector, category, market_cap, added_date, is_active)
+                VALUES (?, ?, ?, ?, ?, ?, 1)""",
+                (symbol, name, sector, category, market_cap,
+                 datetime.now().date().isoformat())
+            )
+
+    def update_stock_market_cap(self, symbol: str, market_cap: float):
+        """Update market cap for a stock.
+
+        Args:
+            symbol: Stock symbol
+            market_cap: Market cap in USD
+        """
+        with self.get_connection() as conn:
+            conn.execute(
+                "UPDATE stocks SET market_cap = ? WHERE symbol = ?",
+                (market_cap, symbol)
+            )
+
+    def get_stocks_by_category(self, category: str) -> List[str]:
+        """Get symbols by category.
+
+        Args:
+            category: 'stocks' or 'market_index_etf'
+
+        Returns:
+            List of stock symbols
+        """
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT symbol FROM stocks WHERE category = ? AND is_active = 1",
+                (category,)
+            )
+            return [row[0] for row in cursor.fetchall()]
+
+    def get_active_stocks_min_market_cap(self, min_market_cap: float = 2e9) -> List[str]:
+        """Get active stocks with market cap >= minimum.
+
+        Args:
+            min_market_cap: Minimum market cap in USD (default $2B)
+
+        Returns:
+            List of stock symbols meeting criteria
+        """
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """SELECT symbol FROM stocks
+                WHERE category = 'stocks'
+                AND is_active = 1
+                AND (market_cap >= ? OR market_cap IS NULL)""",
+                (min_market_cap,)
+            )
+            return [row[0] for row in cursor.fetchall()]
+
+    def get_stock_info_full(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """Get full stock info including category and market cap.
+
+        Args:
+            symbol: Stock symbol
+
+        Returns:
+            Dictionary with stock info or None
+        """
+        with self.get_connection() as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute(
+                "SELECT * FROM stocks WHERE symbol = ?",
+                (symbol,)
+            )
+            row = cursor.fetchone()
+            if row:
+                return dict(row)
+            return None
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS stocks (
     symbol TEXT PRIMARY KEY,
     name TEXT,
     sector TEXT,
+    category TEXT DEFAULT 'stocks',  -- 'stocks' or 'market_index_etf'
+    market_cap REAL,  -- Market cap in USD
     added_date TEXT,
     is_active INTEGER DEFAULT 1
 );

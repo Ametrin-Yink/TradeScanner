@@ -1,7 +1,10 @@
 """Strategy screener - thin orchestrator using plugin architecture."""
 import copy
+import gc
 import logging
 import time
+from collections import defaultdict
+from datetime import datetime
 from typing import Dict, List, Optional
 
 import pandas as pd
@@ -34,14 +37,14 @@ class StrategyScreener:
     MIN_VOLUME = 100000  # 100K daily average
     MIN_ADR_PCT = 0.03  # 3% minimum ADR - for backward compat
 
-    # Strategy group mapping for dynamic allocation
-    STRATEGY_GROUPS = {
-        StrategyType.EP: 'breakout_momentum',
-        StrategyType.SHORYUKEN: 'trend_pullback',
-        StrategyType.UPTHRUST_REBOUND: 'rebound_range',
-        StrategyType.RANGE_SUPPORT: 'rebound_range',
-        StrategyType.DTSS: 'rebound_range',
-        StrategyType.PARABOLIC: 'extreme_reversal',
+    # Strategy name to group mapping for allocation
+    STRATEGY_NAME_TO_GROUP = {
+        "MomentumBreakout": "breakout_momentum",
+        "PullbackEntry": "trend_pullback",
+        "SupportBounce": "rebound_range",
+        "RangeShort": "rebound_range",
+        "DoubleTopBottom": "rebound_range",
+        "CapitulationRebound": "extreme_reversal",
     }
 
     # Phase 0: Data requirements
@@ -92,7 +95,10 @@ class StrategyScreener:
         logger.info(f"Phase 0: Universal pre-calculation for {len(symbols)} symbols...")
 
         # Try to load Tier 3 data (SPY) from cache first
-        self._spy_data = self._load_tier3_data('SPY') or self._get_data('SPY')
+        spy_data = self._load_tier3_data('SPY')
+        if spy_data is None:
+            spy_data = self._get_data('SPY')
+        self._spy_data = spy_data
 
         if self._spy_data is not None and len(self._spy_data) >= 5:
             spy_current = self._spy_data['close'].iloc[-1]
@@ -110,20 +116,30 @@ class StrategyScreener:
         used_cache = 0
         calculated = 0
 
-        for symbol in symbols:
+        for i, symbol in enumerate(symbols):
+            # Periodic garbage collection to prevent memory buildup
+            if i > 0 and i % 100 == 0:
+                gc.collect()
+
             # First try cached Tier 1 data
             if symbol in cached_tier1:
                 cache_entry = cached_tier1[symbol]
                 try:
                     # Get DataFrame from market_data or fetch
-                    df = market_data.get(symbol) or self._get_data(symbol)
+                    df = market_data.get(symbol)
+                    if df is None:
+                        df = self._get_data(symbol)
                     if df is None or len(df) < 50:
                         continue
 
                     # Build phase0 data from cache
+                    # Create TechnicalIndicators from df (will use cache if data unchanged)
+                    ind = TechnicalIndicators(df, symbol=symbol)
+                    ind.calculate_all()
+
                     phase0_data[symbol] = {
                         'df': df,
-                        'ind': None,  # Will be calculated lazily if needed
+                        'ind': ind,  # Store pre-computed indicators
                         'current_price': cache_entry.get('current_price', 0),
                         'avg_volume': cache_entry.get('avg_volume_20d', 0),
                         'adr_pct': cache_entry.get('adr_pct', 0),
@@ -353,15 +369,9 @@ class StrategyScreener:
         group_candidates = defaultdict(list)
 
         for candidate in all_candidates:
-            # Find which group this strategy belongs to
-            strategy_type = None
-            for st, group in self.STRATEGY_GROUPS.items():
-                if st.value == candidate.strategy:
-                    strategy_type = st
-                    break
-
-            if strategy_type:
-                group = self.STRATEGY_GROUPS[strategy_type]
+            # Find which group this strategy belongs to using strategy name
+            group = self.STRATEGY_NAME_TO_GROUP.get(candidate.strategy)
+            if group:
                 group_candidates[group].append(candidate)
 
         selected = []
@@ -384,7 +394,7 @@ class StrategyScreener:
                     selected_symbols_strategies.add(key)
 
             selected_from_group = len([c for c in selected
-                                      if any(st.value == c.strategy for st, g in self.STRATEGY_GROUPS.items() if g == group)])
+                                      if self.STRATEGY_NAME_TO_GROUP.get(c.strategy) == group])
             logger.info(f"[{group}] Selected {selected_from_group}/{len(candidates)} candidates (target: {slots})")
 
         # Phase 2.2: If underfilled, add from underrepresented groups first
@@ -395,7 +405,7 @@ class StrategyScreener:
             group_fill_ratio = {}
             for group, slots in group_slots.items():
                 group_count = len([c for c in selected
-                                  if c.strategy in [st.value for st, g in self.STRATEGY_GROUPS.items() if g == group]])
+                                  if self.STRATEGY_NAME_TO_GROUP.get(c.strategy) == group])
                 group_fill_ratio[group] = group_count / slots if slots > 0 else 1.0
 
             # Sort groups by fill ratio (most underfilled first)
@@ -508,50 +518,69 @@ class StrategyScreener:
         self,
         symbols: List[str],
         market_data: Optional[Dict[str, pd.DataFrame]] = None,
-        batch_size: int = 100,  # Phase C: Stream processing batch size
-        strategy_weighting: Optional[Dict[str, float]] = None  # Dynamic strategy allocation
+        batch_size: int = 100,
+        strategy_allocation: Optional[Dict[str, int]] = None
     ) -> List[StrategyMatch]:
         """
         Screen all symbols using all 6 strategy plugins with unified Phase 0.
 
         Phase 0: Universal pre-calculation (price/volume/RS/SPY) - runs ONCE
         Phase 1: Strategy screening (global collection, no slot limits)
-        Phase 2: Dynamic allocation (30 slots by market regime weights)
+        Phase 2: Dynamic allocation (30 slots by AI-driven allocation)
 
         Args:
             symbols: List of stock symbols to screen
             market_data: Optional pre-loaded market data cache (must have 280+ days)
             batch_size: Number of symbols to process per batch (default 100)
-            strategy_weighting: Market-derived weights for strategy allocation
-                {'breakout_momentum': 0.5, 'trend_pullback': 0.3, 'rebound_range': 0.15, 'extreme_reversal': 0.05}
+            strategy_allocation: AI-driven allocation dict mapping strategy names to slot counts
+                {'MomentumBreakout': 5, 'PullbackEntry': 5, ...} (2-10 each, total 30)
 
         Returns:
             List of StrategyMatch (30 total, dynamically allocated across strategy groups)
         """
-        import gc
-
         self.market_data = market_data or {}
 
-        # Default equal weighting if not provided
-        if strategy_weighting is None:
-            strategy_weighting = {
-                'breakout_momentum': 0.25,
-                'trend_pullback': 0.25,
-                'rebound_range': 0.25,
-                'extreme_reversal': 0.25
+        # Map strategy names to group slots
+        # Strategy name -> group mapping
+        STRATEGY_TO_GROUP = {
+            'MomentumBreakout': 'breakout_momentum',
+            'PullbackEntry': 'trend_pullback',
+            'SupportBounce': 'rebound_range',
+            'RangeShort': 'rebound_range',
+            'DoubleTopBottom': 'rebound_range',
+            'CapitulationRebound': 'extreme_reversal',
+        }
+
+        # Calculate group slots from AI allocation
+        if strategy_allocation:
+            # Sum allocations by group
+            group_slots = defaultdict(int)
+            for strategy_name, slots in strategy_allocation.items():
+                group = STRATEGY_TO_GROUP.get(strategy_name)
+                if group:
+                    group_slots[group] += slots
+
+            # Convert to regular dict and validate
+            group_slots = dict(group_slots)
+            total = sum(group_slots.values())
+
+            if total != self.TOTAL_CANDIDATES_TARGET:
+                logger.warning(f"Allocation total is {total}, adjusting to {self.TOTAL_CANDIDATES_TARGET}")
+                # Adjust largest group
+                if group_slots:
+                    largest = max(group_slots, key=group_slots.get)
+                    group_slots[largest] += self.TOTAL_CANDIDATES_TARGET - total
+
+            logger.info(f"AI group allocation: {group_slots}")
+        else:
+            # Default equal allocation across 4 groups
+            group_slots = {
+                'breakout_momentum': 8,
+                'trend_pullback': 8,
+                'rebound_range': 7,
+                'extreme_reversal': 7
             }
-
-        # Step 6-7: Calculate group slots for dynamic allocation (30 total)
-        # This is used LATER to select from global candidate pool
-        group_slots = {}
-        for group, weight in strategy_weighting.items():
-            group_slots[group] = max(2, int(self.TOTAL_CANDIDATES_TARGET * weight))  # Minimum 2 per group
-
-        # Ensure total is 30 (adjust largest group if needed)
-        total_slots = sum(group_slots.values())
-        if total_slots != self.TOTAL_CANDIDATES_TARGET:
-            diff = self.TOTAL_CANDIDATES_TARGET - total_slots
-            group_slots['breakout_momentum'] = group_slots.get('breakout_momentum', 8) + diff
+            logger.info(f"Default group allocation: {group_slots}")
 
         # Load earnings if not already loaded
         if not self.earnings_calendar:
@@ -567,13 +596,15 @@ class StrategyScreener:
         self._phase0_data = self._run_phase0_precalculation(symbols, self.market_data)
 
         # Share Phase 0 data, market data, and earnings with all strategies
+        # Use direct reference (read-only) instead of copy to save memory
+        # Data is not modified by strategies, only read
         for strategy in self._strategies.values():
-            strategy.market_data = copy.copy(self.market_data)
-            strategy.phase0_data = copy.copy(self._phase0_data)
+            strategy.market_data = self.market_data  # Shared reference, not copy
+            strategy.phase0_data = self._phase0_data  # Shared reference, not copy
             strategy.spy_return_5d = self._spy_return_5d
             strategy._spy_df = self._spy_data  # Share SPY dataframe
             if hasattr(strategy, 'earnings_calendar'):
-                strategy.earnings_calendar = copy.copy(self.earnings_calendar)
+                strategy.earnings_calendar = self.earnings_calendar  # Shared reference
 
         # ============================================================
         # PHASE 1: Strategy-specific screening (using Phase 0 data)
@@ -593,8 +624,9 @@ class StrategyScreener:
 
         for strategy_type, strategy in self._strategies.items():
             start_time = time.time()
+            strategy_name = strategy.NAME  # Use class NAME for consistency
             logger.info(f"\n{'='*60}")
-            logger.info(f"[START] {strategy_type.value} Strategy Screening")
+            logger.info(f"[START] {strategy_name} Strategy Screening")
             logger.info(f"{'='*60}")
             logger.info(f"Total symbols to screen: {total_symbols}")
             logger.info(f"Batch size: {batch_size}, Total batches: {num_batches}")
@@ -613,7 +645,7 @@ class StrategyScreener:
                     # Progress logging every 10% or every 10 batches
                     progress_pct = (batch_idx + 1) / num_batches * 100
                     if batch_idx % max(1, num_batches // 10) == 0 or batch_idx % 10 == 0:
-                        logger.info(f"[{strategy_type.value}] Progress: {processed_count}/{total_symbols} "
+                        logger.info(f"[{strategy_name}] Progress: {processed_count}/{total_symbols} "
                                     f"({progress_pct:.1f}%) - Batch {batch_idx+1}/{num_batches}")
 
                     # Process this batch using strategy's screen method
@@ -622,7 +654,7 @@ class StrategyScreener:
                     if batch_candidates:
                         passed_filter_count += len(batch_candidates)
                         strategy_candidates.extend(batch_candidates)
-                        logger.debug(f"[{strategy_type.value}] Batch {batch_idx+1}: "
+                        logger.debug(f"[{strategy_name}] Batch {batch_idx+1}: "
                                      f"{len(batch_candidates)} candidates")
 
                     del batch_symbols
@@ -647,7 +679,7 @@ class StrategyScreener:
                 elapsed = time.time() - start_time
 
                 # Store stats
-                phase1_stats[strategy_type.value] = {
+                phase1_stats[strategy_name] = {
                     'screened': total_symbols,
                     'passed_filter': passed_filter_count,
                     'final_candidates': len(strategy_candidates),
@@ -663,7 +695,7 @@ class StrategyScreener:
 
                 # Strategy completion summary
                 logger.info(f"\n{'='*60}")
-                logger.info(f"[COMPLETE] {strategy_type.value} Strategy Screening")
+                logger.info(f"[COMPLETE] {strategy_name} Strategy Screening")
                 logger.info(f"{'='*60}")
                 logger.info(f"Screened: {total_symbols} symbols")
                 logger.info(f"Passed filter: {passed_filter_count} symbols")
@@ -678,7 +710,7 @@ class StrategyScreener:
                 gc.collect()
 
             except Exception as e:
-                logger.error(f"Error in {strategy_type.value} screening: {e}")
+                logger.error(f"Error in {strategy_name} screening: {e}")
                 import traceback
                 logger.error(traceback.format_exc())
 

@@ -1,27 +1,58 @@
+# Python
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
+*.py[cod]
+*$py.class
 *.so
+.Python
 *.egg
 *.egg-info/
 dist/
 build/
-*.log
-.env
-config/secrets.json
-data/market_data.db
-web/reports/*.html
-data/charts/*.png
-.pytest_cache/
-.coverage
-htmlcov/
-.venv/
+*.manifest
+*.spec
+
+# Virtual environments
 venv/
+ENV/
+env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
 *.swp
 *.swo
 *~
 .DS_Store
-.worktrees/
+
+# Environment & Secrets
+.env
+.env.*
+config/secrets.json
+
+# Data & Logs
+*.log
+logs/
+.remember/logs/
+*.db
+*.sqlite
+*.sqlite3
+data/market_data.db
+
+# Generated reports & charts
+web/reports/*.html
+data/charts/*.png
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+tox/
+.nox/
+
+# Claude Code
+.claude/
+.plans/
+
+# Git worktrees
 .worktrees/

@@ -22,8 +22,8 @@ class DataFetcher:
     def __init__(
         self,
         db: Optional[Database] = None,
-        max_workers: int = 2,
-        request_delay: float = 0.5,
+        max_workers: int = 4,  # Increased from 2 for better parallelism
+        request_delay: float = 0.1,  # Reduced from 0.5s - yfinance can handle faster
         max_retries: int = 3,
         max_history_days: int = 252
     ):
@@ -177,16 +177,19 @@ class DataFetcher:
         symbol: str,
         period: str = "6mo",
         interval: str = "1d",
-        use_cache: bool = True
+        use_cache: bool = True,
+        fetch_info: bool = True
     ) -> Optional[pd.DataFrame]:
         """
         Fetch historical data with incremental update support.
+        Also fetches market cap info if fetch_info=True.
 
         Args:
             symbol: Stock symbol
             period: Data period (ignored if use_cache=True with existing data)
             interval: Data interval
             use_cache: Whether to use cached data
+            fetch_info: Whether to also fetch market cap info
 
         Returns:
             DataFrame with OHLCV data or None if failed
@@ -201,6 +204,14 @@ class DataFetcher:
             if df is not None and not df.empty:
                 # Save to database (incremental rows only)
                 self._save_to_db(symbol, df, incremental=True)
+
+                # Fetch market cap info in parallel (non-blocking)
+                if fetch_info:
+                    try:
+                        self.fetch_stock_info(symbol)
+                    except Exception:
+                        pass  # Don't fail if info fetch fails
+
                 return df
 
             return cached_df  # Return cached if incremental fails
@@ -428,22 +439,33 @@ class DataFetcher:
     def fetch_stock_info(self, symbol: str) -> Dict[str, str]:
         """
         Fetch stock info including sector and industry from yfinance.
+        Also updates market cap in the stocks database table.
 
         Args:
             symbol: Stock symbol
 
         Returns:
-            Dict with sector and industry info
+            Dict with sector, industry, market_cap, and name
         """
         try:
             ticker = yf.Ticker(symbol)
             info = self._rate_limited_request(lambda: ticker.info)
 
             if info:
+                market_cap = info.get('marketCap', 0)
+
+                # Update market cap in stocks table
+                if market_cap and market_cap > 0:
+                    try:
+                        self.db.update_stock_market_cap(symbol, float(market_cap))
+                        logger.debug(f"Updated market cap for {symbol}: {market_cap:,.0f}")
+                    except Exception as e:
+                        logger.debug(f"Could not update market cap for {symbol}: {e}")
+
                 return {
                     'sector': info.get('sector', 'Unknown'),
                     'industry': info.get('industry', 'Unknown'),
-                    'market_cap': info.get('marketCap', 0),
+                    'market_cap': market_cap,
                     'name': info.get('longName', symbol)
                 }
         except Exception as e:

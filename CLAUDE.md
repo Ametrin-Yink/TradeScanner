@@ -18,10 +18,10 @@ Automated US stock trading opportunity scanner analyzing stocks with market cap 
 | DoubleTopBottom | double_top_bottom.py | Both | Distribution/accumulation |
 | CapitulationRebound | capitulation_rebound.py | Long | Capitulation reversal |
 
-**5-Phase Daily Workflow** (runs at 6 AM ET):
+**5-Phase Daily Workflow** (runs at 3 AM ET):
 | Phase | Component | Duration | Description |
 |-------|-----------|----------|-------------|
-| 0 | PreMarketPrep | 15-20 min | Universe sync, Tier 1/3 pre-calculation |
+| 0 | PreMarketPrep | 15-20 min | Initialize stock DB, Tier 1/3 pre-calculation, market cap filtering |
 | 1 | MarketAnalyzer | 2-3 min | Sentiment analysis (Tavily + AI) |
 | 2 | StrategyScreener | 10-15 min | Screen with cached Tier 1/3 data |
 | 3 | OpportunityAnalyzer | 15-20 min | Deep AI analysis of top 10 |
@@ -29,13 +29,13 @@ Automated US stock trading opportunity scanner analyzing stocks with market cap 
 | 5 | MultiNotifier | 1 min | WeChat + Discord notifications |
 
 **Pipeline**:
-- `stock_universe.py` → `premarket_prep.py` → `market_analyzer.py` → `screener.py` → `analyzer.py` → `reporter.py` → `notifier.py`
+- `stock_universe.py` → `premarket_prep.py` → `market_analyzer.py` → `screener.py` → `selector.py`/`ai_confidence_scorer.py`/`analyzer.py` → `reporter.py` → `notifier.py`
 - Database: SQLite (`data/market_data.db`)
 - Web: Flask on port 19801
 
 ## 3-Tier Pre-Calculation Architecture
 
-**Tier 1 (Universal Metrics)**: Calculated for ALL symbols at 6 AM
+**Tier 1 (Universal Metrics)**: Calculated for ALL symbols at 3 AM
 - Price, Volume, EMAs (8/21/50/200), ATR/ADR
 - Returns (3m/6m/12m/5d), RS scores, 52-week metrics
 - Stored in `tier1_cache` table
@@ -45,7 +45,7 @@ Automated US stock trading opportunity scanner analyzing stocks with market cap 
 - RSI divergence, EMA slopes
 - Calculated only for candidates passing Tier 1 filters
 
-**Tier 3 (Market Data)**: Fetched once at 6 AM, shared
+**Tier 3 (Market Data)**: Fetched once at 3 AM, shared
 - SPY, QQQ, IWM (benchmarks)
 - VIXY, UVXY (volatility)
 - XLK, XLF, XLE, etc. (sectors)
@@ -54,25 +54,26 @@ Automated US stock trading opportunity scanner analyzing stocks with market cap 
 ## Key Technical Decisions
 
 - **Data**: yfinance (free), threads=False, 0.5s delay, incremental updates
-- **Universe**: finvizfinance for >$2B market cap stocks, synced daily
+- **Universe**: Static CSV (nasdaq_stocklist_screener.csv) with 2 categories: stocks and market_index_etf
+- **Pre-filter**: Market cap >=$2B (from yfinance), price $2-3000, volume >=100K avg
 - **AI**: Alibaba DashScope (OpenAI-compatible)
-- **Scale**: Dynamic universe (~2500 stocks), ~45-60 min total workflow
+- **Scale**: ~2,900 symbols (~2,800 stocks + ~100 ETFs), ~45-60 min total workflow
 - **Caching**: Tier 1/3 pre-calculation, 280 trading days retained
 - **Charts**: matplotlib with Agg backend
 
 ## Database Schema
 
 **Core Tables**:
-- `stocks` - symbol, name, sector, is_active
+- `stocks` - symbol, name, sector, **category** (stocks/market_index_etf), **market_cap**, is_active
 - `market_data` - OHLCV data by symbol/date
 - `scan_results` - scan history
 - `system_status` - last scan info
 
-**New Tables (v4.0)**:
+**Pre-calculation Tables**:
 - `universe_sync` - sync history (date, added, removed, total)
 - `tier1_cache` - universal metrics (symbol, price, EMAs, RS, etc.)
 - `tier3_cache` - market data (SPY, VIX, ETFs as pickled DataFrames)
-- `workflow_status` - 6-phase execution tracking
+- `workflow_status` - 5-phase execution tracking
 
 ## Scoring System
 
@@ -93,7 +94,7 @@ Automated US stock trading opportunity scanner analyzing stocks with market cap 
 # Test scan (uses provided symbols, skips universe sync)
 python scheduler.py --test --symbols AAPL,MSFT,NVDA
 
-# Full 6-phase workflow (runs at 6 AM ET via cron)
+# Full 5-phase workflow (runs at 3 AM ET via cron)
 python scheduler.py
 
 # Phase 0 only (universe sync + Tier 1/3 pre-calc)
@@ -107,6 +108,22 @@ ss -tlnp | grep 19801
 ```
 
 ## Critical Patterns
+
+**Stock Database Initialization**:
+```python
+from core.stock_universe import StockUniverseManager, initialize_stock_database
+
+# Initialize database (run once)
+result = initialize_stock_database()
+# Returns: stocks_added, etfs_added, total_symbols
+
+# Get stocks for scanning (>=$2B market cap)
+manager = StockUniverseManager()
+stocks = manager.get_stocks(min_market_cap=2e9)
+
+# Get market ETFs for Tier 3
+etfs = manager.get_market_etfs()
+```
 
 **Strategy Plugin Interface**:
 ```python
@@ -142,7 +159,7 @@ spy_df = db.get_tier3_cache('SPY')  # Returns DataFrame
 - **yfinance**: Wikipedia blocks (403), use Slickcharts for stock lists
 - **Memory**: Keep under 500MB, batch processing in 50s
 - **Server**: Port 19801 only (security group restriction)
-- **Cron**: 6 AM ET daily: `0 6 * * 1-5 cd /path && python scheduler.py >> /var/log/trade_scanner.log 2>&1`
+- **Cron**: 3 AM ET daily: `0 3 * * 1-5 cd /path && python scheduler.py >> /var/log/trade_scanner.log 2>&1`
 - **Subagent Deadlock Detection**: When dispatching subagents, implement timeout/watchdog mechanisms. If a subagent task hangs (>5 min without progress), kill and retry with reduced scope. Check TaskOutput with timeout parameter instead of blocking indefinitely.
 
 ## Documentation Alignment Rule

@@ -1,145 +1,213 @@
-# 股票管理流程
+# Stock Management
 
-## 添加新股票
+Managing the stock universe for the Trade Scanner.
 
-### 方法1: Python脚本（推荐）
+## Stock Universe Overview
+
+The Trade Scanner uses a **static CSV file** (`nasdaq_stocklist_screener.csv`) as the source of truth for the stock universe. The database is initialized from this file and can be re-synced when needed.
+
+### Categories
+
+- **stocks**: Individual stocks from NASDAQ/NYSE (~2,800)
+- **market_index_etf**: Market index ETFs (SPY, QQQ, IWM, VIXY, UVXY, etc.)
+
+### Market Cap Filter
+
+Only stocks with market cap >= $2B are included in the scan:
+- Fetched from yfinance during Phase 0
+- Stored in `stocks.market_cap` column
+- Updated on each universe sync
+
+---
+
+## Adding Stocks
+
+### Method 1: CSV File (Recommended)
+
+Edit `nasdaq_stocklist_screener.csv`:
+```csv
+symbol,name,sector,category
+NEW_TICKER,Company Name,Technology,stocks
+```
+
+Then re-initialize the database:
+```bash
+python -c "from core.stock_universe import StockUniverseManager; StockUniverseManager().initialize_database()"
+```
+
+### Method 2: Python API
 
 ```python
+from core.stock_universe import StockUniverseManager
 from data.db import Database
-from datetime import datetime
 
+# Add single stock
 db = Database()
-conn = db.get_connection()
+db.add_stock(
+    symbol="NEW_TICKER",
+    name="Company Name",
+    sector="Technology"
+)
 
-# 添加单只股票
-symbol = "NEW_TICKER"
-name = "Company Name"
-sector = "Technology"
-
-conn.execute('''
-    INSERT INTO stocks (symbol, name, sector, added_date, is_active)
-    VALUES (?, ?, ?, ?, 1)
-''', (symbol, name, sector, datetime.now().strftime('%Y-%m-%d')))
-conn.commit()
+# Sync from CSV (recommended approach)
+manager = StockUniverseManager()
+result = manager.initialize_database()
+print(f"Stocks: {result['stocks']}, ETFs: {result['etfs']}")
 ```
 
-### 方法2: 命令行
-
-```bash
-cd /home/admin/Projects/TradeChanceScreen
-source venv/bin/activate
-python -c "
-from data.db import Database
-from datetime import datetime
-db = Database()
-conn = db.get_connection()
-conn.execute('INSERT INTO stocks (symbol, name, sector, added_date, is_active) VALUES (?, ?, ?, ?, 1)', ('EOSE', 'Eos Energy Enterprises, Inc.', 'Industrials', datetime.now().strftime('%Y-%m-%d')))
-conn.commit()
-print('Added EOSE')
-"
-```
-
-### 方法3: API（如果服务器运行中）
+### Method 3: API (if server running)
 
 ```bash
 curl -X POST http://47.90.229.136:19801/stocks/add \
   -H "Content-Type: application/json" \
-  -d '{"symbol": "EOSE", "name": "Eos Energy Enterprises", "sector": "Industrials"}'
+  -d '{"symbol": "NEW_TICKER", "name": "Company Name", "sector": "Technology"}'
 ```
 
-## 移除股票
+---
 
-### 软删除（推荐）
+## Removing Stocks
 
-```bash
-source venv/bin/activate
-python -c "
-from data.db import Database
-db = Database()
-conn = db.get_connection()
-conn.execute('UPDATE stocks SET is_active = 0 WHERE symbol = ?', ('TICKER',))
-conn.commit()
-print('Removed TICKER')
-"
-```
-
-### 硬删除
-
-```bash
-source venv/bin/activate
-python -c "
-from data.db import Database
-db = Database()
-conn = db.get_connection()
-conn.execute('DELETE FROM stocks WHERE symbol = ?', ('TICKER',))
-conn.commit()
-print('Deleted TICKER')
-"
-```
-
-## 检查股票状态
-
-```bash
-source venv/bin/activate
-python -c "
-from data.db import Database
-db = Database()
-conn = db.get_connection()
-
-# Check if exists
-cursor = conn.execute('SELECT symbol, name, is_active FROM stocks WHERE symbol = ?', ('EOSE',))
-row = cursor.fetchone()
-if row:
-    print(f'{row[0]}: {row[1]} (Active: {bool(row[2])})')
-else:
-    print('Not found')
-
-# List all active
-cursor = conn.execute('SELECT COUNT(*) FROM stocks WHERE is_active = 1')
-print(f'Total active: {cursor.fetchone()[0]}')
-"
-```
-
-## 批量操作
-
-### 添加多只股票
+### Soft Delete (Recommended)
 
 ```python
-stocks_to_add = [
-    ('EOSE', 'Eos Energy Enterprises, Inc.', 'Industrials'),
-    ('OPEN', 'Opendoor Technologies Inc.', 'Real Estate'),
-    # Add more...
-]
+from data.db import Database
 
-for symbol, name, sector in stocks_to_add:
-    # Check if exists first
-    cursor = conn.execute('SELECT 1 FROM stocks WHERE symbol = ?', (symbol,))
-    if not cursor.fetchone():
-        conn.execute('INSERT INTO stocks (symbol, name, sector, added_date, is_active) VALUES (?, ?, ?, ?, 1)',
-                    (symbol, name, sector, datetime.now().strftime('%Y-%m-%d')))
-
-conn.commit()
+db = Database()
+with db.get_connection() as conn:
+    conn.execute(
+        "UPDATE stocks SET is_active = 0 WHERE symbol = ?",
+        ("TICKER",)
+    )
+    conn.commit()
 ```
 
-## 注意事项
+### Hard Delete
 
-1. **验证ticker**: 添加前用yfinance验证ticker存在
-2. **避免重复**: 检查数据库是否已存在
-3. **软删除优先**: 使用is_active=0而不是DELETE，保留历史记录
-4. **缓存数据**: 新股票首次扫描会下载完整历史数据（较慢）
-5. **Delisted处理**: 已退市股票放入`config/delisted.py`，不再扫描
+```python
+from data.db import Database
 
-## 数据库Schema
+db = Database()
+with db.get_connection() as conn:
+    conn.execute(
+        "DELETE FROM stocks WHERE symbol = ?",
+        ("TICKER",)
+    )
+    conn.commit()
+```
+
+---
+
+## Checking Stock Status
+
+```python
+from data.db import Database
+
+db = Database()
+
+# Check single stock
+with db.get_connection() as conn:
+    cursor = conn.execute(
+        "SELECT symbol, name, sector, market_cap, is_active FROM stocks WHERE symbol = ?",
+        ("AAPL",)
+    )
+    row = cursor.fetchone()
+    if row:
+        print(f"{row[0]}: {row[1]}, cap=${row[3]/1e9:.1f}B, active={row[4]}")
+
+# List active stocks
+count = db.get_stocks_count()
+print(f"Active stocks: {count}")
+```
+
+---
+
+## Stock Universe Sync
+
+### Full Universe Initialization
+
+```python
+from core.stock_universe import StockUniverseManager
+
+manager = StockUniverseManager()
+result = manager.initialize_database()
+
+print(f"Stocks added: {result['stocks']}")
+print(f"ETFs added: {result['etfs']}")
+print(f"Total: {result['total']}")
+```
+
+### Get Universe for Scanning
+
+```python
+from core.stock_universe import StockUniverseManager
+
+manager = StockUniverseManager()
+
+# Get all stocks (is_active=1)
+all_stocks = manager.get_stocks()
+print(f"Total stocks: {len(all_stocks)}")
+
+# Get market ETFs for Tier 3
+etfs = manager.get_market_etfs()
+print(f"Market ETFs: {etfs}")
+```
+
+---
+
+## Database Schema
 
 ```sql
 CREATE TABLE stocks (
     symbol TEXT PRIMARY KEY,
     name TEXT,
     sector TEXT,
+    category TEXT DEFAULT 'stocks',  -- 'stocks' or 'market_index_etf'
+    market_cap REAL,                   -- Market cap in dollars
     added_date TEXT,
     is_active INTEGER DEFAULT 1
 );
+
+CREATE TABLE tier1_cache (
+    symbol TEXT PRIMARY KEY,
+    price REAL,
+    ema8 REAL, ema21 REAL, ema50 REAL, ema200 REAL,
+    atr REAL, adr REAL, atr_pct REAL, adr_pct REAL,
+    return_3m REAL, return_6m REAL, return_12m REAL, return_5d REAL,
+    rs_score REAL, rs_percentile REAL,
+    distance_from_52w_high REAL, distance_from_52w_low REAL,
+    volume REAL, avg_volume_20d REAL,
+    calculated_at TEXT
+);
+
+CREATE TABLE tier3_cache (
+    symbol TEXT PRIMARY KEY,
+    data BLOB,  -- pickled DataFrame
+    updated_at TEXT
+);
 ```
 
-- `is_active = 1`: 活跃，参与扫描
-- `is_active = 0`: 非活跃，保留记录但不扫描
+---
+
+## CSV File Format
+
+The `nasdaq_stocklist_screener.csv` format:
+```csv
+symbol,name,sector,category
+AAPL,Apple Inc,Technology,stocks
+MSFT,Microsoft Corp,Technology,stocks
+SPY,SPDR S&P 500,Index,market_index_etf
+VIXY,ProShares VIX Short-Term Futures ETF,Volatility,market_index_etf
+```
+
+**Note**: Market cap is NOT in the CSV - it's fetched from yfinance during Phase 0.
+
+---
+
+## Important Notes
+
+1. **CSV is source of truth**: Edit the CSV file for permanent changes
+2. **Soft delete preferred**: Use `is_active=0` rather than DELETE
+3. **Market cap from yfinance**: Not stored in CSV, fetched live
+4. **Category matters**: 'stocks' for individual stocks, 'market_index_etf' for ETFs
+5. **Universe sync**: Run `initialize_database()` to sync CSV changes to DB
+6. **Filtered by cap**: Only stocks with market_cap >= $2B are scanned

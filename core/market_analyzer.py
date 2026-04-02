@@ -213,3 +213,123 @@ Key Factors:
         summary += f"\nReasoning: {analysis.get('reasoning', 'N/A')[:200]}"
 
         return summary
+
+    def analyze_strategy_allocation(self, sentiment: str, strategy_descriptions: Dict[str, str]) -> Dict[str, int]:
+        """
+        Use AI to determine strategy slot allocation based on market sentiment.
+
+        Args:
+            sentiment: Current market sentiment (bullish, bearish, neutral, watch)
+            strategy_descriptions: Dict mapping strategy names to their descriptions
+
+        Returns:
+            Dict mapping strategy names to slot counts (2-10 each, total 30)
+        """
+        if not self.dashscope_api_key:
+            logger.warning("DashScope API key not configured, using equal allocation")
+            # Default equal allocation if AI unavailable
+            strategies = list(strategy_descriptions.keys())
+            base_slots = 30 // len(strategies)
+            remainder = 30 % len(strategies)
+            allocation = {}
+            for i, name in enumerate(strategies):
+                allocation[name] = base_slots + (1 if i < remainder else 0)
+            return allocation
+
+        try:
+            url = f"{self.dashscope_base}/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {self.dashscope_api_key}",
+                "Content-Type": "application/json"
+            }
+
+            # Build strategy descriptions text
+            strategies_text = "\n".join([
+                f"{i+1}. {name}: {desc}"
+                for i, (name, desc) in enumerate(strategy_descriptions.items())
+            ])
+
+            prompt = f"""Based on the current market sentiment "{sentiment.upper()}", allocate 30 total slots across 6 trading strategies.
+
+Available Strategies:
+{strategies_text}
+
+Allocation Rules:
+- Each strategy must receive BETWEEN 2 and 10 slots (inclusive)
+- Total must equal exactly 30 slots
+- Consider the market sentiment when deciding:
+  * BULLISH: Favor long strategies (momentum, pullback, support bounce)
+  * BEARISH: Favor short strategies (range short, double top)
+  * NEUTRAL: Balanced allocation
+  * WATCH: Conservative, focus on highest quality setups
+
+Return your allocation in this exact JSON format:
+{{
+    "allocations": {{
+        "StrategyName1": 5,
+        "StrategyName2": 5,
+        "StrategyName3": 5,
+        "StrategyName4": 5,
+        "StrategyName5": 5,
+        "StrategyName6": 5
+    }},
+    "reasoning": "brief explanation of allocation logic"
+}}
+
+Ensure the sum of all allocations equals exactly 30, and each is between 2 and 10."""
+
+            payload = {
+                "model": self.model,
+                "messages": [
+                    {"role": "system", "content": "You are a portfolio allocation strategist. Return valid JSON only, no markdown, no explanation outside the JSON."},
+                    {"role": "user", "content": prompt}
+                ],
+                "temperature": 0.3
+            }
+
+            response = requests.post(url, headers=headers, json=payload, timeout=60)
+            response.raise_for_status()
+
+            data = response.json()
+            content = data['choices'][0]['message']['content']
+
+            # Extract JSON from response
+            import re
+            json_match = re.search(r'\{.*\}', content, re.DOTALL)
+            if json_match:
+                result = json.loads(json_match.group())
+            else:
+                result = json.loads(content)
+
+            # Extract allocations
+            allocations = result.get('allocations', {})
+
+            # Validate allocation constraints
+            total = sum(allocations.values())
+            if total != 30:
+                logger.warning(f"AI allocation total is {total}, not 30. Using equal allocation.")
+                return self._equal_allocation(strategy_descriptions)
+
+            for name, slots in allocations.items():
+                if slots < 2 or slots > 10:
+                    logger.warning(f"Strategy {name} has {slots} slots, outside 2-10 range. Using equal allocation.")
+                    return self._equal_allocation(strategy_descriptions)
+
+            logger.info(f"AI strategy allocation: {allocations}")
+            logger.info(f"Reasoning: {result.get('reasoning', 'N/A')[:100]}")
+            return allocations
+
+        except Exception as e:
+            logger.error(f"AI allocation analysis failed: {e}")
+            return self._equal_allocation(strategy_descriptions)
+
+    def _equal_allocation(self, strategy_descriptions: Dict[str, str]) -> Dict[str, int]:
+        """Return equal allocation as fallback."""
+        strategies = list(strategy_descriptions.keys())
+        base_slots = 30 // len(strategies)
+        remainder = 30 % len(strategies)
+        allocation = {}
+        for i, name in enumerate(strategies):
+            allocation[name] = base_slots + (1 if i < remainder else 0)
+        logger.info(f"Using equal allocation: {allocation}")
+        return allocation

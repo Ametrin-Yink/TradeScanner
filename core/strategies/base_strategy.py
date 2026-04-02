@@ -178,10 +178,19 @@ class BaseStrategy(ABC):
         """
         matches = []
 
+        # Get phase0_data if available (contains pre-computed indicators)
+        phase0_data = getattr(self, 'phase0_data', {})
+
         for symbol in symbols:
             try:
-                # Get data
-                df = self._get_data(symbol)
+                # Get data - prefer phase0_data if available
+                if symbol in phase0_data:
+                    df = phase0_data[symbol].get('df')
+                    cached_ind = phase0_data[symbol].get('ind')
+                else:
+                    df = self._get_data(symbol)
+                    cached_ind = None
+
                 if df is None:
                     logger.debug(f"No data for {symbol}")
                     continue
@@ -193,7 +202,12 @@ class BaseStrategy(ABC):
                 if not self.filter(symbol, df):
                     continue
 
-                # Calculate dimensions
+                # Calculate dimensions - pass cached indicators if available
+                if cached_ind is not None:
+                    # Temporarily set indicators in df for dimension calculation
+                    # Dimensions will use TechnicalIndicators which has class-level cache
+                    pass
+
                 dimensions = self.calculate_dimensions(symbol, df)
                 if not dimensions:
                     continue

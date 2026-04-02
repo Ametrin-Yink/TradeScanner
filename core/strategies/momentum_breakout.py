@@ -395,21 +395,27 @@ class MomentumBreakoutStrategy(BaseStrategy):
         Screen all symbols with Phase 0 pre-filter.
         - 52-week high proximity <25%
         - RS > 80 percentile (avoid mediocre stocks that just follow market)
-        Uses shared RS cache from screener if available.
+        Uses shared phase0_data from screener if available.
         """
         prefiltered = []
 
-        # Phase 0.1: Use shared RS cache if available, otherwise calculate
-        rs_cache = getattr(self, 'rs_cache', None)
-        if rs_cache:
-            logger.info("VCP-EP: Phase 0.1 - Using shared RS cache from screener")
-            rs_scores = [
-                {'symbol': s, 'rs': data['rs_score'], 'df': self._get_data(s)}
-                for s, data in rs_cache.items()
-                if s in symbols and self._get_data(s) is not None
-            ]
+        # Phase 0.1: Use phase0_data from screener if available
+        phase0_data = getattr(self, 'phase0_data', None)
+        if phase0_data:
+            logger.info("VCP-EP: Phase 0.1 - Using phase0_data from screener")
+            rs_scores = []
+            for symbol in symbols:
+                if symbol in phase0_data:
+                    data = phase0_data[symbol]
+                    rs_scores.append({
+                        'symbol': symbol,
+                        'rs': data.get('rs_raw', 0),
+                        'percentile': data.get('rs_percentile', 50),
+                        'distance_52w': data.get('distance_from_52w_high', 0),
+                        'df': self._get_data(symbol)
+                    })
         else:
-            logger.info("VCP-EP: Phase 0.1 - Calculating RS scores (no cache)...")
+            logger.info("VCP-EP: Phase 0.1 - Calculating RS scores (no phase0_data)...")
             rs_scores = []
             for symbol in symbols:
                 try:
@@ -435,35 +441,35 @@ class MomentumBreakoutStrategy(BaseStrategy):
                     logger.debug(f"Error calculating RS for {symbol}: {e}")
                     continue
 
-        # Calculate RS percentile if not using shared cache
-        if not rs_cache:
+            # Calculate RS percentile if not using phase0_data
             if not rs_scores:
                 return []
             all_rs = [s['rs'] for s in rs_scores]
             for item in rs_scores:
                 below = sum(1 for r in all_rs if r < item['rs'])
                 item['percentile'] = (below / len(all_rs)) * 100
-        else:
-            # Use pre-calculated percentiles from cache
-            for item in rs_scores:
-                symbol = item['symbol']
-                item['percentile'] = rs_cache.get(symbol, {}).get('percentile', 50)
 
         # Phase 0.2: Pre-filter by 52w high and RS > threshold
         logger.info(f"VCP-EP: Phase 0.2 - Pre-filtering by 52w high and RS > {self.PARAMS['rs_percentile_min']}...")
         for item in rs_scores:
             try:
-                if item['percentile'] < self.PARAMS['rs_percentile_min']:  # RS > threshold
+                if item['percentile'] < self.PARAMS['rs_percentile_min']:
                     continue
 
-                df = item['df']
-                ind = TechnicalIndicators(df)
-                metrics_52w = ind.calculate_52w_metrics()
+                # Use pre-calculated distance_52w from phase0_data if available
+                distance_52w = item.get('distance_52w')
+                if distance_52w is None:
+                    # Fallback: calculate 52w metrics
+                    df = item['df']
+                    if df is None:
+                        continue
+                    ind = TechnicalIndicators(df)
+                    metrics_52w = ind.calculate_52w_metrics()
+                    distance_52w = metrics_52w.get('distance_from_high', 1.0)
 
                 # Relaxed pre-filter: <25% from 52w high
-                if metrics_52w['distance_from_high'] is not None:
-                    if metrics_52w['distance_from_high'] < 0.25:
-                        prefiltered.append(item['symbol'])
+                if distance_52w < 0.25:
+                    prefiltered.append(item['symbol'])
             except Exception as e:
                 logger.debug(f"Error pre-filtering {item['symbol']}: {e}")
                 continue
