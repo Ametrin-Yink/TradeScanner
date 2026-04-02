@@ -71,9 +71,13 @@ class SupportBounceStrategy(BaseStrategy):
             spy_current = spy_df['close'].iloc[-1]
             spy_ema200 = spy_df['close'].ewm(span=200).mean().iloc[-1]
 
-            if spy_current <= spy_ema200:
-                logger.info("U&R: SPY below EMA200, skipping (no rebound in downtrend)")
+            # RELAXED: Allow 2% buffer below EMA200
+            spy_buffer = 0.02  # 2% buffer
+            if spy_current < spy_ema200 * (1 - spy_buffer):
+                logger.info(f"U&R: SPY {spy_current:.2f} below EMA200 {spy_ema200:.2f} (with {spy_buffer:.0%} buffer), skipping")
                 return []
+            elif spy_current < spy_ema200:
+                logger.info(f"U&R: SPY slightly below EMA200 but within buffer, continuing...")
 
         # Pre-filter by support existence and distance
         prefiltered = []
@@ -83,6 +87,7 @@ class SupportBounceStrategy(BaseStrategy):
             try:
                 df = self._get_data(symbol)
                 if df is None or len(df) < self.PARAMS['min_listing_days']:
+                    logger.debug(f"U&R_REJ: {symbol} - Insufficient data")
                     continue
 
                 current_price = df['close'].iloc[-1]
@@ -93,11 +98,13 @@ class SupportBounceStrategy(BaseStrategy):
                 supports = sr_levels.get('support', [])
 
                 if not supports:
+                    logger.debug(f"U&R_REJ: {symbol} - No support levels found")
                     continue
 
                 # Find nearest support
                 supports_below = [s for s in supports if s < current_price]
                 if not supports_below:
+                    logger.debug(f"U&R_REJ: {symbol} - No support below price {current_price:.2f}")
                     continue
 
                 nearest_support = max(supports_below)
@@ -105,7 +112,10 @@ class SupportBounceStrategy(BaseStrategy):
 
                 # Relaxed threshold: < 3%
                 if distance_pct < self.PARAMS['max_distance_from_support']:
+                    logger.debug(f"U&R_PASS: {symbol} - Support at {nearest_support:.2f}, distance {distance_pct:.2%}")
                     prefiltered.append(symbol)
+                else:
+                    logger.debug(f"U&R_REJ: {symbol} - Support too far: {distance_pct:.2%} >= {self.PARAMS['max_distance_from_support']:.2%}")
 
             except Exception as e:
                 logger.debug(f"Error pre-filtering {symbol}: {e}")
