@@ -96,7 +96,7 @@ class CapitulationReboundStrategy(BaseStrategy):
         """
         try:
             # Try to get VIX data
-            vix_df = self._get_data('VIX')
+            vix_df = self._get_data('^VIX')
             if vix_df is None or len(vix_df) < 10:
                 logger.warning("VIX data unavailable, defaulting to limit mode")
                 return 'limit'  # Safer default - limit exposure when VIX unknown
@@ -141,14 +141,18 @@ class CapitulationReboundStrategy(BaseStrategy):
 
         # Capitulation bottom conditions (long mode only)
         if rsi is None or rsi >= self.PARAMS['rsi_oversold']:
+            logger.debug(f"CAP_REJ: {symbol} - RSI {rsi:.1f} >= {self.PARAMS['rsi_oversold']}")
             return False
 
         if current_price >= ema50 - self.PARAMS['ema_atr_multiplier'] * atr:
+            logger.debug(f"CAP_REJ: {symbol} - Price {current_price:.2f} not below EMA50-5ATR {ema50 - self.PARAMS['ema_atr_multiplier'] * atr:.2f}")
             return False
 
         if gaps < self.PARAMS['min_gaps']:
+            logger.debug(f"CAP_REJ: {symbol} - Gaps {gaps} < {self.PARAMS['min_gaps']}")
             return False
 
+        logger.debug(f"CAP_PASS: {symbol} - All pre-filters passed")
         return True
 
     def filter(self, symbol: str, df: pd.DataFrame) -> bool:
