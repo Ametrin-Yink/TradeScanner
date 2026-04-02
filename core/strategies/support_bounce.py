@@ -14,18 +14,25 @@ logger = logging.getLogger(__name__)
 
 
 class SupportBounceStrategy(BaseStrategy):
-    """Strategy E: 支撑回踩买入 - 支撑位假跌破后反弹，区间存在加分（合并原Range多头）"""
+    """
+    Strategy C: SupportBounce v5.0
+    - Removed SPY > EMA200 hard gate (regime-adaptive position sizing instead)
+    - Depth range 2-10% for support distance
+    - Continuous 1-5 day reclaim scoring for RB dimension
+    """
 
     NAME = "SupportBounce"
     STRATEGY_TYPE = StrategyType.C  # Changed from UPTHRUST_REBOUND
-    DESCRIPTION = "SupportBounce v5.0"
+    DESCRIPTION = "SupportBounce v5.0 - regime-adaptive false breakdown"
     DIMENSIONS = ['SQ', 'VD', 'RB']
+    DIRECTION = 'long'
 
     PARAMS = {
         'min_dollar_volume': 50_000_000,
         'min_atr_pct': 0.015,
         'min_listing_days': 50,
-        'max_distance_from_support': 0.03,  # Relaxed from 1% to 3%
+        'max_distance_from_support': 0.10,  # v5.0: Changed from 3% to 10% max (depth range 2-10%)
+        'min_distance_from_support': 0.02,  # v5.0: Minimum 2% depth for valid setup
         'target_r_multiplier': 2.0,  # Changed from 2.5 to 2.0
         'support_tolerance_atr': 0.5,  # Support level ± 0.5 ATR
         'volume_veto_threshold': 1.5,  # Volume > 1.5x MA20 for veto
@@ -33,6 +40,7 @@ class SupportBounceStrategy(BaseStrategy):
         'time_stop_days': 5,  # Changed from 3 to 5
         'time_stop_clv_min': 0.4,  # CLV avg > 0.4
         'range_existence_bonus': 0.5,  # Range existence bonus from F
+        'max_reclaim_days': 5,  # v5.0: Maximum days for valid reclaim scoring
         'sector_etfs': {  # Sector ETF mapping
             'Technology': 'XLK',
             'Financials': 'XLF',
@@ -59,25 +67,10 @@ class SupportBounceStrategy(BaseStrategy):
     def screen(self, symbols: List[str]) -> List[StrategyMatch]:
         """
         Screen all symbols with Phase 0 pre-filter.
-        - SPY > EMA200 (no rebound in downtrend)
-        - Support exists and within 3%
+        - Support exists and within 10% (v5.0: removed SPY > EMA200 gate, depth range 2-10%)
         """
-        # Phase 0: Check SPY trend
-        logger.info("U&R: Phase 0 - Checking SPY trend...")
-        spy_df = getattr(self, '_spy_df', None)
-        if spy_df is None:
-            spy_df = self._get_data('SPY')
-        if spy_df is not None and len(spy_df) >= 200:
-            spy_current = spy_df['close'].iloc[-1]
-            spy_ema200 = spy_df['close'].ewm(span=200).mean().iloc[-1]
-
-            # RELAXED: Allow 2% buffer below EMA200
-            spy_buffer = 0.02  # 2% buffer
-            if spy_current < spy_ema200 * (1 - spy_buffer):
-                logger.info(f"U&R: SPY {spy_current:.2f} below EMA200 {spy_ema200:.2f} (with {spy_buffer:.0%} buffer), skipping")
-                return []
-            elif spy_current < spy_ema200:
-                logger.info(f"U&R: SPY slightly below EMA200 but within buffer, continuing...")
+        # v5.0: SPY > EMA200 gate removed - regime-adaptive position sizing instead
+        logger.info("U&R: Phase 0 - Support Bounce v5.0 (no SPY gate)")
 
         # Pre-filter by support existence and distance
         prefiltered = []
@@ -110,12 +103,15 @@ class SupportBounceStrategy(BaseStrategy):
                 nearest_support = max(supports_below)
                 distance_pct = (current_price - nearest_support) / current_price
 
-                # Relaxed threshold: < 3%
-                if distance_pct < self.PARAMS['max_distance_from_support']:
-                    logger.debug(f"U&R_PASS: {symbol} - Support at {nearest_support:.2f}, distance {distance_pct:.2%}")
-                    prefiltered.append(symbol)
-                else:
-                    logger.debug(f"U&R_REJ: {symbol} - Support too far: {distance_pct:.2%} >= {self.PARAMS['max_distance_from_support']:.2%}")
+                # v5.0: Depth range 2-10% (must be within window)
+                min_depth = self.PARAMS['min_distance_from_support']
+                max_depth = self.PARAMS['max_distance_from_support']
+                if distance_pct < min_depth or distance_pct > max_depth:
+                    logger.debug(f"U&R_REJ: {symbol} - Depth {distance_pct:.2%} outside range [{min_depth:.0%}, {max_depth:.0%}]")
+                    continue
+
+                logger.debug(f"U&R_PASS: {symbol} - Support at {nearest_support:.2f}, depth {distance_pct:.2%}")
+                prefiltered.append(symbol)
 
             except Exception as e:
                 logger.debug(f"Error pre-filtering {symbol}: {e}")
@@ -176,7 +172,10 @@ class SupportBounceStrategy(BaseStrategy):
         nearest_support = max(supports_below)
         distance_pct = abs(current_price - nearest_support) / current_price
 
-        if distance_pct > self.PARAMS['max_distance_from_support']:
+        # v5.0: Depth range 2-10%
+        min_depth = self.PARAMS['min_distance_from_support']
+        max_depth = self.PARAMS['max_distance_from_support']
+        if distance_pct < min_depth or distance_pct > max_depth:
             return False
 
         # Defense 2: Volume Trap Veto (Falling Knife Detection)
@@ -589,7 +588,11 @@ class SupportBounceStrategy(BaseStrategy):
     def _calculate_rb(self, ind: TechnicalIndicators, df: pd.DataFrame, clv: float) -> Tuple[float, Dict]:
         """
         Rebound Setup (RB) - 4 points max.
-        Long lower shadow + CLV position + Prior day halt.
+        v5.0: Continuous 1-5 day reclaim scoring based on days since false breakdown.
+        - 1 day = full points (4.0)
+        - 2-3 days = medium points (3.0)
+        - 4-5 days = lower points (2.0)
+        - >5 days = filter catches (not valid)
         """
         today = df.iloc[-1]
         current_price = today['close']
@@ -602,48 +605,114 @@ class SupportBounceStrategy(BaseStrategy):
         lower_shadow = min(open_price, current_price) - low if min(open_price, current_price) > low else 0
         upper_shadow = high - max(open_price, current_price) if high > max(open_price, current_price) else 0
 
+        # Calculate days since false breakdown (reclaim)
+        days_since_breakdown = self._calculate_days_since_breakdown(df)
+
         details = {
             'clv': clv,
             'lower_shadow_pct': 0,
             'has_hammer': False,
-            'prior_halt': False
+            'prior_halt': False,
+            'days_since_breakdown': days_since_breakdown
         }
 
         rb_score = 0.0
+
+        # v5.0: Continuous reclaim scoring based on days since breakdown
+        # Score linearly from 1 day (full) to 5 days (minimum)
+        if days_since_breakdown <= 1:
+            rb_score += 2.0  # 1 day = full reclaim score
+            details['reclaim_score'] = 'full'
+        elif days_since_breakdown <= 3:
+            # Linear interpolation: 2 days = 1.5, 3 days = 1.0
+            rb_score += 2.0 - (days_since_breakdown - 1) * 0.5
+            details['reclaim_score'] = 'medium'
+        elif days_since_breakdown <= 5:
+            # Linear interpolation: 4 days = 0.75, 5 days = 0.5
+            rb_score += 1.0 - (days_since_breakdown - 3) * 0.25
+            details['reclaim_score'] = 'low'
+        else:
+            details['reclaim_score'] = 'expired'
 
         if total_range > 0:
             lower_shadow_pct = lower_shadow / total_range
             details['lower_shadow_pct'] = lower_shadow_pct
 
-            # 1. Long lower shadow (0-1.5 pts)
+            # Lower shadow bonus (0-1 pt)
             if lower_shadow_pct >= 0.6:
-                rb_score += 1.5
+                rb_score += 1.0
                 details['has_hammer'] = True
             elif lower_shadow_pct >= 0.4:
-                rb_score += 1.0
+                rb_score += 0.7
             elif lower_shadow_pct >= 0.3:
-                rb_score += 0.5
+                rb_score += 0.4
 
-        # 2. CLV position (0-1.5 pts) - higher is better
+        # CLV position bonus (0-1 pt) - higher is better
         if clv >= 0.7:
-            rb_score += 1.5
-        elif clv >= 0.5:
             rb_score += 1.0
+        elif clv >= 0.5:
+            rb_score += 0.7
         elif clv >= 0.4:
-            rb_score += 0.5
-
-        # 3. Prior day halt pattern (0-1 pt)
-        if len(df) >= 2:
-            prev = df.iloc[-2]
-            prev_range = prev['high'] - prev['low']
-            if prev_range > 0:
-                prev_clv = (prev['close'] - prev['low']) / prev_range
-                # Prior day closed near low, today bouncing
-                if prev_clv < 0.3 and clv > 0.5:
-                    rb_score += 1.0
-                    details['prior_halt'] = True
+            rb_score += 0.4
 
         return round(min(4.0, rb_score), 2), details
+
+    def _calculate_days_since_breakdown(self, df: pd.DataFrame) -> int:
+        """
+        Calculate days since false breakdown below support.
+        Returns number of days since price broke below support and rebounded.
+        """
+        if len(df) < 10:
+            return 999  # Not enough data
+
+        current_price = df['close'].iloc[-1]
+
+        # Calculate support levels
+        calc = SupportResistanceCalculator(df)
+        sr_levels = calc.calculate_all()
+        supports = sr_levels.get('support', [])
+
+        if not supports:
+            return 999
+
+        # Find nearest support below current price
+        supports_below = [s for s in supports if s < current_price]
+        if not supports_below:
+            return 999
+
+        nearest_support = max(supports_below)
+
+        # Look back up to 10 days to find false breakdown
+        lookback_days = min(10, len(df) - 1)
+        breakdown_day = None
+
+        for i in range(1, lookback_days + 1):
+            idx = -(i + 1)  # Go back i days from today
+            if idx < -len(df):
+                break
+
+            low = df['low'].iloc[idx]
+            close = df['close'].iloc[idx]
+
+            # Check if price broke below support (low < support)
+            # and then closed back above (close > support) - false breakdown
+            if low < nearest_support and close > nearest_support:
+                breakdown_day = i
+                break
+            # Or price is now below support level but close reclaimed it
+            elif low < nearest_support:
+                # Check if subsequent days reclaimed
+                for j in range(1, i):
+                    check_idx = -(j + 1)
+                    if check_idx >= -len(df):
+                        check_close = df['close'].iloc[check_idx]
+                        if check_close > nearest_support:
+                            breakdown_day = j
+                            break
+                if breakdown_day:
+                    break
+
+        return breakdown_day if breakdown_day else 999
 
     def _calculate_sr(self, distance_pct: float, sr_levels: Dict) -> float:
         """Support Quality dimension (0-5)."""
@@ -788,9 +857,10 @@ class SupportBounceStrategy(BaseStrategy):
         reasons.append(f"Vol {vol_ratio:.1f}x, {contraction_days}d dry")
 
         # RB details
+        reclaim_days = rb_details.get('days_since_breakdown')
+        if reclaim_days and reclaim_days <= 5:
+            reasons.append(f"Reclaim d{reclaim_days} ({rb_details.get('reclaim_score', 'unknown')})")
         if rb_details.get('has_hammer'):
             reasons.append("Hammer candle + bounce")
-        if rb_details.get('prior_halt'):
-            reasons.append("Halt-rebound pattern")
 
         return reasons
