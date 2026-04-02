@@ -14,34 +14,45 @@ logger = logging.getLogger(__name__)
 
 class CapitulationReboundStrategy(BaseStrategy):
     """
-    Strategy H: Parabolic/Capitulation v2.1 - Capitulation bottom detection with volume climax.
+    Strategy F: CapitulationRebound v5.0 - Capitulation bottom detection with volume climax.
+
+    v5.0 Changes:
+    - VIX filter inverted: VIX < 15 = reject (no fear = no capitulation)
+    - VIX 15-35 = full operation
+    - VIX > 35 = Tier B max
+    - Exempt from extreme regime scalar
+    - RSI max changed to 22 (from 20)
 
     Expert suggestions implemented:
     A. Volume Climax: Vol > 4xMA20 = +2 points (panic exhaustion)
     B. RSI Divergence Core: Price extreme + RSI divergence = MO +2 points
-    C. VIX Second Wave Filter: VIX > 30 and rising = reject
+    C. VIX Filter v5.0: VIX < 15 reject, VIX > 35 = Tier B cap
     """
 
     NAME = "CapitulationRebound"
-    STRATEGY_TYPE = StrategyType.F  # Changed from PARABOLIC
-    DESCRIPTION = "CapitulationRebound v5.0"
+    STRATEGY_TYPE = StrategyType.F
+    DESCRIPTION = "CapitulationRebound v5.0 - VIX 15-35 window"
     DIMENSIONS = ['MO', 'EX', 'VC']
+    DIRECTION = 'long'
+
+    # This strategy is exempt from extreme regime scalar
+    EXTREME_EXEMPT = True
 
     PARAMS = {
         'min_dollar_volume': 50_000_000,
         'min_atr_pct': 0.015,
         'min_listing_days': 50,
         'rsi_overbought': 80,
-        'rsi_oversold': 20,
+        'rsi_oversold': 22,  # Changed from 20 to 22 for v5.0
         'ema_atr_multiplier': 5.0,
         'min_gaps': 2,
         'lookback_days': 5,
         'stop_atr_multiplier': 2.0,
-        'volume_climax_threshold': 4.0,  # Expert suggestion A
+        'volume_climax_threshold': 4.0,
         'volume_high_threshold': 3.0,
         'volume_medium_threshold': 2.0,
-        'vix_reject_threshold': 30,  # Expert suggestion C
-        'vix_limit_threshold': 25,
+        'vix_min': 15,      # NEW: VIX < 15 = reject (no fear = no capitulation)
+        'vix_max_full': 35,  # VIX > 35 = cap at Tier B
         'profit_efficiency_threshold': 1.5,
         'efficiency_penalty': 2.0,
         'time_window_days': 10,
@@ -57,19 +68,19 @@ class CapitulationReboundStrategy(BaseStrategy):
         Screen symbols for capitulation bottom setups.
         """
         # Phase 0: Check VIX filter (ONCE)
-        logger.info("Parabolic: Phase 0 - Checking VIX filter...")
+        logger.info("CapitulationRebound: Phase 0 - Checking VIX filter...")
         self._vix_status = self._check_vix_filter()
 
-        # Expert suggestion C: VIX second wave filter
+        # v5.0: VIX filter inverted - VIX < 15 = reject
         if self._vix_status == 'reject':
-            logger.info("Parabolic: VIX > 30 and rising - rejecting all signals (don't catch falling knives)")
+            logger.info("CapitulationRebound: VIX < 15 - no capitulation fear, rejecting all signals")
             return []
 
-        logger.info(f"Parabolic: VIX status = {self._vix_status}")
+        logger.info(f"CapitulationRebound: VIX status = {self._vix_status}")
 
         # Phase 0.5: Pre-filter by extreme conditions
         prefiltered = []
-        logger.info("Parabolic: Phase 0.5 - Pre-filtering for capitulation bottom setups...")
+        logger.info("CapitulationRebound: Phase 0.5 - Pre-filtering for capitulation bottom setups...")
 
         for symbol in symbols:
             try:
@@ -84,22 +95,25 @@ class CapitulationReboundStrategy(BaseStrategy):
                 logger.debug(f"Error pre-filtering {symbol}: {e}")
                 continue
 
-        logger.info(f"Parabolic: {len(prefiltered)}/{len(symbols)} passed pre-filter")
+        logger.info(f"CapitulationRebound: {len(prefiltered)}/{len(symbols)} passed pre-filter")
 
         # Use base class screen on pre-filtered symbols
         return super().screen(prefiltered)
 
     def _check_vix_filter(self) -> str:
         """
-        Expert suggestion C: VIX second wave filter.
+        VIX Filter v5.0: Inverted logic for capitulation detection.
+        - VIX < 15 = reject (no fear = no capitulation)
+        - VIX 15-35 = full operation
+        - VIX > 35 = limit (cap at Tier B)
         Returns: 'reject', 'limit', or 'normal'
         """
         try:
             # Try to get VIX data
             vix_df = self._get_data('^VIX')
             if vix_df is None or len(vix_df) < 10:
-                logger.warning("VIX data unavailable, defaulting to limit mode")
-                return 'limit'  # Safer default - limit exposure when VIX unknown
+                logger.warning("VIX data unavailable, defaulting to normal mode")
+                return 'normal'
 
             current_vix = vix_df['close'].iloc[-1]
             vix_5d_ago = vix_df['close'].iloc[-6] if len(vix_df) > 5 else current_vix
@@ -110,18 +124,21 @@ class CapitulationReboundStrategy(BaseStrategy):
                 'slope': vix_slope
             }
 
-            # Capitulation mode: be extra careful with VIX
-            # Don't catch falling knives when panic is spreading
-            if current_vix > self.PARAMS['vix_reject_threshold'] and vix_slope > 0:
+            # v5.0: Inverted VIX filter
+            # VIX < 15 = no fear = no capitulation to catch
+            if current_vix < self.PARAMS['vix_min']:
+                logger.info(f"VIX {current_vix:.1f} < {self.PARAMS['vix_min']} - no fear, rejecting")
                 return 'reject'
-            elif current_vix > self.PARAMS['vix_limit_threshold']:
+            # VIX > 35 = extreme fear, cap at Tier B
+            elif current_vix > self.PARAMS['vix_max_full']:
+                logger.info(f"VIX {current_vix:.1f} > {self.PARAMS['vix_max_full']} - extreme fear, limiting to Tier B")
                 return 'limit'
 
             return 'normal'
 
         except Exception as e:
-            logger.warning(f"Could not check VIX: {e}, defaulting to limit mode")
-            return 'limit'  # Safer default on error
+            logger.warning(f"Could not check VIX: {e}, defaulting to normal mode")
+            return 'normal'  # Default to normal on error (VIX window 15-35 is safe)
 
     def _prefilter_symbol(self, symbol: str, df: pd.DataFrame) -> bool:
         """Pre-filter symbol for capitulation bottom conditions only."""
@@ -449,16 +466,17 @@ class CapitulationReboundStrategy(BaseStrategy):
 
     def calculate_position_pct(self, tier: str) -> float:
         """
-        Override to implement VIX-based position limit (Expert suggestion C).
+        Override to implement VIX-based position limit for v5.0.
+        - VIX > 35 = cap at Tier B (5%)
         Long mode only.
         """
         base_pct = super().calculate_position_pct(tier)
 
-        # Expert suggestion C: VIX-based limits for capitulation mode
+        # v5.0: VIX > 35 = cap at Tier B max
         if self.vix_data:
             current_vix = self.vix_data['current']
 
-            if current_vix > self.PARAMS['vix_limit_threshold']:
+            if current_vix > self.PARAMS['vix_max_full']:
                 # Limit to Tier B max (5%)
                 return min(base_pct, 0.05)
 
