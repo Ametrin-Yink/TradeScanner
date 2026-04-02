@@ -195,15 +195,16 @@ class BaseStrategy(ABC):
         """Build human-readable match reasons."""
         pass
 
-    def screen(self, symbols: List[str]) -> List[StrategyMatch]:
+    def screen(self, symbols: List[str], max_candidates: int = 5) -> List[StrategyMatch]:
         """
         Screen all symbols using this strategy.
 
         Args:
             symbols: List of stock symbols
+            max_candidates: Maximum candidates to return (from allocation table)
 
         Returns:
-            List of StrategyMatch objects (max 5 per strategy)
+            List of StrategyMatch objects (max max_candidates)
         """
         matches = []
 
@@ -273,8 +274,8 @@ class BaseStrategy(ABC):
                 logger.error(f"Error screening {symbol} for {self.NAME}: {e}")
                 continue
 
-        # Sort by confidence and return top 5
-        return sorted(matches, key=lambda x: x.confidence, reverse=True)[:5]
+        # Sort by confidence and return top max_candidates
+        return sorted(matches, key=lambda x: x.confidence, reverse=True)[:max_candidates]
 
     def _get_data(self, symbol: str) -> Optional[pd.DataFrame]:
         """Get cached or fetch data for symbol."""

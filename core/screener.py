@@ -15,8 +15,11 @@ from core.strategies import (
     get_all_strategies,
     StrategyType,
     StrategyMatch,
+    STRATEGY_NAME_TO_LETTER,
+    STRATEGY_METADATA,
 )
 from core.indicators import TechnicalIndicators
+from core.market_regime import MarketRegimeDetector, REGIME_ALLOCATION_TABLE
 from data.db import Database
 
 logger = logging.getLogger(__name__)
@@ -430,6 +433,52 @@ class StrategyScreener:
 
         return selected[:self.TOTAL_CANDIDATES_TARGET]
 
+    def _allocate_by_table(
+        self,
+        all_candidates: List[StrategyMatch],
+        allocation: Dict[str, int],
+        regime: str
+    ) -> List[StrategyMatch]:
+        """
+        Select exactly N candidates per strategy as per allocation table.
+        No cross-strategy backfilling.
+
+        Args:
+            all_candidates: All candidates from all strategies
+            allocation: Slot allocation per strategy letter (A-H)
+            regime: Current regime (for position sizing)
+
+        Returns:
+            Selected candidates (may be < 10 if strategies underfilled)
+        """
+        selected = []
+
+        for letter, slots in allocation.items():
+            if slots == 0:
+                continue
+
+            # Get strategy name from letter
+            strategy_name = STRATEGY_METADATA.get(letter, {}).get('name', '')
+
+            # Get candidates for this strategy
+            strategy_cands = [c for c in all_candidates if c.strategy == strategy_name]
+
+            # Sort by score descending
+            strategy_cands.sort(key=lambda x: x.technical_snapshot.get('score', 0), reverse=True)
+
+            # Take top N
+            for candidate in strategy_cands[:slots]:
+                candidate.regime = regime  # Set regime for position sizing
+                selected.append(candidate)
+
+            logger.info(f"[{letter}:{strategy_name}] Selected {min(len(strategy_cands), slots)}/{len(strategy_cands)} (target: {slots})")
+
+        # Sort final list by score
+        selected.sort(key=lambda x: x.technical_snapshot.get('score', 0), reverse=True)
+
+        logger.info(f"Total selected: {len(selected)} candidates")
+        return selected
+
     def load_earnings_calendar(self, symbols: Optional[List[str]] = None):
         """Load earnings calendar for EP strategy."""
         self.earnings_calendar = self.fetcher.fetch_earnings_calendar(symbols)
@@ -514,207 +563,67 @@ class StrategyScreener:
     def screen_all(
         self,
         symbols: List[str],
+        regime: str = 'neutral',
         market_data: Optional[Dict[str, pd.DataFrame]] = None,
-        batch_size: int = 100,
-        strategy_allocation: Optional[Dict[str, int]] = None
+        batch_size: int = 100
     ) -> List[StrategyMatch]:
         """
-        Screen all symbols using all 6 strategy plugins with unified Phase 0.
+        Screen all symbols using strategy plugins with regime-based allocation.
 
-        Phase 0: Universal pre-calculation (price/volume/RS/SPY) - runs ONCE
-        Phase 1: Strategy screening (global collection, no slot limits)
-        Phase 2: Dynamic allocation (30 slots by AI-driven allocation)
+        Phase 1: Get allocation from regime table
+        Phase 2: Run only strategies with slots > 0
+        Phase 3: Select exactly N per strategy (no backfill)
 
         Args:
             symbols: List of stock symbols to screen
+            regime: Market regime from MarketRegimeDetector
             market_data: Optional pre-loaded market data cache (must have 280+ days)
             batch_size: Number of symbols to process per batch (default 100)
-            strategy_allocation: AI-driven allocation dict mapping strategy names to slot counts
-                {'MomentumBreakout': 5, 'PullbackEntry': 5, ...} (2-10 each, total 30)
 
         Returns:
-            List of StrategyMatch (30 total, dynamically allocated across strategy groups)
+            List of StrategyMatch (max 10 total, distributed per table)
         """
         self.market_data = market_data or {}
 
-        # Use AI allocation directly (per-strategy slots)
-        if strategy_allocation:
-            strategy_slots = strategy_allocation
-            logger.info(f"AI strategy allocation: {strategy_slots}")
-        else:
-            # Default equal allocation across 8 strategies
-            strategy_slots = {
-                'MomentumBreakout': 4,
-                'PullbackEntry': 4,
-                'SupportBounce': 4,
-                'DistributionTop': 4,
-                'AccumulationBottom': 4,
-                'CapitulationRebound': 4,
-                'EarningsGap': 3,
-                'RelativeStrengthLong': 3
-            }
-            logger.info(f"Default strategy allocation: {strategy_slots}")
+        # Get allocation from table
+        detector = MarketRegimeDetector()
+        allocation = detector.get_allocation(regime)
 
-        # Load earnings if not already loaded
-        if not self.earnings_calendar:
-            self.load_earnings_calendar(symbols)
+        logger.info(f"Regime: {regime}")
+        logger.info(f"Allocation: {allocation}")
 
-        # ============================================================
-        # PHASE 0: Universal Pre-Calculation (runs ONCE for all strategies)
-        # ============================================================
-        logger.info("=" * 60)
-        logger.info("PHASE 0: Universal Pre-Calculation")
-        logger.info("=" * 60)
+        # Filter to active strategies (slots > 0)
+        active_strategies = {}
+        for stype, strategy in self._strategies.items():
+            # Map strategy to its letter (A-H)
+            letter = STRATEGY_NAME_TO_LETTER.get(strategy.NAME)
+            slots = allocation.get(letter, 0) if letter else 0
+            if slots > 0:
+                active_strategies[stype] = strategy
+                logger.info(f"  {strategy.NAME} ({letter}): {slots} slots")
+            else:
+                logger.info(f"  {strategy.NAME} ({letter}): SKIPPED (0 slots)")
 
+        # Run Phase 0 pre-calculation
         self._phase0_data = self._run_phase0_precalculation(symbols, self.market_data)
 
-        # Share Phase 0 data, market data, and earnings with all strategies
-        # Use direct reference (read-only) instead of copy to save memory
-        # Data is not modified by strategies, only read
-        for strategy in self._strategies.values():
-            strategy.market_data = self.market_data  # Shared reference, not copy
-            strategy.phase0_data = self._phase0_data  # Shared reference, not copy
+        # Share data with active strategies
+        for strategy in active_strategies.values():
+            strategy.market_data = self.market_data
+            strategy.phase0_data = self._phase0_data
             strategy.spy_return_5d = self._spy_return_5d
-            strategy._spy_df = self._spy_data  # Share SPY dataframe
-            if hasattr(strategy, 'earnings_calendar'):
-                strategy.earnings_calendar = self.earnings_calendar  # Shared reference
+            strategy._spy_df = self._spy_data
 
-        # ============================================================
-        # PHASE 1: Strategy-specific screening (using Phase 0 data)
-        # Collect ALL candidates globally, no slot limits at this stage
-        # ============================================================
-        logger.info("=" * 60)
-        logger.info("PHASE 1: Strategy Screening (Global Collection)")
-        logger.info("=" * 60)
+        # Phase 1: Screen with each active strategy
+        all_candidates = []
+        for stype, strategy in active_strategies.items():
+            letter = STRATEGY_NAME_TO_LETTER.get(strategy.NAME)
+            max_slots = allocation.get(letter, 0)
+            candidates = strategy.screen(symbols, max_candidates=max_slots)
+            all_candidates.extend(candidates)
+            logger.info(f"{strategy.NAME}: {len(candidates)} candidates (max {max_slots})")
 
-        all_candidates = []  # Global pool of all candidates from all strategies
-        phase1_stats = {}  # Statistics for each strategy
+        # Phase 2: Allocate by table (strict, no backfill)
+        selected = self._allocate_by_table(all_candidates, allocation, regime)
 
-        # Get symbols that passed Phase 0 (already filtered by price/volume)
-        phase0_symbols = list(self._phase0_data.keys())
-        total_symbols = len(phase0_symbols)
-        num_batches = (total_symbols + batch_size - 1) // batch_size
-
-        for strategy_type, strategy in self._strategies.items():
-            start_time = time.time()
-            strategy_name = strategy.NAME  # Use class NAME for consistency
-            logger.info(f"\n{'='*60}")
-            logger.info(f"[START] {strategy_name} Strategy Screening")
-            logger.info(f"{'='*60}")
-            logger.info(f"Total symbols to screen: {total_symbols}")
-            logger.info(f"Batch size: {batch_size}, Total batches: {num_batches}")
-
-            try:
-                strategy_candidates = []
-                processed_count = 0
-                passed_filter_count = 0
-
-                for batch_idx in range(num_batches):
-                    batch_start = batch_idx * batch_size
-                    batch_end = min(batch_start + batch_size, total_symbols)
-                    batch_symbols = phase0_symbols[batch_start:batch_end]
-                    processed_count += len(batch_symbols)
-
-                    # Progress logging every 10% or every 10 batches
-                    progress_pct = (batch_idx + 1) / num_batches * 100
-                    if batch_idx % max(1, num_batches // 10) == 0 or batch_idx % 10 == 0:
-                        logger.info(f"[{strategy_name}] Progress: {processed_count}/{total_symbols} "
-                                    f"({progress_pct:.1f}%) - Batch {batch_idx+1}/{num_batches}")
-
-                    # Process this batch using strategy's screen method
-                    batch_candidates = strategy.screen(batch_symbols)
-
-                    if batch_candidates:
-                        passed_filter_count += len(batch_candidates)
-                        strategy_candidates.extend(batch_candidates)
-                        logger.debug(f"[{strategy_name}] Batch {batch_idx+1}: "
-                                     f"{len(batch_candidates)} candidates")
-
-                    del batch_symbols
-                    if batch_idx % 5 == 0:
-                        gc.collect()
-
-                # Calculate tier distribution for this strategy
-                tier_counts = {'S': 0, 'A': 0, 'B': 0, 'C': 0}
-                score_sum = 0
-                score_max = 0
-                score_min = float('inf')
-
-                for candidate in strategy_candidates:
-                    tier = candidate.technical_snapshot.get('tier', 'C')
-                    score = candidate.technical_snapshot.get('score', 0)
-                    tier_counts[tier] = tier_counts.get(tier, 0) + 1
-                    score_sum += score
-                    score_max = max(score_max, score)
-                    score_min = min(score_min, score)
-
-                avg_score = score_sum / len(strategy_candidates) if strategy_candidates else 0
-                elapsed = time.time() - start_time
-
-                # Store stats
-                phase1_stats[strategy_name] = {
-                    'screened': total_symbols,
-                    'passed_filter': passed_filter_count,
-                    'final_candidates': len(strategy_candidates),
-                    'tier_distribution': tier_counts,
-                    'avg_score': avg_score,
-                    'score_range': f"{score_min:.1f}-{score_max:.1f}" if strategy_candidates else "N/A",
-                    'elapsed_seconds': elapsed
-                }
-
-                # Collect ALL candidates from this strategy (no slot limit yet)
-                if strategy_candidates:
-                    all_candidates.extend(strategy_candidates)
-
-                # Strategy completion summary
-                logger.info(f"\n{'='*60}")
-                logger.info(f"[COMPLETE] {strategy_name} Strategy Screening")
-                logger.info(f"{'='*60}")
-                logger.info(f"Screened: {total_symbols} symbols")
-                logger.info(f"Passed filter: {passed_filter_count} symbols")
-                logger.info(f"Final candidates: {len(strategy_candidates)} symbols")
-                logger.info(f"Tier distribution: S={tier_counts['S']}, A={tier_counts['A']}, "
-                            f"B={tier_counts['B']}, C={tier_counts['C']}")
-                logger.info(f"Score range: {score_min:.1f}-{score_max:.1f}, Average: {avg_score:.2f}")
-                logger.info(f"Time elapsed: {elapsed:.2f}s ({total_symbols/elapsed:.1f} symbols/sec)")
-
-                if 'strategy_candidates' in locals():
-                    del strategy_candidates
-                gc.collect()
-
-            except Exception as e:
-                logger.error(f"Error in {strategy_name} screening: {e}")
-                import traceback
-                logger.error(traceback.format_exc())
-
-        # Phase 1 complete summary
-        logger.info(f"\n{'='*60}")
-        logger.info(f"PHASE 1 COMPLETE: {len(all_candidates)} total candidates from all strategies")
-        logger.info(f"{'='*60}")
-
-        # Print summary table
-        logger.info("\nStrategy Screening Summary:")
-        logger.info(f"{'Strategy':<15} {'Screened':>10} {'Passed':>8} {'Final':>8} {'S':>4} {'A':>4} {'B':>4} {'C':>4} {'AvgScore':>10} {'Time':>8}")
-        logger.info("-" * 90)
-        for strategy_name, stats in phase1_stats.items():
-            tier_dist = stats['tier_distribution']
-            logger.info(f"{strategy_name:<15} {stats['screened']:>10} {stats['passed_filter']:>8} "
-                        f"{stats['final_candidates']:>8} {tier_dist['S']:>4} {tier_dist['A']:>4} "
-                        f"{tier_dist['B']:>4} {tier_dist['C']:>4} {stats['avg_score']:>10.2f} "
-                        f"{stats['elapsed_seconds']:>7.1f}s")
-
-        # ============================================================
-        # PHASE 2: Dynamic Allocation from Global Pool
-        # Select 30 candidates based on per-strategy slots allocation
-        # ============================================================
-        logger.info("=" * 60)
-        logger.info("PHASE 2: Dynamic Allocation (30 slots)")
-        logger.info("=" * 60)
-
-        selected_candidates = self._allocate_candidates_by_strategy(all_candidates, strategy_slots)
-
-        logger.info(f"=" * 60)
-        logger.info(f"TOTAL: {len(selected_candidates)} candidates selected")
-        logger.info(f"=" * 60)
-
-        return selected_candidates
+        return selected
