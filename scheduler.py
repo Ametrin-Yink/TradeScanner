@@ -15,7 +15,7 @@ from core.selector import CandidateSelector
 from core.ai_confidence_scorer import ScoredCandidate
 from core.analyzer import OpportunityAnalyzer
 from core.reporter import ReportGenerator
-from core.notifier import MultiNotifier
+from core.market_regime import MarketRegimeDetector
 
 logging.basicConfig(
     level=logging.INFO,
@@ -33,11 +33,13 @@ class CompleteScanner:
         - Fetch Tier 3 market data
         - Calculate Tier 1 universal metrics
 
-    Phase 1: Market Sentiment (2-3 min)
-        - Analyze market sentiment using Tavily + DashScope
+    Phase 1: Market Regime Detection (2-3 min)
+        - Detect market regime using SPY/VIX data
+        - Get strategy allocation from regime table
 
     Phase 2: Strategy Screening (10-15 min)
         - Screen all symbols using pre-calculated Tier 1/3 data
+        - Pass regime context for strategy filtering
         - Lazy Tier 2 calculations for candidates only
 
     Phase 3: AI Analysis (15-20 min)
@@ -67,15 +69,18 @@ class CompleteScanner:
         # Phase timing tracking
         self._phase_times: Dict[str, int] = {}
         self._sentiment_result: Optional[Dict] = None
+        self.regime_detector = MarketRegimeDetector()
 
-        # Strategy descriptions for AI allocation
+        # Update strategy descriptions for v5.0
         self.STRATEGY_DESCRIPTIONS = {
-            "MomentumBreakout": "VCP platform + volume breakout with RS>85 percentile bonus - for momentum plays",
-            "PullbackEntry": "Institutional Grade Pullback System - buying pullbacks to EMA support",
-            "SupportBounce": "Support level false breakdown rebound - range existence bonus",
-            "RangeShort": "Short-only at resistance in bearish/neutral markets",
-            "DoubleTopBottom": "Distribution top / accumulation bottom with left/right side grading",
-            "CapitulationRebound": "Capitulation bottom detection with volume climax"
+            "MomentumBreakout": "VCP platform + volume breakout - momentum plays",
+            "PullbackEntry": "Institutional pullback to EMA support",
+            "SupportBounce": "False breakdown reclaim - regime adaptive",
+            "DistributionTop": "Short distribution tops (was RangeShort + DoubleTop)",
+            "AccumulationBottom": "Long accumulation bottoms",
+            "CapitulationRebound": "Capitulation bottom detection - VIX 15-35",
+            "EarningsGap": "Post-earnings gap continuation - long/short",
+            "RelativeStrengthLong": "RS divergence longs in bear markets"
         }
 
     def is_trading_day(self) -> bool:
@@ -138,22 +143,23 @@ class CompleteScanner:
 
             symbols = phase0_result['symbols']
 
-            # Phase 1: Market Sentiment & Strategy Allocation
-            phase1_result = self._phase1_market_sentiment()
-            sentiment = phase1_result['sentiment']
-            strategy_allocation = phase1_result['allocation']
+            # Phase 1: Market Regime Detection (replaces sentiment)
+            phase1_result = self._phase1_market_analysis()
+            regime = phase1_result['regime']
 
-            # Phase 2: Strategy Screening with AI-driven allocation
-            phase2_result = self._phase2_screening(symbols, strategy_allocation)
-            candidates = phase2_result['candidates']
-            fail_symbols = phase2_result['fail_symbols']
+            # Phase 2: Screen with regime
+            candidates = self.screener.screen_all(
+                symbols=symbols,
+                regime=regime
+            )
+            fail_symbols = []
 
             if not candidates:
                 logger.warning("No candidates found, generating empty report")
                 report_path = self._phase4_report(
-                    [], candidates, sentiment, symbols, fail_symbols
+                    [], candidates, regime, symbols, fail_symbols
                 )
-                self._phase5_notify(report_path, sentiment, [])
+                self._phase5_notify(report_path, regime, [])
                 self._update_workflow_status(
                     run_date,
                     status='completed',
@@ -162,15 +168,15 @@ class CompleteScanner:
                 return report_path
 
             # Phase 3: AI Analysis
-            analyzed = self._phase3_ai_analysis(candidates, sentiment)
+            analyzed = self._phase3_ai_analysis(candidates, regime)
 
             # Phase 4: Report Generation
             report_path = self._phase4_report(
-                analyzed, candidates, sentiment, symbols, fail_symbols
+                analyzed, candidates, regime, symbols, fail_symbols
             )
 
             # Phase 5: Push Notifications
-            self._phase5_notify(report_path, sentiment, analyzed)
+            self._phase5_notify(report_path, regime, analyzed)
 
             # Finalize workflow status
             total_duration = (datetime.now() - workflow_start).total_seconds()
@@ -239,73 +245,50 @@ class CompleteScanner:
 
         return result
 
-    def _phase1_market_sentiment(self) -> Dict:
-        """Phase 1: Market Sentiment Analysis with Strategy Allocation.
+    def _phase1_market_analysis(self) -> Dict:
+        """
+        Phase 1: Market Regime Detection (replaces sentiment).
 
         Returns:
-            Dict with 'sentiment' and 'allocation'
+            Dict with 'regime' and 'allocation'
         """
         logger.info("\n" + "=" * 60)
-        logger.info("PHASE 1: Market Sentiment Analysis")
+        logger.info("PHASE 1: Market Regime Detection")
         logger.info("=" * 60)
 
         phase_start = datetime.now()
 
         try:
-            # Get market sentiment
-            sentiment_result = self.market_analyzer.analyze_sentiment()
-            sentiment = sentiment_result.get('sentiment', 'neutral')
-            logger.info(f"Market sentiment: {sentiment.upper()}")
+            # Get SPY and VIX data from Tier 3 cache
+            spy_df = self.db.get_tier3_cache('SPY')
+            vix_df = self.db.get_tier3_cache('VIX') or self.db.get_tier3_cache('VIXY')
 
-            # Store sentiment_result for use in report generation
-            self._sentiment_result = sentiment_result
+            # Detect regime
+            regime = self.regime_detector.detect_regime(spy_df, vix_df)
+            allocation = self.regime_detector.get_allocation(regime)
 
-            # Get AI-driven strategy allocation
-            logger.info("\nRequesting AI strategy allocation...")
-            allocation = self.market_analyzer.analyze_strategy_allocation(
-                sentiment=sentiment,
-                strategy_descriptions=self.STRATEGY_DESCRIPTIONS
-            )
-
-            # Validate allocation
-            total_slots = sum(allocation.values())
+            logger.info(f"Market regime: {regime}")
             logger.info(f"Strategy allocation: {allocation}")
-            logger.info(f"Total slots: {total_slots}")
 
         except Exception as e:
-            logger.error(f"Market sentiment/allocation analysis failed: {e}")
-            sentiment = 'neutral'
-            self._sentiment_result = {
-                'sentiment': 'neutral',
-                'confidence': 50,
-                'reasoning': f'Analysis failed: {str(e)}',
-                'key_factors': []
-            }
-            # Equal fallback allocation
-            allocation = {
-                "MomentumBreakout": 5,
-                "PullbackEntry": 5,
-                "SupportBounce": 5,
-                "RangeShort": 5,
-                "DoubleTopBottom": 5,
-                "CapitulationRebound": 5
-            }
+            logger.error(f"Regime detection failed: {e}")
+            regime = 'neutral'
+            allocation = self.regime_detector.get_allocation('neutral')
 
         duration = (datetime.now() - phase_start).total_seconds()
         self._phase_times['phase1'] = int(duration)
-        logger.info(f"Phase 1 complete in {duration:.1f}s")
 
         return {
-            'sentiment': sentiment,
+            'regime': regime,
             'allocation': allocation
         }
 
-    def _phase2_screening(self, symbols: List[str], strategy_allocation: Optional[Dict[str, int]] = None) -> Dict:
+    def _phase2_screening(self, symbols: List[str], regime: str) -> Dict:
         """Phase 2: Strategy Screening.
 
         Args:
             symbols: List of symbols to screen
-            strategy_allocation: Optional dict mapping strategy names to slot counts
+            regime: Market regime from regime detector
 
         Returns:
             Dict with candidates and fail_symbols
@@ -316,19 +299,16 @@ class CompleteScanner:
 
         phase_start = datetime.now()
 
-        logger.info(f"Screening {len(symbols)} symbols with 6 strategies")
-        if strategy_allocation:
-            logger.info(f"AI allocation: {strategy_allocation}")
+        logger.info(f"Screening {len(symbols)} symbols with regime: {regime}")
 
         # Screen all symbols using pre-calculated Tier 1 data
-        # Pass allocation to screener for dynamic slot allocation
+        # Pass regime to screener for strategy filtering
         candidates = self.screener.screen_all(
             symbols=symbols,
-            strategy_allocation=strategy_allocation
+            regime=regime
         )
 
         # For now, we don't track individual failures in the new flow
-        # Could be enhanced later
         fail_symbols = []
 
         duration = (datetime.now() - phase_start).total_seconds()
@@ -345,13 +325,13 @@ class CompleteScanner:
     def _phase3_ai_analysis(
         self,
         candidates: List,
-        sentiment: str
+        regime: str
     ) -> List:
         """Phase 3: AI Analysis of top candidates (parallelized).
 
         Args:
             candidates: List of strategy matches
-            sentiment: Market sentiment
+            regime: Market regime
 
         Returns:
             List of analyzed opportunities
@@ -364,8 +344,8 @@ class CompleteScanner:
 
         phase_start = datetime.now()
 
-        # Select top 10
-        top_10 = self.selector.select_top_10(candidates, sentiment)
+        # Select top 10 (regime-aware selection)
+        top_10 = self.selector.select_top_10(candidates, regime)
         logger.info(f"Selected {len(top_10)} opportunities for deep analysis")
         logger.info(f"Analyzing with 2 parallel workers...")
 
@@ -376,7 +356,7 @@ class CompleteScanner:
         def analyze_single(match):
             """Analyze a single opportunity."""
             try:
-                analysis = self.opportunity_analyzer.analyze_opportunity(match, sentiment)
+                analysis = self.opportunity_analyzer.analyze_opportunity(match, regime)
                 return analysis
             except Exception as e:
                 logger.error(f"Failed to analyze {match.symbol}: {e}")
@@ -414,7 +394,7 @@ class CompleteScanner:
         self,
         analyzed: List,
         candidates: List,
-        sentiment: str,
+        regime: str,
         symbols: List[str],
         fail_symbols: List[str]
     ) -> str:
@@ -423,7 +403,7 @@ class CompleteScanner:
         Args:
             analyzed: List of analyzed opportunities
             candidates: All candidates found
-            sentiment: Market sentiment
+            regime: Market regime
             symbols: All symbols screened
             fail_symbols: Failed symbols
 
@@ -439,8 +419,7 @@ class CompleteScanner:
         report_path = self.reporter.generate_report(
             opportunities=analyzed,
             all_candidates=candidates,
-            market_sentiment=sentiment,
-            sentiment_result=getattr(self, '_sentiment_result', None),
+            market_regime=regime,
             total_stocks=len(symbols),
             success_count=len(symbols) - len(fail_symbols),
             fail_count=len(fail_symbols),
@@ -458,14 +437,14 @@ class CompleteScanner:
     def _phase5_notify(
         self,
         report_path: str,
-        sentiment: str,
+        regime: str,
         analyzed: List
     ):
         """Phase 5: Push Notifications.
 
         Args:
             report_path: Path to report
-            sentiment: Market sentiment
+            regime: Market regime
             analyzed: List of analyzed opportunities
         """
         logger.info("\n" + "=" * 60)
@@ -485,7 +464,7 @@ class CompleteScanner:
         # Send notifications
         results = self.notifier.send_scan_summary(
             scan_date=scan_date,
-            market_sentiment=sentiment,
+            market_regime=regime,
             top_opportunities=analyzed,
             report_url=report_url
         )
