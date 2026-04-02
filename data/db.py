@@ -41,6 +41,31 @@ class Database:
             logger.info("Migrating stocks table: adding market_cap column")
             conn.execute("ALTER TABLE stocks ADD COLUMN market_cap REAL")
 
+    def migrate_tier1_cache_v5(self):
+        """Add v5.0 columns to tier1_cache table."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        # Check if columns exist
+        cursor.execute("PRAGMA table_info(tier1_cache)")
+        existing_columns = {row[1] for row in cursor.fetchall()}
+
+        new_columns = {
+            'accum_ratio_15d': 'REAL',
+            'days_to_earnings': 'INTEGER',
+            'earnings_date': 'TEXT',
+            'gap_1d_pct': 'REAL',
+            'gap_direction': 'TEXT',
+            'spy_regime': 'TEXT'
+        }
+
+        for column, dtype in new_columns.items():
+            if column not in existing_columns:
+                cursor.execute(f"ALTER TABLE tier1_cache ADD COLUMN {column} {dtype}")
+                logger.info(f"Added column {column} to tier1_cache")
+
+        conn.commit()
+
     def get_connection(self):
         return sqlite3.connect(self.db_path)
 
