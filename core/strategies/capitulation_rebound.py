@@ -464,13 +464,13 @@ class CapitulationReboundStrategy(BaseStrategy):
 
         return reasons
 
-    def calculate_position_pct(self, tier: str) -> float:
+    def calculate_position_pct(self, tier: str, regime: str = 'neutral') -> float:
         """
         Override to implement VIX-based position limit for v5.0.
         - VIX > 35 = cap at Tier B (5%)
         Long mode only.
         """
-        base_pct = super().calculate_position_pct(tier)
+        base_pct = super().calculate_position_pct(tier, regime)
 
         # v5.0: VIX > 35 = cap at Tier B max
         if self.vix_data:

@@ -76,7 +76,8 @@ class StrategyScreener:
         # Initialize all strategy plugins
         self._strategies = {}
         for strategy_type in [StrategyType.A, StrategyType.B, StrategyType.C,
-                               StrategyType.D, StrategyType.E, StrategyType.F]:
+                               StrategyType.D, StrategyType.E, StrategyType.F,
+                               StrategyType.G, StrategyType.H]:
             self._strategies[strategy_type] = create_strategy(
                 strategy_type, fetcher=self.fetcher, db=self.db
             )
@@ -613,6 +614,7 @@ class StrategyScreener:
             strategy.phase0_data = self._phase0_data
             strategy.spy_return_5d = self._spy_return_5d
             strategy._spy_df = self._spy_data
+            strategy._current_regime = regime
 
         # Phase 1: Screen with each active strategy
         all_candidates = []

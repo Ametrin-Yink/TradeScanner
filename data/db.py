@@ -146,7 +146,9 @@ class Database:
             'volume_sma', 'ema8', 'ema21', 'ema50', 'ema200', 'atr', 'atr_pct',
             'adr', 'adr_pct', 'ret_3m', 'ret_6m', 'ret_12m', 'ret_5d',
             'rs_raw', 'rs_percentile', 'distance_from_52w_high', 'high_60d', 'low_60d',
-            'gaps_5d', 'rsi_14', 'data_days'
+            'gaps_5d', 'rsi_14', 'data_days',
+            'accum_ratio_15d', 'days_to_earnings', 'earnings_date', 'gap_1d_pct',
+            'gap_direction', 'spy_regime'
         ]
 
         values = []
