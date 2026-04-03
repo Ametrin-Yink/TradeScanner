@@ -18,6 +18,9 @@ class EarningsCalendar:
         """
         Get next earnings date for a stock.
 
+        Optimized to use ticker.calendar (4 quarters) instead of
+        ticker.earnings_dates (full history) to reduce memory usage.
+
         Args:
             symbol: Stock symbol
 
@@ -26,19 +29,30 @@ class EarningsCalendar:
         """
         try:
             ticker = yf.Ticker(symbol)
-            earnings = ticker.earnings_dates
-            if earnings is None or earnings.empty:
-                return None
+            calendar = ticker.calendar
 
-            # Get future dates
-            today = datetime.now().date()
-            future_dates = earnings[earnings.index.date >= today]
+            # calendar is a dict with keys like 'Earnings Date', 'Dividend Date', etc.
+            if calendar and 'Earnings Date' in calendar:
+                earnings_dates = calendar['Earnings Date']
+                if earnings_dates and isinstance(earnings_dates, list):
+                    # Get the first (nearest) future earnings date
+                    today = datetime.now().date()
+                    for date_val in earnings_dates:
+                        if date_val:
+                            try:
+                                # Handle both date objects and ISO strings
+                                if isinstance(date_val, str):
+                                    date = datetime.fromisoformat(date_val).date()
+                                elif hasattr(date_val, 'date'):
+                                    date = date_val.date()
+                                else:
+                                    date = date_val  # Already a date object
+                                if date >= today:
+                                    return datetime.combine(date, datetime.min.time())
+                            except:
+                                continue
 
-            if future_dates.empty:
-                return None
-
-            # Return nearest future earnings date
-            return future_dates.index[0].to_pydatetime()
+            return None
 
         except Exception as e:
             logger.warning(f"Failed to get earnings date for {symbol}: {e}")

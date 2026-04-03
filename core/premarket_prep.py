@@ -4,6 +4,7 @@ Initializes stock database, fetches Tier 3 market data,
 fetches market data for all stocks, and calculates Tier 1 universal metrics.
 Stocks with market cap <$2B are filtered out during pre-calculation.
 """
+import gc
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
@@ -111,8 +112,12 @@ class PreMarketPrep:
         logger.info(f"✓ Pre-filter: {len(qualifying_stocks)} stocks passed")
         logger.info(f"  (market cap >=$2B, price $2-3000, volume >=100K)")
 
-        # Step 5: Calculate Tier 1 universal metrics
-        logger.info("\n[5/5] Calculating Tier 1 universal metrics...")
+        # Step 5: Update earnings dates (conditional, memory-optimized)
+        logger.info("\n[5/5] Updating earnings dates...")
+        self._update_earnings_dates(qualifying_stocks)
+
+        # Step 6: Calculate Tier 1 universal metrics
+        logger.info("\n[6/6] Calculating Tier 1 universal metrics...")
         tier1_count = self._calculate_tier1_cache(qualifying_stocks)
         logger.info(f"✓ Tier 1 cache calculated: {tier1_count} symbols")
 
@@ -201,6 +206,10 @@ class PreMarketPrep:
 
             logger.debug(f"  Batch complete: {success} success, {failed} failed")
 
+            # Memory cleanup between batches
+            import gc
+            gc.collect()
+
         return {
             'total': total,
             'success': success,
@@ -243,13 +252,13 @@ class PreMarketPrep:
 
             try:
                 # Get latest market data
-                conn = db.get_connection()
-                cursor = conn.execute(
-                    """SELECT close, volume FROM market_data
-                    WHERE symbol = ? ORDER BY date DESC LIMIT 20""",
-                    (symbol,)
-                )
-                rows = cursor.fetchall()
+                with db.get_connection() as conn:
+                    cursor = conn.execute(
+                        """SELECT close, volume FROM market_data
+                        WHERE symbol = ? ORDER BY date DESC LIMIT 20""",
+                        (symbol,)
+                    )
+                    rows = cursor.fetchall()
 
                 if len(rows) < 5:  # Need at least 5 days of data
                     continue
@@ -301,6 +310,96 @@ class PreMarketPrep:
             'total_stocks': total_stocks
         }
 
+    def _update_earnings_dates(self, symbols: List[str]):
+        """Update earnings dates only for stocks with expired/missing cache.
+
+        Optimized to use ticker.calendar (4 quarters only) instead of
+        ticker.earnings_dates (full history) to reduce memory usage.
+        Smaller batch sizes with aggressive cleanup between batches.
+
+        Args:
+            symbols: List of stock symbols
+        """
+        today = datetime.now().date()
+
+        # Find stocks needing earnings update
+        needs_update = []
+        for symbol in symbols:
+            cached_date = self.db.get_stock_earnings_date(symbol)
+            if not cached_date:
+                needs_update.append(symbol)
+            else:
+                # Check if earnings has passed
+                try:
+                    cached_dt = datetime.fromisoformat(cached_date).date()
+                    if cached_dt < today:
+                        needs_update.append(symbol)
+                except:
+                    needs_update.append(symbol)  # Invalid date format, refetch
+
+        if not needs_update:
+            logger.info("  All earnings dates up to date")
+            return
+
+        logger.info(f"  Fetching earnings for {len(needs_update)}/{len(symbols)} stocks")
+
+        # Fetch in small batches with aggressive memory cleanup
+        # Reduced from 50 to 20 to prevent yfinance memory buildup
+        batch_size = 20
+        updated = 0
+        total_batches = (len(needs_update) + batch_size - 1) // batch_size
+
+        for i in range(0, len(needs_update), batch_size):
+            batch = needs_update[i:i + batch_size]
+            logger.info(f"  Earnings batch {i//batch_size + 1}/{total_batches}: {len(batch)} stocks")
+
+            for symbol in batch:
+                try:
+                    # Use ticker.calendar instead of earnings_dates
+                    # calendar returns dict with 'Earnings Date' as a list
+                    # earnings_dates returns full history DataFrame (memory-heavy)
+                    ticker = yf.Ticker(symbol)
+                    calendar = ticker.calendar
+
+                    # calendar is a dict with keys like 'Earnings Date', 'Dividend Date', etc.
+                    if calendar and 'Earnings Date' in calendar:
+                        earnings_dates = calendar['Earnings Date']
+                        if earnings_dates and isinstance(earnings_dates, list):
+                            # Get the first (nearest) future earnings date
+                            for date_val in earnings_dates:
+                                if date_val:
+                                    try:
+                                        # Handle both date objects and ISO strings
+                                        if isinstance(date_val, str):
+                                            date = datetime.fromisoformat(date_val).date()
+                                        elif hasattr(date_val, 'date'):
+                                            date = date_val.date()
+                                        else:
+                                            date = date_val  # Already a date object
+                                        if date >= today:
+                                            self.db.update_stock_earnings_date(symbol, date.isoformat())
+                                            updated += 1
+                                            break
+                                    except:
+                                        continue
+
+                    # Explicit cleanup - delete in reverse order of creation
+                    if 'calendar' in locals():
+                        del calendar
+                    if 'ticker' in locals():
+                        del ticker
+
+                except Exception as e:
+                    logger.debug(f"Failed to fetch earnings for {symbol}: {e}")
+
+            # Aggressive GC after each batch
+            gc.collect()
+            import time
+            # Increased sleep time to allow memory release
+            time.sleep(0.5)
+
+        logger.info(f"  Updated earnings dates for {updated} stocks")
+
     def _calculate_tier1_cache(self, symbols: List[str]) -> int:
         """Calculate Tier 1 universal metrics for all symbols.
 
@@ -312,25 +411,44 @@ class PreMarketPrep:
         """
         cached_count = 0
         total = len(symbols)
+        batch_size = 200  # Process in batches to control memory
 
-        for i, symbol in enumerate(symbols):
-            if (i + 1) % 100 == 0:
-                logger.info(f"  Calculating Tier 1: {i + 1}/{total}...")
+        logger.info(f"  Processing {total} stocks in batches of {batch_size}...")
 
-            try:
-                # Get market data from database
-                df = self._get_symbol_data(symbol)
-                if df is None or len(df) < 50:
-                    continue
+        for batch_start in range(0, total, batch_size):
+            batch_end = min(batch_start + batch_size, total)
+            batch = symbols[batch_start:batch_end]
 
-                # Calculate Tier 1 metrics
-                metrics = self._calculate_tier1_metrics(symbol, df)
-                if metrics:
-                    self.db.save_tier1_cache(symbol, metrics)
-                    cached_count += 1
+            logger.info(f"  Batch {(batch_start // batch_size) + 1}/{(total + batch_size - 1) // batch_size}: {batch_start + 1}-{batch_end}")
 
-            except Exception as e:
-                logger.debug(f"Failed to calculate Tier 1 for {symbol}: {e}")
+            for i, symbol in enumerate(batch):
+                global_idx = batch_start + i
+                if (global_idx + 1) % 50 == 0:
+                    logger.info(f"    Progress: {global_idx + 1}/{total}...")
+
+                try:
+                    # Get market data from database
+                    df = self._get_symbol_data(symbol)
+                    if df is None or len(df) < 50:
+                        continue
+
+                    # Calculate Tier 1 metrics (earnings already cached in Step 5)
+                    metrics = self._calculate_tier1_metrics(symbol, df)
+                    if metrics:
+                        self.db.save_tier1_cache(symbol, metrics)
+                        cached_count += 1
+
+                    # Explicit cleanup after each symbol
+                    del df
+                    if (global_idx + 1) % 20 == 0:
+                        gc.collect()
+
+                except Exception as e:
+                    logger.debug(f"Failed to calculate Tier 1 for {symbol}: {e}")
+
+            # Force garbage collection between batches
+            gc.collect()
+            logger.debug(f"  Batch complete. Memory cleaned.")
 
         return cached_count
 
@@ -344,13 +462,13 @@ class PreMarketPrep:
             DataFrame with OHLCV data or None
         """
         try:
-            conn = self.db.get_connection()
-            cursor = conn.execute(
-                """SELECT date, open, high, low, close, volume
-                   FROM market_data WHERE symbol = ? ORDER BY date""",
-                (symbol,)
-            )
-            rows = cursor.fetchall()
+            with self.db.get_connection() as conn:
+                cursor = conn.execute(
+                    """SELECT date, open, high, low, close, volume
+                       FROM market_data WHERE symbol = ? ORDER BY date""",
+                    (symbol,)
+                )
+                rows = cursor.fetchall()
 
             if not rows:
                 return None
@@ -469,13 +587,16 @@ class PreMarketPrep:
             gap_1d_pct = (df['open'].iloc[-1] / df['close'].iloc[-2] - 1) if len(df) >= 2 else 0
             gap_direction = 'up' if gap_1d_pct > 0.02 else ('down' if gap_1d_pct < -0.02 else 'none')
 
-            # NEW: Fetch earnings date
-            earnings_date = self.fetcher.fetch_earnings_date(symbol)
+            # NEW: Get earnings date from DB cache (already populated by Step 5)
+            today = datetime.now().date()
+            earnings_date = self.db.get_stock_earnings_date(symbol)
             days_to_earnings = None
             if earnings_date:
-                ed = datetime.fromisoformat(earnings_date).date()
-                today = datetime.now().date()
-                days_to_earnings = (ed - today).days
+                try:
+                    ed = datetime.fromisoformat(earnings_date).date()
+                    days_to_earnings = (ed - today).days
+                except:
+                    pass  # Invalid date format
 
             return {
                 'cache_date': datetime.now().date().isoformat(),

@@ -80,26 +80,26 @@ class DataFetcher:
             Tuple of (DataFrame or None, latest_date or None)
         """
         try:
-            conn = self.db.get_connection()
-            cursor = conn.execute(
-                "SELECT date, open, high, low, close, volume FROM market_data WHERE symbol = ? ORDER BY date",
-                (symbol,)
-            )
-            rows = cursor.fetchall()
+            with self.db.get_connection() as conn:
+                cursor = conn.execute(
+                    "SELECT date, open, high, low, close, volume FROM market_data WHERE symbol = ? ORDER BY date",
+                    (symbol,)
+                )
+                rows = cursor.fetchall()
 
-            if not rows:
-                return None, None
+                if not rows:
+                    return None, None
 
-            # Convert to DataFrame
-            df = pd.DataFrame(rows, columns=['date', 'open', 'high', 'low', 'close', 'volume'])
-            df['date'] = pd.to_datetime(df['date'])
-            df.set_index('date', inplace=True)
+                # Convert to DataFrame
+                df = pd.DataFrame(rows, columns=['date', 'open', 'high', 'low', 'close', 'volume'])
+                df['date'] = pd.to_datetime(df['date'])
+                df.set_index('date', inplace=True)
 
-            # Get latest date
-            latest_date = df.index.max().date()
+                # Get latest date
+                latest_date = df.index.max().date()
 
-            logger.debug(f"Cached data for {symbol}: {len(df)} rows, latest {latest_date}")
-            return df, latest_date
+                logger.debug(f"Cached data for {symbol}: {len(df)} rows, latest {latest_date}")
+                return df, latest_date
 
         except Exception as e:
             logger.debug(f"No cached data for {symbol}: {e}")
@@ -244,13 +244,13 @@ class DataFetcher:
         try:
             if incremental:
                 # Check latest date in database
-                conn = self.db.get_connection()
-                cursor = conn.execute(
-                    "SELECT MAX(date) FROM market_data WHERE symbol = ?",
-                    (symbol,)
-                )
-                result = cursor.fetchone()
-                latest_db_date = result[0] if result and result[0] else None
+                with self.db.get_connection() as conn:
+                    cursor = conn.execute(
+                        "SELECT MAX(date) FROM market_data WHERE symbol = ?",
+                        (symbol,)
+                    )
+                    result = cursor.fetchone()
+                    latest_db_date = result[0] if result and result[0] else None
 
                 # Filter only new rows
                 if latest_db_date:
@@ -436,32 +436,72 @@ class DataFetcher:
         except Exception as e:
             logger.error(f"Failed to fetch Dow Jones symbols: {e}")
             return []
-    def fetch_earnings_date(self, symbol: str) -> Optional[str]:
+    def fetch_earnings_date(self, symbol: str, use_cache: bool = True) -> Optional[str]:
         """
-        Fetch next earnings date for symbol.
+        Fetch next earnings date for symbol with smart caching.
+
+        Uses cached value if earnings hasn't occurred yet. Only fetches from
+        yfinance when earnings date has passed or no cache exists.
+
+        Optimized to use ticker.calendar (4 quarters only) instead of
+        ticker.earnings_dates (full history) to reduce memory usage.
+
+        Args:
+            symbol: Stock symbol
+            use_cache: Whether to use cached value (default True)
 
         Returns:
             ISO date string (YYYY-MM-DD) or None
         """
+        today = datetime.now().date()
+
+        # Check cache first
+        if use_cache:
+            try:
+                cached_date = self.db.get_stock_earnings_date(symbol)
+                if cached_date:
+                    # Parse cached date
+                    cached_dt = datetime.fromisoformat(cached_date).date()
+                    # If earnings hasn't happened yet, use cache
+                    if cached_dt >= today:
+                        logger.debug(f"Using cached earnings date for {symbol}: {cached_date}")
+                        return cached_date
+                    # If earnings passed, we need fresh data - fall through
+                    logger.debug(f"Earnings passed for {symbol}, fetching new date")
+            except Exception as e:
+                logger.debug(f"Cache check failed for {symbol}: {e}")
+
+        # Fetch from yfinance using calendar (lighter than earnings_dates)
         try:
             ticker = yf.Ticker(symbol)
-            earnings_dates = ticker.earnings_dates
+            calendar = ticker.calendar
 
-            if earnings_dates is None or earnings_dates.empty:
-                return None
-
-            # Find first future earnings date
-            from datetime import datetime
-            today = datetime.now().date()
-
-            for date_idx in earnings_dates.index:
-                if hasattr(date_idx, 'date'):
-                    date = date_idx.date()
-                else:
-                    date = date_idx
-
-                if date >= today:
-                    return date.isoformat()
+            # calendar is a dict with keys like 'Earnings Date', 'Dividend Date', etc.
+            if calendar and 'Earnings Date' in calendar:
+                earnings_dates = calendar['Earnings Date']
+                if earnings_dates and isinstance(earnings_dates, list):
+                    # Get the first (nearest) future earnings date
+                    for date_val in earnings_dates:
+                        if date_val:
+                            try:
+                                # Handle both date objects and ISO strings
+                                if isinstance(date_val, str):
+                                    date = datetime.fromisoformat(date_val).date()
+                                elif hasattr(date_val, 'date'):
+                                    date = date_val.date()
+                                else:
+                                    date = date_val  # Already a date object
+                                if date >= today:
+                                    earnings_date = date.isoformat()
+                                    # Store in cache
+                                    try:
+                                        self.db.update_stock_earnings_date(symbol, earnings_date)
+                                        logger.debug(f"Cached earnings date for {symbol}: {earnings_date}")
+                                    except Exception as e:
+                                        logger.debug(f"Failed to cache earnings date for {symbol}: {e}")
+                                    return earnings_date
+                            except:
+                                continue
 
             return None
         except Exception as e:
@@ -519,14 +559,14 @@ class DataFetcher:
 
         # Check database cache first
         try:
-            conn = self.db.get_connection()
-            placeholders = ','.join(['?' for _ in symbols])
-            cursor = conn.execute(
-                f"SELECT symbol, sector, industry FROM stock_info WHERE symbol IN ({placeholders})",
-                symbols
-            )
-            cached = {row[0]: {'sector': row[1], 'industry': row[2]} for row in cursor.fetchall()}
-            results.update(cached)
+            with self.db.get_connection() as conn:
+                placeholders = ','.join(['?' for _ in symbols])
+                cursor = conn.execute(
+                    f"SELECT symbol, sector, industry FROM stock_info WHERE symbol IN ({placeholders})",
+                    symbols
+                )
+                cached = {row[0]: {'sector': row[1], 'industry': row[2]} for row in cursor.fetchall()}
+                results.update(cached)
         except Exception as e:
             logger.debug(f"Could not fetch cached stock info: {e}")
             cached = {}
@@ -540,12 +580,12 @@ class DataFetcher:
 
                 # Cache to database
                 try:
-                    conn = self.db.get_connection()
-                    conn.execute('''
-                        INSERT OR REPLACE INTO stock_info (symbol, sector, industry, updated_date)
-                        VALUES (?, ?, ?, date('now'))
-                    ''', (symbol, info.get('sector'), info.get('industry')))
-                    conn.commit()
+                    with self.db.get_connection() as conn:
+                        conn.execute('''
+                            INSERT OR REPLACE INTO stock_info (symbol, sector, industry, updated_date)
+                            VALUES (?, ?, ?, date('now'))
+                        ''', (symbol, info.get('sector'), info.get('industry')))
+                        conn.commit()
                 except Exception as e:
                     logger.debug(f"Could not cache stock info: {e}")
 
