@@ -1,4 +1,4 @@
-"""Complete 5-phase workflow scheduler for 6 AM automated execution."""
+"""Complete 6-phase workflow scheduler for 3 AM automated execution."""
 import argparse
 import logging
 import sys
@@ -16,6 +16,7 @@ from core.ai_confidence_scorer import ScoredCandidate
 from core.analyzer import OpportunityAnalyzer
 from core.reporter import ReportGenerator
 from core.market_regime import MarketRegimeDetector
+from core.notifier import MultiNotifier
 
 logging.basicConfig(
     level=logging.INFO,
@@ -25,31 +26,37 @@ logger = logging.getLogger(__name__)
 
 
 class CompleteScanner:
-    """Complete 5-phase workflow scanner for daily 6 AM execution.
+    """Complete 6-phase workflow scanner for daily 3 AM execution.
 
     Phase 0: Data Preparation (15-20 min)
-        - Fetch universe from Finviz
+        - Fetch universe from stock list
         - Sync with database
         - Fetch Tier 3 market data
         - Calculate Tier 1 universal metrics
 
-    Phase 1: Market Regime Detection (2-3 min)
-        - Detect market regime using SPY/VIX data
-        - Get strategy allocation from regime table
+    Phase 1: AI Market Regime Detection (2-3 min)
+        - AI-powered regime classification using Tavily + technicals
+        - Returns regime, allocation, ai_confidence, ai_reasoning
 
     Phase 2: Strategy Screening (10-15 min)
         - Screen all symbols using pre-calculated Tier 1/3 data
         - Pass regime context for strategy filtering
         - Lazy Tier 2 calculations for candidates only
+        - Returns up to 30 candidates
 
-    Phase 3: AI Analysis (15-20 min)
+    Phase 3: AI Scoring - Top 30 Selection (5-10 min)
+        - Select top 30 candidates using regime-aware scoring
+        - Parallel AI analysis with 2 workers
+
+    Phase 4: Deep Analysis - Top 10 (10-15 min)
         - Deep analysis of top 10 candidates
+        - Risk/reward assessment, setup quality scoring
 
-    Phase 4: Report Generation (2-3 min)
-        - Generate HTML report
+    Phase 5: Report Generation (2-3 min)
+        - Generate HTML report with top 30 table and top 10 deep analysis
 
-    Phase 5: Push Notifications (1 min)
-        - Send notifications to WeChat and Discord
+    Phase 6: Push Notifications (1 min)
+        - Send notifications to WeChat and Discord with AI regime info
     """
 
     def __init__(self):
@@ -101,7 +108,7 @@ class CompleteScanner:
         skip_market_hours_check: bool = False
     ) -> Optional[str]:
         """
-        Run complete 5-phase workflow.
+        Run complete 6-phase workflow.
 
         Args:
             symbols: Optional list of symbols (uses universe sync if None)
@@ -127,7 +134,7 @@ class CompleteScanner:
                 return None
 
             logger.info("=" * 60)
-            logger.info("STARTING COMPLETE 5-PHASE WORKFLOW")
+            logger.info("STARTING COMPLETE 6-PHASE WORKFLOW")
             logger.info("=" * 60)
 
             # Phase 0: Data Preparation
@@ -143,23 +150,23 @@ class CompleteScanner:
 
             symbols = phase0_result['symbols']
 
-            # Phase 1: Market Regime Detection (replaces sentiment)
+            # Phase 1: AI Market Regime Detection
             phase1_result = self._phase1_market_analysis()
             regime = phase1_result['regime']
+            ai_confidence = phase1_result.get('ai_confidence', 0)
+            ai_reasoning = phase1_result.get('ai_reasoning', '')
 
-            # Phase 2: Screen with regime
-            candidates = self.screener.screen_all(
-                symbols=symbols,
-                regime=regime
-            )
-            fail_symbols = []
+            # Phase 2: Strategy Screening with 30 slots
+            phase2_result = self._phase2_screening(symbols, regime)
+            candidates = phase2_result['candidates']
+            fail_symbols = phase2_result.get('fail_symbols', [])
 
             if not candidates:
                 logger.warning("No candidates found, generating empty report")
-                report_path = self._phase4_report(
-                    [], candidates, regime, symbols, fail_symbols
+                report_path = self._phase5_report(
+                    [], [], regime, symbols, fail_symbols
                 )
-                self._phase5_notify(report_path, regime, [])
+                self._phase6_notify(report_path, regime, [], ai_confidence, ai_reasoning)
                 self._update_workflow_status(
                     run_date,
                     status='completed',
@@ -167,16 +174,21 @@ class CompleteScanner:
                 )
                 return report_path
 
-            # Phase 3: AI Analysis
-            analyzed = self._phase3_ai_analysis(candidates, regime)
+            # Phase 3: AI Scoring (top 30)
+            top_30 = self._phase3_ai_analysis(candidates, regime)
 
-            # Phase 4: Report Generation
-            report_path = self._phase4_report(
-                analyzed, candidates, regime, symbols, fail_symbols
+            # Phase 4: Deep Analysis (top 10)
+            final_candidates = self._phase4_deep_analysis(top_30, regime)
+
+            # Phase 5: Report Generation
+            report_path = self._phase5_report(
+                top_30,      # All 30 for full table
+                final_candidates,  # Top 10 with deep analysis
+                regime, symbols, fail_symbols
             )
 
-            # Phase 5: Push Notifications
-            self._phase5_notify(report_path, regime, analyzed)
+            # Phase 6: Push Notifications
+            self._phase6_notify(report_path, regime, final_candidates, ai_confidence, ai_reasoning)
 
             # Finalize workflow status
             total_duration = (datetime.now() - workflow_start).total_seconds()
@@ -184,7 +196,7 @@ class CompleteScanner:
                 run_date,
                 status='completed',
                 report_path=report_path,
-                candidates_count=len(analyzed)
+                candidates_count=len(final_candidates)
             )
 
             logger.info("=" * 60)
@@ -419,19 +431,37 @@ class CompleteScanner:
 
         return analyzed
 
-    def _phase4_report(
+    def _phase4_deep_analysis(self, top_30: list, regime: str) -> list:
+        """Phase 4: Deep analysis for top 10."""
+        logger.info("\n" + "=" * 60)
+        logger.info("PHASE 4: Deep Analysis (Top 10)")
+        logger.info("=" * 60)
+
+        phase_start = datetime.now()
+
+        analyzed = self.opportunity_analyzer.analyze_top_10_deep(top_30, regime)
+
+        duration = (datetime.now() - phase_start).total_seconds()
+        self._phase_times['phase4'] = int(duration)
+
+        logger.info(f"Deep analyzed {len(analyzed)} opportunities")
+        logger.info(f"Phase 4 complete in {duration:.1f}s")
+
+        return analyzed
+
+    def _phase5_report(
         self,
-        analyzed: List,
-        candidates: List,
+        all_candidates: List,
+        deep_analyzed: List,
         regime: str,
         symbols: List[str],
         fail_symbols: List[str]
     ) -> str:
-        """Phase 4: Report Generation.
+        """Phase 5: Report Generation.
 
         Args:
-            analyzed: List of analyzed opportunities
-            candidates: All candidates found
+            all_candidates: All 30 candidates for full table
+            deep_analyzed: Top 10 with deep analysis
             regime: Market regime
             symbols: All symbols screened
             fail_symbols: Failed symbols
@@ -440,14 +470,14 @@ class CompleteScanner:
             Path to generated report
         """
         logger.info("\n" + "=" * 60)
-        logger.info("PHASE 4: Report Generation")
+        logger.info("PHASE 5: Report Generation")
         logger.info("=" * 60)
 
         phase_start = datetime.now()
 
         report_path = self.reporter.generate_report(
-            opportunities=analyzed,
-            all_candidates=candidates,
+            opportunities=deep_analyzed,
+            all_candidates=all_candidates,
             market_regime=regime,
             total_stocks=len(symbols),
             success_count=len(symbols) - len(fail_symbols),
@@ -456,28 +486,32 @@ class CompleteScanner:
         )
 
         duration = (datetime.now() - phase_start).total_seconds()
-        self._phase_times['phase4'] = int(duration)
+        self._phase_times['phase5'] = int(duration)
 
         logger.info(f"Report generated: {report_path}")
-        logger.info(f"Phase 4 complete in {duration:.1f}s")
+        logger.info(f"Phase 5 complete in {duration:.1f}s")
 
         return report_path
 
-    def _phase5_notify(
+    def _phase6_notify(
         self,
         report_path: str,
         regime: str,
-        analyzed: List
+        candidates: List,
+        ai_confidence: int,
+        ai_reasoning: str
     ):
-        """Phase 5: Push Notifications.
+        """Phase 6: Push Notifications.
 
         Args:
             report_path: Path to report
             regime: Market regime
-            analyzed: List of analyzed opportunities
+            candidates: List of final analyzed opportunities (top 10)
+            ai_confidence: AI regime detection confidence (0-100)
+            ai_reasoning: AI reasoning summary for regime classification
         """
         logger.info("\n" + "=" * 60)
-        logger.info("PHASE 5: Push Notifications")
+        logger.info("PHASE 6: Push Notifications")
         logger.info("=" * 60)
 
         phase_start = datetime.now()
@@ -485,25 +519,28 @@ class CompleteScanner:
         scan_date = datetime.now().strftime('%Y-%m-%d')
 
         # Convert local file path to web URL
-        # From: /home/admin/Projects/TradeChanceScreen/web/reports/report_YYYY-MM-DD.html
-        # To: http://47.90.229.136:19801/reports/report_YYYY-MM-DD.html
-        report_filename = report_path.split('/')[-1]  # report_YYYY-MM-DD.html
+        report_filename = report_path.split('/')[-1]
         report_url = f"http://47.90.229.136:19801/reports/{report_filename}"
+
+        # Log AI info
+        logger.info(f"AI Regime Confidence: {ai_confidence}%")
+        logger.info(f"AI Reasoning: {ai_reasoning[:100]}...")
+        logger.info(f"Final candidates: {len(candidates)}")
 
         # Send notifications
         results = self.notifier.send_scan_summary(
             scan_date=scan_date,
             market_regime=regime,
-            top_opportunities=analyzed,
+            top_opportunities=candidates,
             report_url=report_url
         )
 
         duration = (datetime.now() - phase_start).total_seconds()
-        self._phase_times['phase5'] = int(duration)
+        self._phase_times['phase6'] = int(duration)
 
         logger.info(f"Discord: {'sent' if results.get('discord') else 'failed'}")
         logger.info(f"WeChat: {'sent' if results.get('wechat') else 'failed'}")
-        logger.info(f"Phase 5 complete in {duration:.1f}s")
+        logger.info(f"Phase 6 complete in {duration:.1f}s")
 
     def _update_workflow_status(
         self,
@@ -533,6 +570,7 @@ class CompleteScanner:
             'phase3_duration': self._phase_times.get('phase3'),
             'phase4_duration': self._phase_times.get('phase4'),
             'phase5_duration': self._phase_times.get('phase5'),
+            'phase6_duration': self._phase_times.get('phase6'),
             'total_duration': total_duration,
             'symbols_count': getattr(self, '_symbols_count', 0),
             'candidates_count': candidates_count,
