@@ -144,6 +144,34 @@ class MarketRegimeDetector:
         logger.info(f"Regime: {regime} (SPY=${current_price:.2f}, EMA50=${ema50:.2f}, EMA200=${ema200:.2f}, VIX={vix_current:.1f})")
         return regime
 
+    def detect_regime_ai(self, spy_df: pd.DataFrame, vix_df: pd.DataFrame,
+                         tavily_results: list, ai_sentiment: str) -> str:
+        """
+        Select regime from 6 options based on technical + news analysis.
+
+        Priority:
+        1. If VIX > 30 AND tavily shows fear/extreme volatility -> extreme_vix
+        2. Use ai_sentiment if confidence >= 70
+        3. Fallback to technical detection
+
+        Returns one of: bull_strong, bull_moderate, neutral,
+        bear_moderate, bear_strong, extreme_vix
+        """
+        vix_current = vix_df['close'].iloc[-1] if vix_df is not None else 20.0
+
+        # Hard rule: VIX > 30 takes precedence
+        if vix_current > 30:
+            return 'extreme_vix'
+
+        # Trust AI sentiment if provided
+        valid_regimes = ['bull_strong', 'bull_moderate', 'neutral',
+                         'bear_moderate', 'bear_strong', 'extreme_vix']
+        if ai_sentiment in valid_regimes:
+            return ai_sentiment
+
+        # Fallback to technical
+        return self.detect_regime(spy_df, vix_df)
+
     def get_allocation(self, regime: str) -> Dict[str, int]:
         """
         Get strategy slot allocation for a regime.
