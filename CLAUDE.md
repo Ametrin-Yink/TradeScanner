@@ -6,7 +6,7 @@ Trade Scanner - Current State Reference
 
 Automated US stock trading opportunity scanner analyzing stocks with market cap >$2B daily using 8 trading strategies. Generates web-based reports with AI-powered analysis.
 
-## Current Architecture (v5.0)
+## Current Architecture (v6.0)
 
 **8 Strategy Plugins** (`core/strategies/`) - Clean A-H Naming:
 
@@ -21,25 +21,26 @@ Automated US stock trading opportunity scanner analyzing stocks with market cap 
 | G | EarningsGap | earnings_gap.py | Both | Post-earnings gap continuation |
 | H | RelativeStrengthLong | relative_strength_long.py | Long | RS leaders in bear markets |
 
-**5-Phase Daily Workflow** (runs at 3 AM ET):
+**6-Phase Daily Workflow** (runs at 3 AM ET):
 | Phase | Component | Duration | Description |
 |-------|-----------|----------|-------------|
 | 0 | PreMarketPrep | 15-20 min | Initialize stock DB, Tier 1/3 pre-calculation, market cap filtering |
-| 1 | MarketRegimeDetector | 1-2 min | Regime detection from SPY/VIX (replaces AI sentiment) |
-| 2 | StrategyScreener | 10-15 min | Screen with regime-based allocation, skip 0-slot strategies |
-| 3 | OpportunityAnalyzer | 15-20 min | Deep AI analysis of top 10 |
-| 4 | ReportGenerator | 2-3 min | HTML report generation |
-| 5 | MultiNotifier | 1 min | WeChat + Discord notifications |
+| 1 | AIMarketRegime | 3-5 min | Tavily + AI regime detection (replaces deterministic) |
+| 2 | StrategyScreener | 10-15 min | Screen 30 slots, duplicate handling, skip 0-slot strategies |
+| 3 | AIScoring | 15-20 min | AI confidence scoring with tiered sector penalty |
+| 4 | DeepAnalysis | 10-15 min | Tavily + AI deep analysis for top 10 |
+| 5 | ReportGenerator | 2-3 min | HTML report with top 30 + deep analysis for top 10 |
+| 6 | MultiNotifier | 1 min | WeChat + Discord notifications with AI regime info |
 
-**Regime-Based Allocation** (10 slots total):
+**Regime-Based Allocation** (30 slots total):
 | Regime | A | B | C | D | E | F | G | H |
 |--------|---|---|---|---|---|---|---|---|
-| bull_strong | 3 | 3 | 1 | 0 | 0 | 0 | 2 | 0 |
-| bull_moderate | 3 | 2 | 1 | 0 | 0 | 0 | 2 | 1 |
+| bull_strong | 3 | 3 | 1 | 0 | 0 | 0 | 2 | 1 |
+| bull_moderate | 3 | 3 | 1 | 0 | 0 | 0 | 2 | 1 |
 | neutral | 2 | 2 | 2 | 1 | 1 | 0 | 1 | 1 |
 | bear_moderate | 1 | 1 | 1 | 2 | 2 | 1 | 0 | 2 |
 | bear_strong | 0 | 0 | 1 | 2 | 2 | 2 | 0 | 3 |
-| extreme_vix | 0 | 0 | 0 | 1 | 1 | 4 | 0 | 3 |
+| extreme_vix | 0 | 0 | 0 | 1 | 1 | 4 | 0 | 4 |
 
 **Regime-Adaptive Position Sizing**:
 | Regime | Long Scalar | Short Scalar | Exemptions |
@@ -181,7 +182,10 @@ spy_df = db.get_tier3_cache('SPY')  # Returns DataFrame
 
 ## Important Notes
 
-- **v5.0 Regime Detection**: Replaces AI sentiment with deterministic SPY/VIX-based regime detection
+- **v6.0 AI Regime Detection**: Phase 1 now uses Tavily + AI for regime classification
+- **v6.0 30-Slot Screening**: Phase 2 screens 30 candidates with duplicate handling
+- **v6.0 Tiered Sector Penalty**: Top=0%, 2nd=-5%, 3rd+=-10%
+- **v6.0 Deep Analysis Phase**: Dedicated Phase 4 with Tavily + AI for top 10
 - **v5.0 Strategy Naming**: Clean A-H identifiers (removed EP, U&R, DTSS, etc.)
 - **v5.0 0-Slot Skip**: Strategies with 0 slots in regime table are skipped entirely
 - **kimi-k2.5**: No `response_format` support - use regex JSON extraction
