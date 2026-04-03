@@ -62,18 +62,46 @@ class MarketAnalyzer:
             logger.error(f"Tavily search failed: {e}")
             return []
 
-    def analyze_sentiment(self) -> Dict:
+    def analyze_for_regime(self, spy_df, vix_df) -> Dict:
         """
-        Analyze overall market sentiment.
+        Analyze market using Tavily + AI to determine regime.
+
+        Args:
+            spy_df: SPY price DataFrame with 'close' column
+            vix_df: VIX price DataFrame with 'close' column
 
         Returns:
-            Dict with sentiment analysis results
+            Dict with:
+            - sentiment: one of 6 regimes
+            - confidence: 0-100
+            - reasoning: explanation
+            - tavily_results: raw search data
         """
-        # Search for market news
+        import pandas as pd
+
+        # Get VIX level for context
+        vix_current = vix_df['close'].iloc[-1] if vix_df is not None and not vix_df.empty else 20.0
+
+        # Get SPY technical context
+        if spy_df is not None and len(spy_df) >= 200:
+            close = spy_df['close']
+            ema50 = close.ewm(span=50, adjust=False).mean().iloc[-1]
+            ema200 = close.ewm(span=200, adjust=False).mean().iloc[-1]
+            current_price = close.iloc[-1]
+            spy_above_ema200 = current_price > ema200
+            ema50_above_200 = ema50 > ema200
+        else:
+            spy_above_ema200 = True
+            ema50_above_200 = True
+            current_price = 0
+            ema50 = 0
+            ema200 = 0
+
+        # Search Tavily for market news
         search_queries = [
-            "US stock market today sentiment analysis",
-            "S&P 500 market outlook news",
-            "Federal Reserve interest rates impact stocks"
+            "US stock market today sentiment analysis trend",
+            "S&P 500 SPY technical outlook support resistance",
+            "VIX volatility fear index market stress"
         ]
 
         all_results = []
@@ -83,40 +111,27 @@ class MarketAnalyzer:
 
         # Compile news summary
         news_summary = "\n".join([
-            f"- {r.get('title', '')}: {r.get('content', '')[:200]}..."
-            for r in all_results[:10]
+            f"- {r.get('title', '')}: {r.get('content', '')[:150]}..."
+            for r in all_results[:8]
         ])
 
-        # Call AI for sentiment analysis
-        sentiment = self._call_ai_for_sentiment(news_summary)
+        # Call AI for regime classification
+        regime = self._call_ai_for_regime(news_summary, vix_current, spy_above_ema200, ema50_above_200)
 
         return {
-            'sentiment': sentiment.get('sentiment', 'neutral'),
-            'confidence': sentiment.get('confidence', 50),
-            'reasoning': sentiment.get('reasoning', ''),
-            'key_factors': sentiment.get('key_factors', []),
-            'timestamp': datetime.now().isoformat(),
-            'news_count': len(all_results)
+            'sentiment': regime.get('regime', 'neutral'),
+            'confidence': regime.get('confidence', 50),
+            'reasoning': regime.get('reasoning', ''),
+            'tavily_results': all_results
         }
 
-    def _call_ai_for_sentiment(self, news_summary: str) -> Dict:
-        """
-        Call DashScope AI to analyze market sentiment.
+    def _call_ai_for_regime(self, news_summary: str, vix: float,
+                            spy_above_ema200: bool, ema50_above_200: bool) -> Dict:
+        """Call AI to classify regime from technical + news data."""
 
-        Args:
-            news_summary: Compiled news summary
-
-        Returns:
-            Dict with sentiment analysis
-        """
         if not self.dashscope_api_key:
-            logger.warning("DashScope API key not configured, using neutral sentiment")
-            return {
-                'sentiment': 'neutral',
-                'confidence': 50,
-                'reasoning': 'API not configured',
-                'key_factors': []
-            }
+            logger.warning("DashScope API key not configured")
+            return {'regime': 'neutral', 'confidence': 50, 'reasoning': 'API not configured'}
 
         try:
             url = f"{self.dashscope_base}/chat/completions"
@@ -125,69 +140,80 @@ class MarketAnalyzer:
                 "Content-Type": "application/json"
             }
 
-            prompt = f"""Analyze the current US stock market sentiment based on the following news summary.
+            technical_context = f"""
+VIX Level: {vix:.1f} ({'Extreme fear' if vix > 30 else 'Elevated' if vix > 20 else 'Normal'})
+SPY above EMA200: {spy_above_ema200}
+EMA50 above EMA200: {ema50_above_200}
+"""
 
-News Summary:
+            prompt = f"""Analyze the current US stock market regime based on technical indicators and news.
+
+TECHNICAL CONTEXT:
+{technical_context}
+
+MARKET NEWS SUMMARY:
 {news_summary}
 
-Provide your analysis in the following JSON format:
-{{
-    "sentiment": "bullish" | "bearish" | "neutral" | "watch",
-    "confidence": 0-100,
-    "reasoning": "brief explanation",
-    "key_factors": ["factor1", "factor2", "factor3"]
-}}
+Select ONE regime from these 6 options:
+1. bull_strong: Strong uptrend, VIX low (<20), SPY above EMA50>EMA200
+2. bull_moderate: Moderate uptrend, VIX normal (20-25), positive momentum
+3. neutral: Mixed signals, consolidation, no clear trend
+4. bear_moderate: Moderate downtrend, VIX elevated (25-30), SPY below EMA50
+5. bear_strong: Strong downtrend, SPY below EMA200, distribution patterns
+6. extreme_vix: Fear/volatility spike, VIX >30, panic selling (OVERRIDES others)
 
-Sentiment definitions:
-- bullish: Strong positive outlook, good for long positions
-- bearish: Negative outlook, consider shorts or staying in cash
-- neutral: Mixed signals, be selective
-- watch: Uncertain conditions, wait for clarity"""
+Return ONLY JSON:
+{{
+    "regime": "one_of_six_above",
+    "confidence": 0-100,
+    "reasoning": "brief explanation combining technical and news"
+}}"""
 
             payload = {
                 "model": self.model,
                 "messages": [
-                    {"role": "system", "content": "You are a market analyst specializing in sentiment analysis. Return valid JSON only, no markdown, no explanation."},
+                    {"role": "system", "content": "You are a market regime classifier. Return valid JSON only."},
                     {"role": "user", "content": prompt}
                 ],
-                "temperature": 0.3
+                "temperature": 0.2
             }
 
-            response = requests.post(url, headers=headers, json=payload, timeout=60)
+            response = requests.post(url, headers=headers, json=payload, timeout=30)
             response.raise_for_status()
 
             data = response.json()
             content = data['choices'][0]['message']['content']
 
-            # Extract JSON from response
+            # Extract JSON
             import re
-            json_match = re.search(r'\{.*\}', content, re.DOTALL)
+            json_match = re.search(r'\{{.*\}}', content, re.DOTALL)
             if json_match:
                 result = json.loads(json_match.group())
             else:
                 result = json.loads(content)
 
-            # Ensure result is a dict with required keys
-            if not isinstance(result, dict):
-                logger.warning(f"AI returned non-dict type: {type(result)}, using fallback")
-                return {
-                    'sentiment': 'neutral',
-                    'confidence': 50,
-                    'reasoning': 'Invalid response format',
-                    'key_factors': []
-                }
+            # Validate regime
+            valid = ['bull_strong', 'bull_moderate', 'neutral',
+                    'bear_moderate', 'bear_strong', 'extreme_vix']
+            if result.get('regime') not in valid:
+                result['regime'] = 'neutral'
 
-            logger.info(f"AI sentiment analysis: {result.get('sentiment')} (confidence: {result.get('confidence')})")
             return result
 
         except Exception as e:
-            logger.error(f"AI sentiment analysis failed: {e}")
-            return {
-                'sentiment': 'neutral',
-                'confidence': 50,
-                'reasoning': f'Error: {str(e)}',
-                'key_factors': []
-            }
+            logger.error(f"AI regime analysis failed: {e}")
+            return {'regime': 'neutral', 'confidence': 50, 'reasoning': f'Error: {e}'}
+
+    def analyze_sentiment(self) -> Dict:
+        """
+        Analyze overall market sentiment.
+        DEPRECATED: Use analyze_for_regime instead.
+
+        Returns:
+            Dict with sentiment analysis results
+        """
+        logger.warning("analyze_sentiment is deprecated, use analyze_for_regime")
+        return self.analyze_for_regime(None, None)
 
     def get_market_summary(self) -> str:
         """Get human-readable market summary."""

@@ -247,40 +247,57 @@ class CompleteScanner:
 
     def _phase1_market_analysis(self) -> Dict:
         """
-        Phase 1: Market Regime Detection (replaces sentiment).
+        Phase 1: AI-Powered Market Regime Detection.
+        Combines technical analysis + Tavily news + AI classification.
 
         Returns:
-            Dict with 'regime' and 'allocation'
+            Dict with 'regime', 'allocation', 'ai_confidence', 'ai_reasoning'
         """
         logger.info("\n" + "=" * 60)
-        logger.info("PHASE 1: Market Regime Detection")
+        logger.info("PHASE 1: AI Market Regime Detection")
         logger.info("=" * 60)
 
         phase_start = datetime.now()
 
         try:
-            # Get SPY and VIX data from Tier 3 cache
+            # Get technical data
             spy_df = self.db.get_tier3_cache('SPY')
             vix_df = self.db.get_tier3_cache('VIX') or self.db.get_tier3_cache('VIXY')
 
-            # Detect regime
-            regime = self.regime_detector.detect_regime(spy_df, vix_df)
+            # Get AI + Tavily analysis
+            analysis = self.market_analyzer.analyze_for_regime(spy_df, vix_df)
+            ai_regime = analysis['sentiment']
+
+            # Use AI regime with technical validation
+            regime = self.regime_detector.detect_regime_ai(
+                spy_df, vix_df,
+                analysis.get('tavily_results', []),
+                ai_regime
+            )
+
             allocation = self.regime_detector.get_allocation(regime)
 
-            logger.info(f"Market regime: {regime}")
+            logger.info(f"AI Regime: {ai_regime} (confidence: {analysis['confidence']})")
+            logger.info(f"Final Regime: {regime}")
+            logger.info(f"AI Reasoning: {analysis['reasoning'][:100]}...")
             logger.info(f"Strategy allocation: {allocation}")
 
         except Exception as e:
-            logger.error(f"Regime detection failed: {e}")
-            regime = 'neutral'
-            allocation = self.regime_detector.get_allocation('neutral')
+            logger.error(f"AI regime detection failed: {e}, using technical fallback")
+            spy_df = self.db.get_tier3_cache('SPY')
+            vix_df = self.db.get_tier3_cache('VIX') or self.db.get_tier3_cache('VIXY')
+            regime = self.regime_detector.detect_regime(spy_df, vix_df)
+            allocation = self.regime_detector.get_allocation(regime)
+            analysis = {'confidence': 0, 'reasoning': f'Fallback: {e}'}
 
         duration = (datetime.now() - phase_start).total_seconds()
         self._phase_times['phase1'] = int(duration)
 
         return {
             'regime': regime,
-            'allocation': allocation
+            'allocation': allocation,
+            'ai_confidence': analysis.get('confidence', 50),
+            'ai_reasoning': analysis.get('reasoning', '')
         }
 
     def _phase2_screening(self, symbols: List[str], regime: str) -> Dict:
@@ -301,11 +318,23 @@ class CompleteScanner:
 
         logger.info(f"Screening {len(symbols)} symbols with regime: {regime}")
 
+        # Load Tier 3 market data from cache for strategies
+        from core.stock_universe import get_all_market_etfs
+        tier3_symbols = get_all_market_etfs()
+        tier3_data = {}
+        for sym in tier3_symbols:
+            df = self.db.get_tier3_cache(sym)
+            if df is not None and not df.empty:
+                tier3_data[sym] = df
+        logger.info(f"Loaded {len(tier3_data)} Tier 3 symbols from cache")
+
         # Screen all symbols using pre-calculated Tier 1 data
         # Pass regime to screener for strategy filtering
+        # Pass Tier 3 data so strategies can use cached market data
         candidates = self.screener.screen_all(
             symbols=symbols,
-            regime=regime
+            regime=regime,
+            market_data=tier3_data
         )
 
         # For now, we don't track individual failures in the new flow
