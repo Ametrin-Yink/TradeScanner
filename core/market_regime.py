@@ -5,67 +5,67 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-# Phase 1 Allocation Table (10 total slots) - clean A-H naming
+# Phase 1 Allocation Table (30 total slots) - clean A-H naming
 REGIME_ALLOCATION_TABLE: Dict[str, Dict[str, int]] = {
     'bull_strong': {
-        'A': 3,  # MomentumBreakout
-        'B': 3,  # PullbackEntry
-        'C': 1,  # SupportBounce
+        'A': 8,  # MomentumBreakout
+        'B': 6,  # PullbackEntry
+        'C': 4,  # SupportBounce
         'D': 0,  # DistributionTop
         'E': 0,  # AccumulationBottom
         'F': 0,  # CapitulationRebound
-        'G': 2,  # EarningsGap
-        'H': 1,  # RelativeStrengthLong
+        'G': 8,  # EarningsGap
+        'H': 4,  # RelativeStrengthLong
     },
     'bull_moderate': {
-        'A': 3,
-        'B': 3,
-        'C': 1,
+        'A': 8,
+        'B': 6,
+        'C': 4,
         'D': 0,
         'E': 0,
         'F': 0,
-        'G': 2,
-        'H': 1,
+        'G': 8,
+        'H': 4,
     },
     'neutral': {
-        'A': 2,
-        'B': 2,
-        'C': 2,
-        'D': 1,
-        'E': 1,
+        'A': 6,
+        'B': 5,
+        'C': 5,
+        'D': 4,
+        'E': 4,
         'F': 0,
-        'G': 1,
-        'H': 1,
+        'G': 3,
+        'H': 3,
     },
     'bear_moderate': {
-        'A': 1,
-        'B': 1,
-        'C': 1,
-        'D': 2,
-        'E': 2,
-        'F': 1,
+        'A': 4,
+        'B': 4,
+        'C': 4,
+        'D': 5,
+        'E': 5,
+        'F': 2,
         'G': 0,
-        'H': 2,
+        'H': 6,
     },
     'bear_strong': {
         'A': 0,
         'B': 0,
-        'C': 1,
-        'D': 2,
-        'E': 2,
-        'F': 2,
+        'C': 4,
+        'D': 6,
+        'E': 6,
+        'F': 8,
         'G': 0,
-        'H': 3,
+        'H': 6,
     },
     'extreme_vix': {
         'A': 0,
         'B': 0,
         'C': 0,
-        'D': 1,
-        'E': 1,
-        'F': 4,
+        'D': 3,
+        'E': 3,
+        'F': 12,
         'G': 0,
-        'H': 4,
+        'H': 12,
     }
 }
 

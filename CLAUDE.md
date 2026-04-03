@@ -33,14 +33,14 @@ Automated US stock trading opportunity scanner analyzing stocks with market cap 
 | 6 | MultiNotifier | 1 min | WeChat + Discord notifications with AI regime info |
 
 **Regime-Based Allocation** (30 slots total):
-| Regime | A | B | C | D | E | F | G | H |
-|--------|---|---|---|---|---|---|---|---|
-| bull_strong | 3 | 3 | 1 | 0 | 0 | 0 | 2 | 1 |
-| bull_moderate | 3 | 3 | 1 | 0 | 0 | 0 | 2 | 1 |
-| neutral | 2 | 2 | 2 | 1 | 1 | 0 | 1 | 1 |
-| bear_moderate | 1 | 1 | 1 | 2 | 2 | 1 | 0 | 2 |
-| bear_strong | 0 | 0 | 1 | 2 | 2 | 2 | 0 | 3 |
-| extreme_vix | 0 | 0 | 0 | 1 | 1 | 4 | 0 | 4 |
+| Regime | A | B | C | D | E | F | G | H | **Total** |
+|--------|---|---|---|---|---|---|---|---|----------|
+| bull_strong | 8 | 6 | 4 | 0 | 0 | 0 | 8 | 4 | **30** |
+| bull_moderate | 8 | 6 | 4 | 0 | 0 | 0 | 8 | 4 | **30** |
+| neutral | 6 | 5 | 5 | 4 | 4 | 0 | 3 | 3 | **30** |
+| bear_moderate | 4 | 4 | 4 | 5 | 5 | 2 | 0 | 6 | **30** |
+| bear_strong | 0 | 0 | 4 | 6 | 6 | 8 | 0 | 6 | **30** |
+| extreme_vix | 0 | 0 | 0 | 3 | 3 | 12 | 0 | 12 | **30** |
 
 **Regime-Adaptive Position Sizing**:
 | Regime | Long Scalar | Short Scalar | Exemptions |

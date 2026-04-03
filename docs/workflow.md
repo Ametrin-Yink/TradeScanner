@@ -153,12 +153,12 @@ Phase 6: Push Notifications (1 min)
 
 | Strategy | A | B | C | D | E | F | G | H |
 |----------|---|---|---|---|---|---|---|---|
-| **bull_strong** | 3 | 3 | 1 | 0 | 0 | 0 | 2 | 1 |
-| **bull_moderate** | 3 | 3 | 1 | 0 | 0 | 0 | 2 | 1 |
-| **neutral** | 2 | 2 | 2 | 1 | 1 | 0 | 1 | 1 |
-| **bear_moderate** | 1 | 1 | 1 | 2 | 2 | 1 | 0 | 2 |
-| **bear_strong** | 0 | 0 | 1 | 2 | 2 | 2 | 0 | 3 |
-| **extreme_vix** | 0 | 0 | 0 | 1 | 1 | 4 | 0 | 4 |
+| **bull_strong** | 8 | 6 | 4 | 0 | 0 | 0 | 8 | 4 |
+| **bull_moderate** | 8 | 6 | 4 | 0 | 0 | 0 | 8 | 4 |
+| **neutral** | 6 | 5 | 5 | 4 | 4 | 0 | 3 | 3 |
+| **bear_moderate** | 4 | 4 | 4 | 5 | 5 | 2 | 0 | 6 |
+| **bear_strong** | 0 | 0 | 4 | 6 | 6 | 8 | 0 | 6 |
+| **extreme_vix** | 0 | 0 | 0 | 3 | 3 | 12 | 0 | 12 |
 
 **Output**: Market regime string + strategy allocation dict + AI confidence + AI reasoning
 
