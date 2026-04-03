@@ -78,13 +78,13 @@ def trigger_scan():
         logger.info(f"Screening {len(symbols)} symbols...")
         candidates = screener.screen_all(symbols)
 
-        # Step 3: Select top 10
-        logger.info("Selecting top 10...")
-        top_10 = selector.select_top_10(candidates, market_sentiment)
+        # Step 3: Select top 30
+        logger.info("Selecting top 30...")
+        top_30 = selector.select_top_30(candidates, market_sentiment)
 
         # Step 4: Deep analysis
         logger.info("Analyzing opportunities...")
-        analyzed = opportunity_analyzer.analyze_all(top_10, market_sentiment)
+        analyzed = opportunity_analyzer.analyze_all(top_30, market_sentiment)
 
         # Step 5: Generate report
         logger.info("Generating report...")

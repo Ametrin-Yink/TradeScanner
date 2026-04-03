@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 class CandidateSelector:
     """
-    Select and score top 10 opportunities from candidates using AI.
+    Select and score top 30 opportunities from candidates using AI.
 
     This class combines selection and scoring into one AI-powered step,
     providing confidence scores (0-100) that adapt to market conditions.
@@ -22,47 +22,31 @@ class CandidateSelector:
         self.scorer = AIConfidenceScorer()
         self.dashscope_api_key = settings.get_secret('dashscope.api_key')
 
-    def select_top_10(
+    def select_top_30(
         self,
         candidates: List[StrategyMatch],
         market_sentiment: str = 'neutral'
     ) -> List[ScoredCandidate]:
-        """
-        Select and score top 10 candidates using AI.
+        """Select and score top 30 candidates using AI."""
 
-        Args:
-            candidates: List of candidates from screener (typically 20-40)
-            market_sentiment: 'bullish', 'bearish', 'neutral', or 'watch'
-
-        Returns:
-            List of top 10 ScoredCandidate with AI-calculated confidence
-        """
         if not candidates:
             logger.warning("No candidates provided")
             return []
 
-        if len(candidates) <= 10:
-            logger.info(f"Only {len(candidates)} candidates, scoring all")
-            # Still run AI scoring to get proper confidence values
-            if self.dashscope_api_key:
-                return self.scorer.score_candidates(candidates, market_sentiment)[:10]
-            else:
-                # Fallback: convert to ScoredCandidate with basic scoring
-                return self._fallback_scoring(candidates)
-
-        # Use AI to score all candidates
-        logger.info(f"AI scoring {len(candidates)} candidates with {market_sentiment} market context")
+        # Score all candidates (up to 30)
+        logger.info(f"AI scoring {len(candidates)} candidates")
         scored = self.scorer.score_candidates(candidates, market_sentiment)
 
         if not scored:
             logger.warning("AI scoring returned empty, using fallback")
-            return self._fallback_scoring(candidates[:10])
+            return self._fallback_scoring(candidates[:30])
 
-        # Return top 10
-        top_10 = scored[:10]
-        logger.info(f"Selected top 10 candidates with confidence range: {top_10[-1].confidence}-{top_10[0].confidence}")
+        # Return top 30
+        top_30 = scored[:30]
+        conf_range = f"{top_30[-1].confidence}-{top_30[0].confidence}" if len(top_30) > 1 else "N/A"
+        logger.info(f"Selected top 30 with confidence range: {conf_range}")
 
-        return top_10
+        return top_30
 
     def _fallback_scoring(self, candidates: List[StrategyMatch]) -> List[ScoredCandidate]:
         """Fallback scoring when AI is not available."""
@@ -126,7 +110,7 @@ def select_and_score_candidates(
         market_sentiment: Market sentiment for context
 
     Returns:
-        List of top 10 ScoredCandidate sorted by confidence
+        List of top 30 ScoredCandidate sorted by confidence
     """
     selector = CandidateSelector()
-    return selector.select_top_10(candidates, market_sentiment)
+    return selector.select_top_30(candidates, market_sentiment)

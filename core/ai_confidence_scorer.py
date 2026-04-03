@@ -204,66 +204,74 @@ class AIConfidenceScorer:
 
     def _apply_sector_penalties(self, scored_candidates: List[ScoredCandidate]) -> List[ScoredCandidate]:
         """
-        Apply sector concentration penalties to all scored candidates.
-
-        Args:
-            scored_candidates: List of ScoredCandidate objects
-
-        Returns:
-            List of ScoredCandidate with adjusted confidence scores
+        New tiered sector penalty:
+        - Highest confidence stock per sector: 0%
+        - Second highest: -5%
+        - Third and beyond: -10%
         """
         if not scored_candidates:
             return scored_candidates
 
-        # Count sectors
-        sector_counts = self._count_sectors(scored_candidates)
+        from collections import defaultdict
 
-        if not sector_counts:
-            return scored_candidates
+        # Group by sector
+        sector_groups = defaultdict(list)
+        for i, c in enumerate(scored_candidates):
+            sector = self._extract_sector(c)
+            sector_groups[sector].append((i, c))
 
-        # Log sector distribution
-        logger.info(f"Sector distribution: {sector_counts}")
+        # Calculate penalties per sector
+        penalties = {}  # index -> penalty_pct
 
-        # Apply penalties
-        adjusted_candidates = []
-        for candidate in scored_candidates:
-            sector = self._extract_sector(candidate)
-            if sector != 'Unknown' and sector in sector_counts:
-                sector_count = sector_counts[sector]
-                penalty = self._calculate_sector_penalty(sector_count)
+        for sector, items in sector_groups.items():
+            if len(items) <= 1:
+                continue
 
-                if penalty > 0:
-                    original_confidence = candidate.confidence
-                    adjusted_confidence = self._apply_sector_penalty(original_confidence, sector_count)
+            # Sort by confidence descending
+            items.sort(key=lambda x: x[1].confidence, reverse=True)
 
-                    logger.info(
-                        f"Sector penalty applied: {candidate.symbol} ({sector}) "
-                        f"- {sector_count} candidates in sector, "
-                        f"confidence {original_confidence} -> {adjusted_confidence} "
-                        f"(-{penalty*100:.0f}%)"
-                    )
-
-                    # Create new candidate with adjusted confidence
-                    adjusted_candidate = ScoredCandidate(
-                        symbol=candidate.symbol,
-                        strategy=candidate.strategy,
-                        entry_price=candidate.entry_price,
-                        stop_loss=candidate.stop_loss,
-                        take_profit=candidate.take_profit,
-                        confidence=adjusted_confidence,
-                        reasoning=candidate.reasoning + f" [Sector penalty: -{penalty*100:.0f}% for {sector_count} in {sector}]",
-                        key_factors=candidate.key_factors,
-                        risk_factors=candidate.risk_factors,
-                        match_reasons=candidate.match_reasons,
-                        technical_snapshot=candidate.technical_snapshot
-                    )
-                    adjusted_candidates.append(adjusted_candidate)
+            # Apply tiered penalties
+            for rank, (idx, candidate) in enumerate(items):
+                if rank == 0:
+                    penalties[idx] = 0.0  # Top: no penalty
+                elif rank == 1:
+                    penalties[idx] = 0.05  # Second: -5%
                 else:
-                    adjusted_candidates.append(candidate)
-            else:
-                adjusted_candidates.append(candidate)
+                    penalties[idx] = 0.10  # Rest: -10%
 
-        return adjusted_candidates
+        # Apply penalties and create new candidates
+        adjusted = []
+        for i, candidate in enumerate(scored_candidates):
+            penalty = penalties.get(i, 0.0)
+
+            if penalty > 0:
+                original_conf = candidate.confidence
+                new_conf = round(original_conf * (1 - penalty))
+
+                # Create adjusted candidate
+                adjusted_candidate = ScoredCandidate(
+                    symbol=candidate.symbol,
+                    strategy=candidate.strategy,
+                    entry_price=candidate.entry_price,
+                    stop_loss=candidate.stop_loss,
+                    take_profit=candidate.take_profit,
+                    confidence=new_conf,
+                    reasoning=candidate.reasoning + f" [Sector penalty: -{penalty*100:.0f}%]",
+                    key_factors=candidate.key_factors,
+                    risk_factors=candidate.risk_factors,
+                    match_reasons=candidate.match_reasons,
+                    technical_snapshot=candidate.technical_snapshot
+                )
+                adjusted.append(adjusted_candidate)
+
+                logger.info(f"Sector penalty: {candidate.symbol} -{penalty*100:.0f}% ({original_conf} -> {new_conf})")
+            else:
+                adjusted.append(candidate)
+
+        # Re-sort by adjusted confidence
+        adjusted.sort(key=lambda x: x.confidence, reverse=True)
+
+        return adjusted
 
     def _score_batch(
         self,

@@ -373,9 +373,9 @@ class CompleteScanner:
 
         phase_start = datetime.now()
 
-        # Select top 10 (regime-aware selection)
-        top_10 = self.selector.select_top_10(candidates, regime)
-        logger.info(f"Selected {len(top_10)} opportunities for deep analysis")
+        # Select top 30 (regime-aware selection)
+        top_30 = self.selector.select_top_30(candidates, regime)
+        logger.info(f"Selected {len(top_30)} opportunities for deep analysis")
         logger.info(f"Analyzing with 2 parallel workers...")
 
         # Analyze in parallel with 2 workers (for 2-core server)
@@ -395,7 +395,7 @@ class CompleteScanner:
             # Submit all tasks
             future_to_match = {
                 executor.submit(analyze_single, match): match
-                for match in top_10
+                for match in top_30
             }
 
             # Collect results as they complete
@@ -409,7 +409,7 @@ class CompleteScanner:
                     logger.error(f"Error analyzing {match.symbol}: {e}")
 
                 completed += 1
-                logger.info(f"Analyzed {match.symbol} ({completed}/{len(top_10)})...")
+                logger.info(f"Analyzed {match.symbol} ({completed}/{len(top_30)})...")
 
         duration = (datetime.now() - phase_start).total_seconds()
         self._phase_times['phase3'] = int(duration)

@@ -74,7 +74,7 @@ def test_full_pipeline_mocked(sample_market_data):
         # Mock selector
         from core.analyzer import AnalyzedOpportunity
         mock_selector_instance = MagicMock()
-        mock_selector_instance.select_top_10.return_value = [
+        mock_selector_instance.select_top_30.return_value = [
             StrategyMatch(
                 symbol='AAPL', strategy='Momentum',
                 entry_price=150.0, stop_loss=145.0,

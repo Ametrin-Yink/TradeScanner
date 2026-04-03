@@ -135,14 +135,14 @@ def test_strategy_weights():
         assert bearish['DTSS'] > bearish['Momentum']
 
 
-def test_select_top_10_no_ai():
+def test_select_top_30_no_ai():
     """Test selection without AI."""
     with patch('core.selector.settings') as mock_settings:
         mock_settings.get_secret.return_value = None
 
         selector = CandidateSelector()
 
-        # Create 15 candidates
+        # Create 35 candidates
         candidates = [
             StrategyMatch(
                 symbol=f'STOCK{i}',
@@ -152,12 +152,12 @@ def test_select_top_10_no_ai():
                 take_profit=110.0,
                 confidence=50 + i
             )
-            for i in range(15)
+            for i in range(35)
         ]
 
-        selected = selector.select_top_10(candidates, 'neutral')
+        selected = selector.select_top_30(candidates, 'neutral')
 
-        assert len(selected) == 10
+        assert len(selected) == 30
 
 
 def test_analyzed_opportunity_creation():
