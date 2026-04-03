@@ -441,44 +441,60 @@ class StrategyScreener:
         regime: str
     ) -> List[StrategyMatch]:
         """
-        Select exactly N candidates per strategy as per allocation table.
-        No cross-strategy backfilling.
-
-        Args:
-            all_candidates: All candidates from all strategies
-            allocation: Slot allocation per strategy letter (A-H)
-            regime: Current regime (for position sizing)
-
-        Returns:
-            Selected candidates (may be < 10 if strategies underfilled)
+        Select candidates with duplicate handling.
+        If stock appears in multiple strategies, keep highest technical score.
+        Return up to 30 unique candidates.
         """
-        selected = []
+        from collections import defaultdict
 
+        # Group candidates by strategy letter
+        by_strategy = defaultdict(list)
+        for c in all_candidates:
+            letter = STRATEGY_NAME_TO_LETTER.get(c.strategy, '')
+            if letter:
+                by_strategy[letter].append(c)
+
+        # Select top N per strategy
+        selected_by_letter = {}
         for letter, slots in allocation.items():
             if slots == 0:
                 continue
 
-            # Get strategy name from letter
-            strategy_name = STRATEGY_METADATA.get(letter, {}).get('name', '')
-
-            # Get candidates for this strategy
-            strategy_cands = [c for c in all_candidates if c.strategy == strategy_name]
-
-            # Sort by score descending
+            strategy_cands = by_strategy.get(letter, [])
             strategy_cands.sort(key=lambda x: x.technical_snapshot.get('score', 0), reverse=True)
+            selected_by_letter[letter] = strategy_cands[:slots]
 
-            # Take top N
-            for candidate in strategy_cands[:slots]:
-                candidate.regime = regime  # Set regime for position sizing
-                selected.append(candidate)
+        # Flatten and handle duplicates - keep best score per symbol
+        best_by_symbol = {}
+        for letter, candidates in selected_by_letter.items():
+            for c in candidates:
+                symbol = c.symbol
+                current_score = c.technical_snapshot.get('score', 0)
 
-            logger.info(f"[{letter}:{strategy_name}] Selected {min(len(strategy_cands), slots)}/{len(strategy_cands)} (target: {slots})")
+                if symbol not in best_by_symbol:
+                    best_by_symbol[symbol] = c
+                else:
+                    # Keep the one with higher technical score
+                    existing_score = best_by_symbol[symbol].technical_snapshot.get('score', 0)
+                    if current_score > existing_score:
+                        best_by_symbol[symbol] = c
 
-        # Sort final list by score
+        # Convert to list (up to 30)
+        selected = list(best_by_symbol.values())
+
+        # Sort by score descending for consistent ordering
         selected.sort(key=lambda x: x.technical_snapshot.get('score', 0), reverse=True)
 
-        logger.info(f"Total selected: {len(selected)} candidates")
-        return selected
+        # Limit to 30
+        final = selected[:30]
+
+        logger.info(f"Selected {len(final)} unique candidates (removed {len(selected) - len(final)} duplicates)")
+
+        # Set regime on all
+        for c in final:
+            c.regime = regime
+
+        return final
 
     def load_earnings_calendar(self, symbols: Optional[List[str]] = None):
         """Load earnings calendar for EP strategy."""
