@@ -4,32 +4,55 @@ Trade Scanner - Current State Reference
 
 ## Project Overview
 
-Automated US stock trading opportunity scanner analyzing stocks with market cap >$2B daily using 6 trading strategies. Generates web-based reports with AI-powered analysis.
+Automated US stock trading opportunity scanner analyzing stocks with market cap >$2B daily using 8 trading strategies. Generates web-based reports with AI-powered analysis.
 
-## Current Architecture (v4.0)
+## Current Architecture (v5.0)
 
-**6 Strategy Plugins** (`core/strategies/`):
-| Strategy | File | Type | Description |
-|----------|------|------|-------------|
-| MomentumBreakout | momentum_breakout.py | Long | VCP + momentum with RS bonus |
-| PullbackEntry | pullback_entry.py | Long | EMA pullback with 4D scoring |
-| SupportBounce | support_bounce.py | Long | Upthrust & rebound |
-| RangeShort | range_short.py | Short | Range breakdown |
-| DoubleTopBottom | double_top_bottom.py | Both | Distribution/accumulation |
-| CapitulationRebound | capitulation_rebound.py | Long | Capitulation reversal |
+**8 Strategy Plugins** (`core/strategies/`) - Clean A-H Naming:
+
+| Letter | Strategy | File | Type | Description |
+|--------|----------|------|------|-------------|
+| A | MomentumBreakout | momentum_breakout.py | Long | Multi-pattern CQ, TC gate, bonus pool |
+| B | PullbackEntry | pullback_entry.py | Long | EMA pullback with 4D scoring |
+| C | SupportBounce | support_bounce.py | Long | False breakdown reclaim |
+| D | DistributionTop | distribution_top.py | Short | Distribution tops (from RangeShort + DTB) |
+| E | AccumulationBottom | accumulation_bottom.py | Long | Accumulation bottoms (from DTB) |
+| F | CapitulationRebound | capitulation_rebound.py | Long | VIX 15-35 window, extreme exempt |
+| G | EarningsGap | earnings_gap.py | Both | Post-earnings gap continuation |
+| H | RelativeStrengthLong | relative_strength_long.py | Long | RS leaders in bear markets |
 
 **5-Phase Daily Workflow** (runs at 3 AM ET):
 | Phase | Component | Duration | Description |
 |-------|-----------|----------|-------------|
 | 0 | PreMarketPrep | 15-20 min | Initialize stock DB, Tier 1/3 pre-calculation, market cap filtering |
-| 1 | MarketAnalyzer | 2-3 min | Sentiment analysis (Tavily + AI) |
-| 2 | StrategyScreener | 10-15 min | Screen with cached Tier 1/3 data |
+| 1 | MarketRegimeDetector | 1-2 min | Regime detection from SPY/VIX (replaces AI sentiment) |
+| 2 | StrategyScreener | 10-15 min | Screen with regime-based allocation, skip 0-slot strategies |
 | 3 | OpportunityAnalyzer | 15-20 min | Deep AI analysis of top 10 |
 | 4 | ReportGenerator | 2-3 min | HTML report generation |
 | 5 | MultiNotifier | 1 min | WeChat + Discord notifications |
 
+**Regime-Based Allocation** (10 slots total):
+| Regime | A | B | C | D | E | F | G | H |
+|--------|---|---|---|---|---|---|---|---|
+| bull_strong | 3 | 3 | 1 | 0 | 0 | 0 | 2 | 0 |
+| bull_moderate | 3 | 2 | 1 | 0 | 0 | 0 | 2 | 1 |
+| neutral | 2 | 2 | 2 | 1 | 1 | 0 | 1 | 1 |
+| bear_moderate | 1 | 1 | 1 | 2 | 2 | 1 | 0 | 2 |
+| bear_strong | 0 | 0 | 1 | 2 | 2 | 2 | 0 | 3 |
+| extreme_vix | 0 | 0 | 0 | 1 | 1 | 4 | 0 | 3 |
+
+**Regime-Adaptive Position Sizing**:
+| Regime | Long Scalar | Short Scalar | Exemptions |
+|--------|-------------|--------------|------------|
+| bull_strong | 1.0× | 0.3× | None |
+| bull_moderate | 1.0× | 0.3× | None |
+| neutral | 0.8× | 0.8× | None |
+| bear_moderate | 0.5× | 1.0× | None |
+| bear_strong | 0.5× | 1.0× | None |
+| extreme_vix | 0.3× | 0.5× | F, H get 1.0× |
+
 **Pipeline**:
-- `stock_universe.py` → `premarket_prep.py` → `market_analyzer.py` → `screener.py` → `selector.py`/`ai_confidence_scorer.py`/`analyzer.py` → `reporter.py` → `notifier.py`
+- `stock_universe.py` → `premarket_prep.py` → `market_regime.py` → `screener.py` → `ai_confidence_scorer.py`/`analyzer.py` → `reporter.py` → `notifier.py`
 - Database: SQLite (`data/market_data.db`)
 - Web: Flask on port 19801
 
@@ -38,6 +61,7 @@ Automated US stock trading opportunity scanner analyzing stocks with market cap 
 **Tier 1 (Universal Metrics)**: Calculated for ALL symbols at 3 AM
 - Price, Volume, EMAs (8/21/50/200), ATR/ADR
 - Returns (3m/6m/12m/5d), RS scores, 52-week metrics
+- **v5.0**: accum_ratio_15d, days_to_earnings, earnings_date, gap_1d_pct, gap_direction, spy_regime
 - Stored in `tier1_cache` table
 
 **Tier 2 (Strategy-Specific)**: Calculated LAZY during screening
@@ -71,7 +95,7 @@ Automated US stock trading opportunity scanner analyzing stocks with market cap 
 
 **Pre-calculation Tables**:
 - `universe_sync` - sync history (date, added, removed, total)
-- `tier1_cache` - universal metrics (symbol, price, EMAs, RS, etc.)
+- `tier1_cache` - universal metrics (symbol, price, EMAs, RS, etc.) + **v5.0** (accum_ratio_15d, days_to_earnings, earnings_date, gap_1d_pct, gap_direction, spy_regime)
 - `tier3_cache` - market data (SPY, VIX, ETFs as pickled DataFrames)
 - `workflow_status` - 5-phase execution tracking
 
@@ -129,13 +153,15 @@ etfs = manager.get_market_etfs()
 ```python
 class MyStrategy(BaseStrategy):
     NAME = "StrategyName"
-    STRATEGY_TYPE = StrategyType.XXX
+    STRATEGY_TYPE = StrategyType.A  # A-H naming
     DIMENSIONS = ['D1', 'D2', 'D3', 'D4']
+    DIRECTION = 'long'  # 'long', 'short', or 'both'
 
     def filter(self, symbol, df, tier1_data=None, tier3_data=None) -> bool: ...
     def calculate_dimensions(self, symbol, df) -> List[ScoringDimension]: ...
     def calculate_entry_exit(self, symbol, df, dims, score, tier) -> Tuple[float, float, float]: ...
     def build_match_reasons(self, symbol, df, dims, score, tier) -> List[str]: ...
+    def calculate_position_pct(self, tier: str, regime: str = 'neutral') -> float: ...  # v5.0 regime-adaptive
 ```
 
 **Pre-calculation Access** (from `core/premarket_prep.py`):
@@ -155,6 +181,9 @@ spy_df = db.get_tier3_cache('SPY')  # Returns DataFrame
 
 ## Important Notes
 
+- **v5.0 Regime Detection**: Replaces AI sentiment with deterministic SPY/VIX-based regime detection
+- **v5.0 Strategy Naming**: Clean A-H identifiers (removed EP, U&R, DTSS, etc.)
+- **v5.0 0-Slot Skip**: Strategies with 0 slots in regime table are skipped entirely
 - **kimi-k2.5**: No `response_format` support - use regex JSON extraction
 - **yfinance**: Wikipedia blocks (403), use Slickcharts for stock lists
 - **Memory**: Keep under 500MB, batch processing in 50s
