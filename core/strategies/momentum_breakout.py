@@ -183,7 +183,7 @@ class MomentumBreakoutStrategy(BaseStrategy):
         dimensions.append(ScoringDimension(
             name='CQ',
             score=cq_score,
-            max_score=5.0,
+            max_score=4.0,
             details={
                 'pattern_type': pattern_type,
                 'platform_range_pct': platform_range_pct,
@@ -197,7 +197,7 @@ class MomentumBreakoutStrategy(BaseStrategy):
         dimensions.append(ScoringDimension(
             name='BS',
             score=bs_score,
-            max_score=5.0,
+            max_score=4.0,
             details={
                 'breakout_pct': breakout_pct,
                 'energy_ratio': breakout_pct / platform_range_pct if platform_range_pct > 0 else 1.0
@@ -209,7 +209,7 @@ class MomentumBreakoutStrategy(BaseStrategy):
         dimensions.append(ScoringDimension(
             name='VC',
             score=vc_score,
-            max_score=5.0,
+            max_score=4.0,
             details={
                 'volume_ratio': volume_ratio,
                 'volume_contraction': platform['volume_contraction_ratio']
