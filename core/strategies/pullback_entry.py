@@ -33,6 +33,21 @@ class PullbackEntryStrategy(BaseStrategy):
             'A': {'min_score': 9, 'position_pct': 0.10, 'label': 'Strong'},
             'B': {'min_score': 7, 'position_pct': 0.05, 'label': 'Speculative'},
             'C': {'min_score': 0, 'position_pct': 0.00, 'label': 'Reject'}
+        },
+        'sector_etfs': {  # v5.0: Sector ETF mapping for bonus calculation
+            'Technology': 'XLK',
+            'Financials': 'XLF',
+            'Energy': 'XLE',
+            'Industrials': 'XLI',
+            'Consumer Staples': 'XLP',
+            'Consumer Discretionary': 'XLY',
+            'Materials': 'XLB',
+            'Utilities': 'XLU',
+            'Health Care': 'XLV',
+            'Biotechnology': 'XBI',
+            'Semiconductors': 'SMH',
+            'Software': 'IGV',
+            'Transportation': 'IYT',
         }
     }
 
@@ -42,6 +57,7 @@ class PullbackEntryStrategy(BaseStrategy):
         self.market_atr_median = 0.0
         self.sector_counts = {}
         self.stock_info = {}
+        self.sector_etf_data = {}  # v5.0: Cache for sector ETF data
 
     def screen(self, symbols: List[str], max_candidates: int = 5) -> List[StrategyMatch]:
         """
@@ -118,7 +134,10 @@ class PullbackEntryStrategy(BaseStrategy):
 
         logger.info(f"Shoryuken: {len(prefiltered_symbols)}/{len(symbol_data) + len(prefiltered_symbols)} passed EMA21 trend pre-filter")
 
-        # Get industry data for sector bonus
+        # v5.0: Load sector ETF data for bonus calculation
+        self._load_sector_etf_data()
+
+        # Get industry data for sector context
         try:
             if self.fetcher:
                 self.stock_info = self.fetcher.fetch_batch_stock_info(list(symbol_data.keys()))
@@ -286,15 +305,15 @@ class PullbackEntryStrategy(BaseStrategy):
             }
         ))
 
-        # Dimension 4: Environment Bonus - +2/-10 points
+        # Dimension 4: Environment Bonus - +2/-10 points (v5.0: ETF-based sector leadership)
         bonus_score = 0
 
-        # Sector resonance bonus (+2 when same sector >= 3 stocks)
+        # v5.0: Sector leadership bonus (0-1.0) based on sector ETF performance
         sector = self.stock_info.get(symbol, {}).get('sector', 'Unknown')
-        if sector != 'Unknown' and self.sector_counts.get(sector, 0) >= 3:
-            bonus_score += 2
+        sector_leadership_score = self._calculate_sector_leadership(sector)
+        bonus_score += sector_leadership_score
 
-        # Gap estimation
+        # Gap estimation (0-1.0)
         gap_data = ind.estimate_gap_impact()
         bonus_score += gap_data.get('score', 0)
 
@@ -304,7 +323,7 @@ class PullbackEntryStrategy(BaseStrategy):
             max_score=2.0,
             details={
                 'sector': sector,
-                'sector_count': self.sector_counts.get(sector, 0),
+                'sector_leadership_score': sector_leadership_score,
                 'gap_estimate_pct': gap_data.get('gap_estimate_pct', 0),
                 'gap_score': gap_data.get('score', 0)
             }
@@ -493,6 +512,73 @@ class PullbackEntryStrategy(BaseStrategy):
 
         if bonus:
             snapshot['sector'] = bonus.details.get('sector', 'Unknown')
+            snapshot['sector_leadership_score'] = bonus.details.get('sector_leadership_score', 0)
             snapshot['gap_estimate_pct'] = bonus.details.get('gap_estimate_pct', 0)
 
         return snapshot
+
+    def _load_sector_etf_data(self):
+        """Load sector ETF data for bonus calculation."""
+        try:
+            for etf in self.PARAMS['sector_etfs'].values():
+                df = self._get_data(etf)
+                if df is not None and len(df) > 50:
+                    self.sector_etf_data[etf] = df
+        except Exception as e:
+            logger.warning(f"Could not load sector ETF data: {e}")
+
+    def _calculate_sector_leadership(self, sector: str) -> float:
+        """
+        Calculate sector leadership score (0-1.0) based on sector ETF performance.
+
+        Scoring:
+        - RS >= 90th AND > EMA50: 1.0
+        - RS >= 80th AND > EMA50: 0.7
+        - RS >= 80th but < EMA50: 0.3
+        - Otherwise: 0
+
+        Args:
+            sector: Stock's sector name
+
+        Returns:
+            Leadership score 0-1.0
+        """
+        if sector == 'Unknown' or sector not in self.PARAMS['sector_etfs']:
+            return 0.0
+
+        etf_symbol = self.PARAMS['sector_etfs'][sector]
+        if etf_symbol not in self.sector_etf_data:
+            return 0.0
+
+        etf_df = self.sector_etf_data[etf_symbol]
+        if len(etf_df) < 50:
+            return 0.0
+
+        try:
+            ind = TechnicalIndicators(etf_df)
+            ind.calculate_all()
+
+            # Get ETF metrics
+            etf_price = etf_df['close'].iloc[-1]
+            ema50 = ind.indicators.get('ema', {}).get('ema50', 0)
+
+            # Calculate RS percentile (3m, 6m, 12m weighted)
+            rs_score = ind.calculate_rs_score_weighted(etf_df, 'SPY')
+            rs_percentile = rs_score.get('rs_percentile', 0) * 100  # Convert to 0-100 scale
+
+            # Check conditions
+            above_ema50 = etf_price > ema50 if ema50 > 0 else False
+
+            # Score based on RS percentile and EMA50 alignment
+            if rs_percentile >= 90 and above_ema50:
+                return 1.0
+            elif rs_percentile >= 80 and above_ema50:
+                return 0.7
+            elif rs_percentile >= 80:
+                return 0.3
+            else:
+                return 0.0
+
+        except Exception as e:
+            logger.debug(f"Error calculating sector leadership for {sector}: {e}")
+            return 0.0
