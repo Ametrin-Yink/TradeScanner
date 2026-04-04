@@ -76,8 +76,8 @@ class EarningsGapStrategy(BaseStrategy):
         phase0_data = getattr(self, 'phase0_data', {})
         data = phase0_data.get(symbol, {})
 
-        # GS: Gap Size
-        gs_score = self._calculate_gs(data)
+        # GS: Gap Strength
+        gs_score = self._calculate_gs(data, df)
 
         # QC: Quality of Continuation
         qc_score = self._calculate_qc(df, data)
@@ -95,18 +95,143 @@ class EarningsGapStrategy(BaseStrategy):
             ScoringDimension(name='VC', score=vc_score, max_score=3.0, details={}),
         ]
 
-    def _calculate_gs(self, data: Dict) -> float:
-        """Gap Size - larger gaps score higher."""
-        gap_pct = abs(data.get('gap_1d_pct', 0))
+    def _calculate_gs(self, data: Dict, df: pd.DataFrame) -> float:
+        """
+        Gap Strength (GS) - 0-5.0 max per v5.0 spec.
 
-        if gap_pct >= 0.20:
-            return 4.0
-        elif gap_pct >= 0.15:
-            return 3.5 + (gap_pct - 0.15) / 0.05 * 0.5
-        elif gap_pct >= 0.10:
-            return 2.5 + (gap_pct - 0.10) / 0.05 * 1.0
-        elif gap_pct >= 0.05:
-            return 1.0 + (gap_pct - 0.05) / 0.05 * 1.5
+        Components:
+        1. Gap Size (0-2.5 pts)
+        2. Gap Type (0-1.5 pts) - detected from price action context
+        3. Initial Bar Quality (0-1.0 pts) - CLV-based
+        """
+        gap_pct = data.get('gap_1d_pct', 0)
+        gap_direction = data.get('gap_direction', 'none')
+
+        # Component 1: Gap Size (0-2.5 pts)
+        abs_gap_pct = abs(gap_pct)
+        if abs_gap_pct >= 0.15:
+            size_score = 2.5
+        elif abs_gap_pct >= 0.10:
+            # 10-15%: 2.0-2.5 (interpolate)
+            size_score = 2.0 + (abs_gap_pct - 0.10) / 0.05 * 0.5
+        elif abs_gap_pct >= 0.07:
+            # 7-10%: 1.5-2.0 (interpolate)
+            size_score = 1.5 + (abs_gap_pct - 0.07) / 0.03 * 0.5
+        elif abs_gap_pct >= 0.05:
+            # 5-7%: 0.5-1.5 (interpolate)
+            size_score = 0.5 + (abs_gap_pct - 0.05) / 0.02 * 1.0
+        else:
+            size_score = 0.0
+
+        # Component 2: Gap Type (0-1.5 pts)
+        # Detect from gap direction + magnitude relationship (price action context)
+        type_score = self._calculate_gap_type_score(gap_pct, gap_direction, df)
+
+        # Component 3: Initial Bar Quality (0-1.0 pts) - CLV based
+        clv_score = self._calculate_gap_clv_score(df, gap_pct)
+
+        total = size_score + type_score + clv_score
+        return min(5.0, total)
+
+    def _calculate_gap_type_score(self, gap_pct: float, gap_direction: str, df: pd.DataFrame) -> float:
+        """
+        Detect gap type from price action context (0-1.5 pts).
+
+        For long setups (gap up):
+        - Clear beat: Large gap up with strong close = 1.5
+        - Moderate beat: Medium gap up = 0.8
+        - Relief rally: Small gap up after decline = 0.3-0.5
+
+        For short setups (gap down):
+        - Clear miss: Large gap down with weak close = 1.5
+        - Moderate miss: Medium gap down = 0.8
+        - Relief selloff: Small gap down after rally = 0.3-0.5
+        """
+        if len(df) < 5:
+            return 0.5  # Neutral/ambiguous
+
+        abs_gap = abs(gap_pct)
+
+        # Get gap day OHLC (most recent day)
+        gap_day = df.iloc[-1]
+        gap_open = gap_day['open']
+        gap_close = gap_day['close']
+        gap_high = gap_day['high']
+        gap_low = gap_day['low']
+
+        # Get previous day close (pre-gap)
+        prev_close = df['close'].iloc[-2] if len(df) >= 2 else gap_open / (1 + gap_pct)
+
+        if gap_pct > 0:  # Gap up
+            # Calculate gap day performance (close relative to gap range)
+            if gap_high > gap_low:
+                gap_day_performance = (gap_close - gap_low) / (gap_high - gap_low)
+            else:
+                gap_day_performance = 0.5
+
+            # Clear beat: large gap with strong intraday hold
+            if abs_gap >= 0.10 and gap_day_performance >= 0.6:
+                return 1.5
+            # Beat with moderate follow-through
+            elif abs_gap >= 0.07 and gap_day_performance >= 0.5:
+                return 0.8
+            # Small gap or weak hold = ambiguous/relief
+            elif abs_gap >= 0.05:
+                return 0.5
+            else:
+                return 0.3
+
+        elif gap_pct < 0:  # Gap down
+            # Calculate gap day performance (close relative to gap range, inverted)
+            if gap_high > gap_low:
+                gap_day_performance = (gap_high - gap_close) / (gap_high - gap_low)
+            else:
+                gap_day_performance = 0.5
+
+            # Clear miss: large gap down with weak intraday
+            if abs_gap >= 0.10 and gap_day_performance >= 0.6:
+                return 1.5
+            # Miss with moderate follow-through
+            elif abs_gap >= 0.07 and gap_day_performance >= 0.5:
+                return 0.8
+            # Small gap or recovery = ambiguous
+            elif abs_gap >= 0.05:
+                return 0.5
+            else:
+                return 0.3
+
+        return 0.5  # Neutral
+
+    def _calculate_gap_clv_score(self, df: pd.DataFrame, gap_pct: float) -> float:
+        """
+        Calculate CLV-based score for gap day (0-1.0 pts).
+
+        For long setups (gap up): CLV >= 0.75 = 1.0
+        For short setups (gap down): CLV <= 0.25 = 1.0
+        """
+        if len(df) < 1:
+            return 0.0
+
+        ind = TechnicalIndicators(df)
+        clv = ind.calculate_clv()
+
+        if gap_pct > 0:  # Long setup - want high CLV
+            if clv >= 0.75:
+                return 1.0
+            elif clv >= 0.65:
+                # 0.65-0.75: 0-0.5 (interpolate)
+                return (clv - 0.65) / 0.10 * 0.5
+            else:
+                return 0.0
+        elif gap_pct < 0:  # Short setup - want low CLV
+            if clv <= 0.25:
+                return 1.0
+            elif clv <= 0.35:
+                # 0.25-0.35: 0-0.5 (interpolate, inverted)
+                return (0.35 - clv) / 0.10 * 0.5
+            else:
+                return 0.0
+
         return 0.0
 
     def _calculate_qc(self, df: pd.DataFrame, data: Dict) -> float:
