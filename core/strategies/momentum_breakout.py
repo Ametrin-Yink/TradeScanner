@@ -327,51 +327,188 @@ class MomentumBreakoutStrategy(BaseStrategy):
 
         return pattern_type, round(min(5.0, final_score), 2)
 
+    # Sector ETF mapping for sector leadership bonus
+    SECTOR_ETFS = {
+        'Technology': 'XLK',
+        'Financials': 'XLF',
+        'Energy': 'XLE',
+        'Industrials': 'XLI',
+        'Consumer Staples': 'XLP',
+        'Consumer Discretionary': 'XLY',
+        'Materials': 'XLB',
+        'Utilities': 'XLU',
+        'Health Care': 'XLV',
+        'Biotechnology': 'XBI',
+        'Semiconductors': 'SMH',
+        'Software': 'IGV',
+        'Transportation': 'IYT',
+    }
+
     def _calculate_bonus(self, dimensions: List[ScoringDimension], df: pd.DataFrame, symbol: str) -> float:
         """
-        Calculate bonus points from confluence factors.
+        Calculate bonus points from confluence factors per Strategy_Description_v5.md.
         Max bonus is capped at 3.0.
+
+        Bonus pool:
+        - VCP structure: 2.0 max (vol_contraction_quality + range_contraction_quality + wave_count)
+        - Sector leadership: 0.5 max (sector ETF RS >= 80th AND sector ETF > EMA50)
+        - Earnings catalyst: 0.5 max (7-21 days to earnings)
+        - Accumulation divergence: 0.5 max (OBV rising while price flat)
         """
         bonus = 0.0
         ind = TechnicalIndicators(df)
 
-        # Bonus 1: Exceptional pattern quality
+        # Bonus 1: VCP structure bonus (2.0 max)
         cq_dim = next((d for d in dimensions if d.name == 'CQ'), None)
-        if cq_dim and cq_dim.details.get('pattern_type') in ['VCP', 'HTF']:
-            if cq_dim.score >= 4.5:
-                bonus += 1.0
-            elif cq_dim.score >= 4.0:
-                bonus += 0.5
+        if cq_dim and cq_dim.details.get('pattern_type') == 'VCP':
+            # Calculate VCP structure components from platform data
+            platform = ind.detect_vcp_platform(
+                lookback_range=self.PARAMS['platform_lookback'],
+                max_range_pct=self.PARAMS['platform_max_range'],
+                concentration_threshold=self.PARAMS['concentration_threshold']
+            )
+            if platform:
+                # Volume contraction quality (0-0.7)
+                vol_contract_ratio = platform.get('volume_contraction_ratio', 1.0)
+                if vol_contract_ratio < 0.4:
+                    vol_contraction_quality = 0.7
+                elif vol_contract_ratio < 0.7:
+                    vol_contraction_quality = 0.7 - (vol_contract_ratio - 0.4) / 0.3 * 0.4
+                else:
+                    vol_contraction_quality = max(0, 0.3 - (vol_contract_ratio - 0.7) / 0.3 * 0.3)
 
-        # Bonus 2: High RS percentile (already passed TC gate, bonus for exceptional RS)
-        data = getattr(self, 'phase0_data', {}).get(symbol, {})
-        rs_pct = data.get('rs_percentile', 50)
-        if rs_pct >= 90:
-            bonus += 1.0
-        elif rs_pct >= 80:
+                # Range contraction quality (0-0.7)
+                range_pct = platform.get('platform_range_pct', 0.15)
+                if range_pct < 0.05:
+                    range_contraction_quality = 0.7
+                elif range_pct < 0.12:
+                    range_contraction_quality = 0.7 - (range_pct - 0.05) / 0.07 * 0.35
+                else:
+                    range_contraction_quality = max(0, 0.35 - (range_pct - 0.12) / 0.08 * 0.35)
+
+                # Wave count bonus (0-0.6) - count contraction waves in platform
+                contraction_quality = platform.get('contraction_quality', 0.5)
+                wave_count_bonus = min(0.6, contraction_quality * 0.6)
+
+                vcp_bonus = vol_contraction_quality + range_contraction_quality + wave_count_bonus
+                bonus += min(2.0, vcp_bonus)
+
+        # Bonus 2: Sector leadership (0.5 max)
+        sector_bonus = self._calculate_sector_leadership_bonus(symbol)
+        bonus += sector_bonus
+
+        # Bonus 3: Earnings catalyst (0.5 max)
+        phase0_data = getattr(self, 'phase0_data', {})
+        data = phase0_data.get(symbol, {})
+        days_to_earnings = data.get('days_to_earnings')
+        if days_to_earnings is not None and 7 <= days_to_earnings <= 21:
             bonus += 0.5
 
-        # Bonus 3: Strong volume confirmation
-        vc_dim = next((d for d in dimensions if d.name == 'VC'), None)
-        if vc_dim:
-            vol_ratio = vc_dim.details.get('volume_ratio', 0)
-            if vol_ratio >= 4.0:
-                bonus += 0.5
-            elif vol_ratio >= 3.0:
-                bonus += 0.25
-
-        # Bonus 4: Multi-timeframe alignment (simplified check)
-        try:
-            if len(df) >= 50:
-                ema20 = df['close'].ewm(span=20).mean().iloc[-1]
-                ema50 = df['close'].ewm(span=50).mean().iloc[-1]
-                current = df['close'].iloc[-1]
-                if current > ema20 > ema50:
-                    bonus += 0.25
-        except Exception:
-            pass
+        # Bonus 4: Accumulation divergence (0.5 max)
+        accum_bonus = self._calculate_accumulation_divergence(df)
+        bonus += accum_bonus
 
         return min(bonus, self.PARAMS['bonus_max'])
+
+    def _calculate_sector_leadership_bonus(self, symbol: str) -> float:
+        """
+        Calculate sector leadership bonus (0.5 max).
+        Requires: Sector ETF RS >= 80th percentile AND Sector ETF > EMA50.
+        """
+        try:
+            # Get stock's sector from database
+            stock_info = self.db.get_stock_info_full(symbol)
+            if not stock_info:
+                return 0.0
+
+            sector = stock_info.get('sector', '')
+            if not sector or sector not in self.SECTOR_ETFS:
+                return 0.0
+
+            etf_symbol = self.SECTOR_ETFS[sector]
+
+            # Get ETF data from market_data cache
+            etf_df = self.market_data.get(etf_symbol)
+            if etf_df is None or len(etf_df) < 50:
+                return 0.0
+
+            # Check ETF > EMA50
+            ema50 = etf_df['close'].ewm(span=50).mean().iloc[-1]
+            current_price = etf_df['close'].iloc[-1]
+            if current_price <= ema50:
+                return 0.0
+
+            # Check ETF RS >= 80th percentile
+            if len(etf_df) >= 252:
+                price_3m = etf_df['close'].iloc[-63] if len(etf_df) >= 63 else etf_df['close'].iloc[0]
+                price_6m = etf_df['close'].iloc[-126] if len(etf_df) >= 126 else etf_df['close'].iloc[0]
+                price_12m = etf_df['close'].iloc[-252] if len(etf_df) >= 252 else etf_df['close'].iloc[0]
+
+                ret_3m = (current_price - price_3m) / price_3m
+                ret_6m = (current_price - price_6m) / price_6m
+                ret_12m = (current_price - price_12m) / price_12m
+
+                rs_score = 0.4 * ret_3m + 0.3 * ret_6m + 0.3 * ret_12m
+
+                # RS >= 80th percentile threshold (approximate using RS score > 0.3)
+                if rs_score > 0.3:
+                    return 0.5
+
+            return 0.0
+        except Exception:
+            return 0.0
+
+    def _calculate_accumulation_divergence(self, df: pd.DataFrame) -> float:
+        """
+        Calculate accumulation divergence bonus (0.5 max).
+        OBV rising while price flat during base (linear regression divergence).
+        """
+        try:
+            if len(df) < 30:
+                return 0.0
+
+            # Calculate OBV (On-Balance Volume)
+            obv = [0]
+            for i in range(1, len(df)):
+                if df['close'].iloc[i] > df['close'].iloc[i-1]:
+                    obv.append(obv[-1] + df['volume'].iloc[i])
+                elif df['close'].iloc[i] < df['close'].iloc[i-1]:
+                    obv.append(obv[-1] - df['volume'].iloc[i])
+                else:
+                    obv.append(obv[-1])
+
+            # Use last 20 days for base period
+            base_period = min(20, len(df) // 2)
+            if base_period < 10:
+                return 0.0
+
+            price_values = df['close'].tail(base_period).values
+            obv_values = obv[-base_period:]
+
+            # Linear regression on price (x = time, y = price)
+            x = np.arange(base_period)
+            price_slope, _ = np.polyfit(x, price_values, 1)
+
+            # Linear regression on OBV
+            obv_slope, _ = np.polyfit(x, obv_values, 1)
+
+            # Normalize OBV slope by average volume for comparison
+            avg_volume = df['volume'].tail(base_period).mean()
+            normalized_obv_slope = obv_slope / avg_volume if avg_volume > 0 else 0
+
+            # Divergence: OBV rising (positive slope) while price relatively flat (small slope)
+            price_change_pct = abs(price_slope) / np.mean(price_values) if np.mean(price_values) > 0 else 0
+            obv_rising = normalized_obv_slope > 0.01  # OBV has meaningful upward trend
+
+            # Price is "flat" if change is less than 5% over the period
+            price_flat = price_change_pct < 0.05
+
+            if obv_rising and price_flat:
+                return 0.5
+
+            return 0.0
+        except Exception:
+            return 0.0
 
     def calculate_score(self, dimensions: List[ScoringDimension], df: pd.DataFrame = None, symbol: str = None) -> Tuple[float, str]:
         """
