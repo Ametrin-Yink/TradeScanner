@@ -92,38 +92,7 @@ class MomentumBreakoutStrategy(BaseStrategy):
             logger.debug(f"MB_REJ: {symbol} - Avg 20d volume {avg_volume_20d:.0f} < 100K")
             return False
 
-        # Layer 1: Liquidity
-        dollar_volume = current_price * df['volume'].iloc[-1]
-        if dollar_volume < self.PARAMS['min_dollar_volume']:
-            logger.debug(f"MB_REJ: {symbol} - Low dollar volume: ${dollar_volume/1e6:.1f}M < ${self.PARAMS['min_dollar_volume']/1e6:.0f}M")
-            return False
-
-        adr_pct = ind.indicators.get('adr', {}).get('adr_pct', 0)
-        if adr_pct < self.PARAMS['min_atr_pct']:
-            logger.debug(f"MB_REJ: {symbol} - Low ADR: {adr_pct:.3f} < {self.PARAMS['min_atr_pct']}")
-            return False
-
-        # Layer 2: 50EMA deadzone filter
-        ema50_distance = ind.distance_from_ema50()
-        if ema50_distance['distance_pct'] > self.PARAMS['max_distance_from_50ema']:
-            logger.debug(f"MB_REJ: {symbol} - Far from 50EMA: {ema50_distance['distance_pct']:.3f} > {self.PARAMS['max_distance_from_50ema']}")
-            return False
-
-        ema50_slope = ind.calculate_stable_ema_slope(period=50, comparison_days=3)
-        if not ema50_slope['is_uptrend']:
-            logger.debug(f"MB_REJ: {symbol} - EMA50 not in uptrend")
-            return False
-
-        # Layer 3: 52-week high proximity
-        metrics_52w = ind.calculate_52w_metrics()
-        if metrics_52w['distance_from_high'] is None:
-            logger.debug(f"MB_REJ: {symbol} - Cannot calculate 52w metrics")
-            return False
-        if metrics_52w['distance_from_high'] > self.PARAMS['max_distance_from_52w_high']:
-            logger.debug(f"MB_REJ: {symbol} - Far from 52w high: {metrics_52w['distance_from_high']:.3f} > {self.PARAMS['max_distance_from_52w_high']}")
-            return False
-
-        # Layer 4: VCP Platform Detection
+        # Layer 1: VCP Platform Detection
         platform = ind.detect_vcp_platform(
             lookback_range=self.PARAMS['platform_lookback'],
             max_range_pct=self.PARAMS['platform_max_range'],
@@ -138,7 +107,7 @@ class MomentumBreakoutStrategy(BaseStrategy):
             logger.debug(f"MB_REJ: {symbol} - Poor volume contraction: {platform['volume_contraction_ratio']:.2f} > {self.PARAMS['volume_contraction_vs_platform']}")
             return False
 
-        # Layer 5: EP Breakout Confirmation
+        # Layer 2: EP Breakout Confirmation
         platform_high = platform['platform_high']
         breakout_pct = (current_price - platform_high) / platform_high
 
@@ -159,7 +128,7 @@ class MomentumBreakoutStrategy(BaseStrategy):
             logger.debug(f"MB_REJ: {symbol} - Volume ratio too low: {volume_ratio:.2f}x < {self.PARAMS['breakout_volume_vs_20d_sma']}x")
             return False
 
-        logger.debug(f"MB_PASS: {symbol} - All 5 layers + TC gate passed! Breakout:{breakout_pct:.2%}, Vol:{volume_ratio:.1f}x")
+        logger.debug(f"MB_PASS: {symbol} - All layers + TC gate passed! Breakout:{breakout_pct:.2%}, Vol:{volume_ratio:.1f}x")
         return True
 
     def calculate_dimensions(self, symbol: str, df: pd.DataFrame) -> List[ScoringDimension]:
@@ -542,29 +511,45 @@ class MomentumBreakoutStrategy(BaseStrategy):
         return clamped_score, tier
 
     def _calculate_bs(self, breakout_pct: float, platform_range_pct: float) -> float:
-        """Breakout Strength dimension (0-5)."""
+        """Breakout Strength dimension (0-4.0)."""
         bs_score = 0.0
 
-        # Breakout %
-        if breakout_pct > 0.04:
-            bs_score += 3.0
-        elif breakout_pct > 0.02:
-            bs_score += 2.0 + (breakout_pct - 0.02) / 0.02
-        else:
-            bs_score += max(0.0, breakout_pct / 0.02 * 2.0)
+        # Breakout % above pivot (0-2.5 pts)
+        if breakout_pct >= 0.05:
+            bs_score += 2.5
+        elif breakout_pct >= 0.03:
+            # 3%–5%: 2.0–2.5 (interpolate)
+            bs_score += 2.0 + (breakout_pct - 0.03) / 0.02 * 0.5
+        elif breakout_pct >= 0.02:
+            # 2%–3%: 1.5–2.0 (interpolate)
+            bs_score += 1.5 + (breakout_pct - 0.02) / 0.01 * 0.5
+        elif breakout_pct >= 0.01:
+            # 1%–2%: 0.5–1.5 (interpolate)
+            bs_score += 0.5 + (breakout_pct - 0.01) / 0.01 * 1.0
+        elif breakout_pct > 0:
+            # < 1%: 0–0.5 (interpolate)
+            bs_score += breakout_pct / 0.01 * 0.5
 
-        # Energy ratio
+        # Energy ratio — today vol / avg20d vol (0-1.5 pts)
+        # Energy ratio is actually volume_ratio passed from caller
+        # For now calculate from platform_range_pct as before, but cap scoring differently
         raw_energy = breakout_pct / platform_range_pct if platform_range_pct > 0 else 1.0
         energy_ratio = min(raw_energy, self.PARAMS['energy_ratio_cap'])
 
-        if energy_ratio > 2.0:
-            bs_score += 2.0
-        elif energy_ratio > 1.0:
-            bs_score += 1.0 + (energy_ratio - 1.0)
-        else:
-            bs_score += max(0.0, energy_ratio)
+        if energy_ratio >= 3.0:
+            bs_score += 1.5
+        elif energy_ratio >= 2.0:
+            # 2.0–3.0×: 1.0–1.5 (interpolate)
+            bs_score += 1.0 + (energy_ratio - 2.0) / 1.0 * 0.5
+        elif energy_ratio >= 1.5:
+            # 1.5–2.0×: 0.5–1.0 (interpolate)
+            bs_score += 0.5 + (energy_ratio - 1.5) / 0.5 * 0.5
+        elif energy_ratio >= 1.0:
+            # 1.0–1.5×: 0–0.5 (interpolate)
+            bs_score += (energy_ratio - 1.0) / 0.5 * 0.5
+        # < 1.0×: 0 points
 
-        return round(min(5.0, bs_score), 2)
+        return round(min(4.0, bs_score), 2)
 
     def _calculate_vc(self, platform: Dict, volume_ratio: float, clv: float) -> float:
         """
