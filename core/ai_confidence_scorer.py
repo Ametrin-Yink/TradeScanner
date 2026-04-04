@@ -20,6 +20,8 @@ def convert_to_native(obj):
         return int(obj)
     elif isinstance(obj, np.floating):
         return float(obj)
+    elif isinstance(obj, np.bool_):
+        return bool(obj)
     elif isinstance(obj, np.ndarray):
         return obj.tolist()
     elif isinstance(obj, dict):
@@ -116,6 +118,12 @@ class AIConfidenceScorer:
             batch = candidates[i:i + batch_size]
             scored_batch = self._score_batch(batch, market_sentiment)
             all_scored.extend(scored_batch)
+
+            # Memory cleanup between batches
+            if i > 0 and i % 40 == 0:
+                import gc
+                gc.collect()
+                logger.debug(f"AI scoring: Processed {i} candidates, garbage collected")
 
         # Apply sector concentration penalty
         all_scored = self._apply_sector_penalties(all_scored)

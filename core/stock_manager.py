@@ -47,12 +47,13 @@ class StockGroupManager:
         for etf in self.DEFAULT_ETFS:
             try:
                 # Check if exists
-                conn = self.db.get_connection()
-                cursor = conn.execute(
-                    "SELECT symbol FROM stocks WHERE symbol = ? AND is_active = 1",
-                    (etf,)
-                )
-                if not cursor.fetchone():
+                with self.db.get_connection() as conn:
+                    cursor = conn.execute(
+                        "SELECT symbol FROM stocks WHERE symbol = ? AND is_active = 1",
+                        (etf,)
+                    )
+                    exists = cursor.fetchone()
+                if not exists:
                     self.db.add_stock(etf, stock_group='etf')
                     added_etfs += 1
             except Exception as e:
@@ -65,33 +66,32 @@ class StockGroupManager:
 
     def _migrate_existing_stocks(self):
         """Migrate existing stocks without group to large_cap."""
-        conn = self.db.get_connection()
+        with self.db.get_connection() as conn:
+            # Check if stock_group column exists
+            cursor = conn.execute("PRAGMA table_info(stocks)")
+            columns = [row[1] for row in cursor.fetchall()]
 
-        # Check if stock_group column exists
-        cursor = conn.execute("PRAGMA table_info(stocks)")
-        columns = [row[1] for row in cursor.fetchall()]
+            if 'stock_group' not in columns:
+                # Add stock_group column
+                conn.execute("ALTER TABLE stocks ADD COLUMN stock_group TEXT DEFAULT 'large_cap'")
+                conn.commit()
+                logger.info("Added stock_group column to stocks table")
 
-        if 'stock_group' not in columns:
-            # Add stock_group column
-            conn.execute("ALTER TABLE stocks ADD COLUMN stock_group TEXT DEFAULT 'large_cap'")
-            conn.commit()
-            logger.info("Added stock_group column to stocks table")
-
-        # Migrate stocks without group
-        cursor = conn.execute(
-            "SELECT symbol FROM stocks WHERE stock_group IS NULL OR stock_group = ''"
-        )
-        stocks_to_migrate = [row[0] for row in cursor.fetchall()]
-
-        for symbol in stocks_to_migrate:
-            conn.execute(
-                "UPDATE stocks SET stock_group = 'large_cap' WHERE symbol = ?",
-                (symbol,)
+            # Migrate stocks without group
+            cursor = conn.execute(
+                "SELECT symbol FROM stocks WHERE stock_group IS NULL OR stock_group = ''"
             )
-        conn.commit()
+            stocks_to_migrate = [row[0] for row in cursor.fetchall()]
 
-        if stocks_to_migrate:
-            logger.info(f"Migrated {len(stocks_to_migrate)} stocks to large_cap group")
+            for symbol in stocks_to_migrate:
+                conn.execute(
+                    "UPDATE stocks SET stock_group = 'large_cap' WHERE symbol = ?",
+                    (symbol,)
+                )
+            conn.commit()
+
+            if stocks_to_migrate:
+                logger.info(f"Migrated {len(stocks_to_migrate)} stocks to large_cap group")
 
     def update_large_cap_group(self) -> Dict[str, int]:
         """

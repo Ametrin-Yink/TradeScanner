@@ -191,6 +191,40 @@ class ReportGenerator:
         # Build sentiment timestamp display
         sentiment_timestamp_html = f' <span style="opacity:0.7;font-size:11px;">(analyzed at {sentiment_time_str})</span>' if sentiment_time_str else ""
 
+        # Get technical context from Tier 3 cache
+        technical_context_html = ""
+        try:
+            from data.db import Database
+            db = Database()
+
+            spy_df = db.get_tier3_cache('SPY')
+            vix_df = db.get_tier3_cache('^VIX')
+            if vix_df is None:
+                vix_df = db.get_tier3_cache('VIXY')
+
+            if spy_df is not None and len(spy_df) >= 200:
+                close = spy_df['close']
+                ema50 = close.ewm(span=50, adjust=False).mean().iloc[-1]
+                ema200 = close.ewm(span=200, adjust=False).mean().iloc[-1]
+                current_spy = close.iloc[-1]
+                spy_5d = (current_spy - close.iloc[-6]) / close.iloc[-6] * 100 if len(close) >= 6 else 0
+
+                vix_value = vix_df['close'].iloc[-1] if vix_df is not None else 0
+
+                trend = "Bullish" if current_spy > ema200 else "Bearish"
+                golden_cross = "✓" if ema50 > ema200 else "✗"
+
+                technical_context_html = f'''<div class="technical-context" style="margin-top:10px;padding:10px;background:rgba(255,255,255,0.05);border-radius:4px;font-size:12px;">
+                    <div style="display:flex;gap:20px;flex-wrap:wrap;">
+                        <span><strong>SPY:</strong> ${current_spy:.2f} ({spy_5d:+.2f}% 5d)</span>
+                        <span><strong>Trend:</strong> {trend}</span>
+                        <span><strong>Golden Cross:</strong> {golden_cross} (EMA50 {'>' if ema50 > ema200 else '<'} EMA200)</span>
+                        <span><strong>VIX:</strong> {vix_value:.1f} ({'Fear' if vix_value > 30 else 'Elevated' if vix_value > 20 else 'Normal'})</span>
+                    </div>
+                </div>'''
+        except Exception as e:
+            logger.debug(f"Could not fetch technical context: {e}")
+
         # Build top opportunities section
         top_section = ""
         for i, opp in enumerate(opportunities[:10], 1):
@@ -513,6 +547,7 @@ class ReportGenerator:
             <div class="sentiment">Sentiment: {market_sentiment.upper()} ({sentiment_confidence}% confidence){sentiment_timestamp_html}</div>
             {sentiment_reasoning_html}
             {sentiment_factors_html}
+            {technical_context_html}
         </header>
 
         <div class="stats-compact">

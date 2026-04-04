@@ -41,6 +41,15 @@ class Database:
             logger.info("Migrating stocks table: adding market_cap column")
             conn.execute("ALTER TABLE stocks ADD COLUMN market_cap REAL")
 
+        # Add earnings date columns
+        if 'next_earnings_date' not in columns:
+            logger.info("Migrating stocks table: adding next_earnings_date column")
+            conn.execute("ALTER TABLE stocks ADD COLUMN next_earnings_date TEXT")
+
+        if 'earnings_fetched_at' not in columns:
+            logger.info("Migrating stocks table: adding earnings_fetched_at column")
+            conn.execute("ALTER TABLE stocks ADD COLUMN earnings_fetched_at TEXT")
+
     def migrate_tier1_cache_v5(self):
         """Add v5.0 columns to tier1_cache table."""
         conn = self.get_connection()
@@ -351,6 +360,42 @@ class Database:
                 (market_cap, symbol)
             )
 
+    def get_stock_earnings_date(self, symbol: str) -> Optional[str]:
+        """Get cached next earnings date for a stock.
+
+        Args:
+            symbol: Stock symbol
+
+        Returns:
+            ISO date string (YYYY-MM-DD) or None if not cached
+        """
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT next_earnings_date FROM stocks WHERE symbol = ?",
+                (symbol,)
+            )
+            row = cursor.fetchone()
+            if row and row[0]:
+                return row[0]
+            return None
+
+    def update_stock_earnings_date(self, symbol: str, earnings_date: str):
+        """Update next earnings date for a stock.
+
+        Args:
+            symbol: Stock symbol
+            earnings_date: ISO date string (YYYY-MM-DD)
+        """
+        today = datetime.now().date().isoformat()
+        with self.get_connection() as conn:
+            conn.execute(
+                """UPDATE stocks SET
+                    next_earnings_date = ?,
+                    earnings_fetched_at = ?
+                WHERE symbol = ?""",
+                (earnings_date, today, symbol)
+            )
+
     def get_stocks_by_category(self, category: str) -> List[str]:
         """Get symbols by category.
 
@@ -414,6 +459,8 @@ CREATE TABLE IF NOT EXISTS stocks (
     sector TEXT,
     category TEXT DEFAULT 'stocks',  -- 'stocks' or 'market_index_etf'
     market_cap REAL,  -- Market cap in USD
+    next_earnings_date TEXT,  -- Next earnings date (ISO format)
+    earnings_fetched_at TEXT,  -- When earnings date was fetched
     added_date TEXT,
     is_active INTEGER DEFAULT 1
 );

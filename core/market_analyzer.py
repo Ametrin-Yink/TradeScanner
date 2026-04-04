@@ -184,12 +184,13 @@ Return ONLY JSON:
             data = response.json()
             content = data['choices'][0]['message']['content']
 
-            # Extract JSON
+            # Extract JSON - look for content between single braces
             import re
-            json_match = re.search(r'\{{.*\}}', content, re.DOTALL)
+            json_match = re.search(r'\{.*\}', content, re.DOTALL)
             if json_match:
                 result = json.loads(json_match.group())
             else:
+                # Try to parse the entire content as JSON
                 result = json.loads(content)
 
             # Validate regime

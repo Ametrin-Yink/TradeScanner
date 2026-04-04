@@ -25,6 +25,35 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def check_memory():
+    """Check available memory and warn if critically low."""
+    try:
+        with open('/proc/meminfo') as f:
+            meminfo = f.read()
+
+        mem_total = 0
+        mem_available = 0
+
+        for line in meminfo.split('\n'):
+            if line.startswith('MemTotal:'):
+                mem_total = int(line.split()[1]) / 1024 / 1024  # GB
+            elif line.startswith('MemAvailable:'):
+                mem_available = int(line.split()[1]) / 1024 / 1024  # GB
+
+        logger.info(f"Memory: {mem_total:.1f}GB total, {mem_available:.1f}GB available")
+
+        if mem_available < 0.3:
+            logger.warning("CRITICAL: Less than 300MB memory available! Process may crash.")
+            return False
+        elif mem_available < 0.5:
+            logger.warning("LOW MEMORY: Less than 500MB available. Consider reducing batch sizes.")
+            return True
+        return True
+    except Exception as e:
+        logger.debug(f"Could not check memory: {e}")
+        return True
+
+
 class CompleteScanner:
     """Complete 6-phase workflow scanner for daily 3 AM execution.
 
@@ -137,6 +166,9 @@ class CompleteScanner:
             logger.info("STARTING COMPLETE 6-PHASE WORKFLOW")
             logger.info("=" * 60)
 
+            # Check memory before starting
+            check_memory()
+
             # Phase 0: Data Preparation
             phase0_result = self._phase0_data_prep(symbols)
             if not phase0_result['success']:
@@ -150,6 +182,10 @@ class CompleteScanner:
 
             symbols = phase0_result['symbols']
 
+            # Memory cleanup after Phase 0
+            gc.collect()
+            logger.info("Memory cleaned after Phase 0")
+
             # Phase 1: AI Market Regime Detection
             phase1_result = self._phase1_market_analysis()
             regime = phase1_result['regime']
@@ -161,10 +197,14 @@ class CompleteScanner:
             candidates = phase2_result['candidates']
             fail_symbols = phase2_result.get('fail_symbols', [])
 
+            # Memory cleanup after Phase 2 (screener can use significant memory)
+            gc.collect()
+            logger.info("Memory cleaned after Phase 2")
+
             if not candidates:
                 logger.warning("No candidates found, generating empty report")
                 report_path = self._phase5_report(
-                    [], [], regime, symbols, fail_symbols
+                    [], [], regime, symbols, fail_symbols, phase1_result
                 )
                 self._phase6_notify(report_path, regime, [], ai_confidence, ai_reasoning)
                 self._update_workflow_status(
@@ -184,7 +224,8 @@ class CompleteScanner:
             report_path = self._phase5_report(
                 top_30,      # All 30 for full table
                 final_candidates,  # Top 10 with deep analysis
-                regime, symbols, fail_symbols
+                regime, symbols, fail_symbols,
+                phase1_result  # Pass sentiment analysis details
             )
 
             # Phase 6: Push Notifications
@@ -274,7 +315,9 @@ class CompleteScanner:
         try:
             # Get technical data
             spy_df = self.db.get_tier3_cache('SPY')
-            vix_df = self.db.get_tier3_cache('VIX') or self.db.get_tier3_cache('VIXY')
+            vix_df = self.db.get_tier3_cache('^VIX')
+            if vix_df is None:
+                vix_df = self.db.get_tier3_cache('VIXY')
 
             # Get AI + Tavily analysis
             analysis = self.market_analyzer.analyze_for_regime(spy_df, vix_df)
@@ -297,7 +340,9 @@ class CompleteScanner:
         except Exception as e:
             logger.error(f"AI regime detection failed: {e}, using technical fallback")
             spy_df = self.db.get_tier3_cache('SPY')
-            vix_df = self.db.get_tier3_cache('VIX') or self.db.get_tier3_cache('VIXY')
+            vix_df = self.db.get_tier3_cache('^VIX')
+            if vix_df is None:
+                vix_df = self.db.get_tier3_cache('VIXY')
             regime = self.regime_detector.detect_regime(spy_df, vix_df)
             allocation = self.regime_detector.get_allocation(regime)
             analysis = {'confidence': 0, 'reasoning': f'Fallback: {e}'}
@@ -455,7 +500,8 @@ class CompleteScanner:
         deep_analyzed: List,
         regime: str,
         symbols: List[str],
-        fail_symbols: List[str]
+        fail_symbols: List[str],
+        phase1_result: Dict = None
     ) -> str:
         """Phase 5: Report Generation.
 
@@ -465,6 +511,7 @@ class CompleteScanner:
             regime: Market regime
             symbols: All symbols screened
             fail_symbols: Failed symbols
+            phase1_result: Phase 1 analysis result with AI details
 
         Returns:
             Path to generated report
@@ -475,10 +522,21 @@ class CompleteScanner:
 
         phase_start = datetime.now()
 
+        # Build sentiment result dict
+        sentiment_result = {}
+        if phase1_result:
+            sentiment_result = {
+                'reasoning': phase1_result.get('ai_reasoning', ''),
+                'confidence': phase1_result.get('ai_confidence', 50),
+                'key_factors': [f"Regime: {regime}"],
+                'timestamp': datetime.now().isoformat()
+            }
+
         report_path = self.reporter.generate_report(
             opportunities=deep_analyzed,
             all_candidates=all_candidates,
-            market_regime=regime,
+            market_sentiment=regime,
+            sentiment_result=sentiment_result,
             total_stocks=len(symbols),
             success_count=len(symbols) - len(fail_symbols),
             fail_count=len(fail_symbols),
@@ -530,7 +588,7 @@ class CompleteScanner:
         # Send notifications
         results = self.notifier.send_scan_summary(
             scan_date=scan_date,
-            market_regime=regime,
+            market_sentiment=regime,  # Use market_sentiment parameter name
             top_opportunities=candidates,
             report_url=report_url
         )

@@ -123,29 +123,30 @@ class StrategyScreener:
         calculated = 0
 
         for i, symbol in enumerate(symbols):
-            # Periodic garbage collection to prevent memory buildup
-            if i > 0 and i % 100 == 0:
+            # Batch processing: clear memory every 30 symbols to prevent OOM
+            if i > 0 and i % 30 == 0:
+                import gc
                 gc.collect()
+                logger.debug(f"Phase 0: Processed {i} symbols, garbage collected")
 
             # First try cached Tier 1 data
             if symbol in cached_tier1:
                 cache_entry = cached_tier1[symbol]
                 try:
-                    # Get DataFrame from market_data or fetch
+                    # Get DataFrame from market_data or fetch temporarily
                     df = market_data.get(symbol)
                     if df is None:
                         df = self._get_data(symbol)
                     if df is None or len(df) < 50:
                         continue
 
-                    # Build phase0 data from cache
-                    # Create TechnicalIndicators from df (will use cache if data unchanged)
+                    # Calculate indicators (temporarily, don't store)
                     ind = TechnicalIndicators(df, symbol=symbol)
                     ind.calculate_all()
 
+                    # Store ONLY scalar values - NO DataFrames or Indicator objects
                     phase0_data[symbol] = {
-                        'df': df,
-                        'ind': ind,  # Store pre-computed indicators
+                        # Scalar metrics only - memory efficient
                         'current_price': cache_entry.get('current_price', 0),
                         'avg_volume': cache_entry.get('avg_volume_20d', 0),
                         'adr_pct': cache_entry.get('adr_pct', 0),
@@ -164,6 +165,10 @@ class StrategyScreener:
                         'volume_sma20': cache_entry.get('volume_sma', 0),
                         'data_days': cache_entry.get('data_days', len(df)),
                     }
+
+                    # Delete temporary objects immediately
+                    del df, ind
+
                     rs_scores.append({'symbol': symbol, 'rs': phase0_data[symbol]['rs_raw']})
                     used_cache += 1
                     continue  # Skip calculation
@@ -228,10 +233,9 @@ class StrategyScreener:
                 # Phase 0.4: 52-week metrics
                 metrics_52w = ind.calculate_52w_metrics()
 
-                # Store pre-calculated data
+                # Store pre-calculated data - ONLY scalars, NO DataFrames/objects
                 phase0_data[symbol] = {
-                    'df': df,
-                    'ind': ind,
+                    # Scalar metrics only
                     'current_price': current_price,
                     'avg_volume': avg_volume,
                     'adr_pct': ind.indicators.get('adr', {}).get('adr_pct', 0),
@@ -245,10 +249,13 @@ class StrategyScreener:
                     'ema21': ind.indicators.get('ema', {}).get('ema21', 0),
                     'ema50': ind.indicators.get('ema', {}).get('ema50', 0),
                     'ema200': ind.indicators.get('ema', {}).get('ema200', 0),
-                    'high_50d': df['high'].tail(50).max(),
-                    'volume_sma20': df['volume'].tail(20).mean(),
+                    'high_50d': float(df['high'].tail(50).max()),
+                    'volume_sma20': float(df['volume'].tail(20).mean()),
                     'data_days': len(df),
                 }
+
+                # Delete temporary objects immediately to free memory
+                del df, ind, metrics_52w
 
                 rs_scores.append({'symbol': symbol, 'rs': rs_raw})
 

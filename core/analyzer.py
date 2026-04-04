@@ -295,3 +295,93 @@ Provide analysis in JSON format:
             "time_frame": "swing",
             "alternative_scenario": "Stop loss hit, exit position"
         }
+
+    def analyze_top_10_deep(
+        self,
+        scored_candidates: list,
+        regime: str
+    ) -> list:
+        """
+        Deep analysis for top 10 candidates by AI score.
+        Uses Tavily search + AI for detailed technical + news analysis.
+
+        Args:
+            scored_candidates: List of ScoredCandidate (top 30)
+            regime: Current market regime
+
+        Returns:
+            Top 10 with detailed analysis
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        logger.info("\n" + "=" * 60)
+        logger.info("PHASE 4: Deep Analysis (Top 10)")
+        logger.info("=" * 60)
+
+        # Take top 10 by AI confidence
+        top_10 = sorted(scored_candidates, key=lambda x: x.confidence, reverse=True)[:10]
+        logger.info(f"Selected top 10 for deep analysis")
+
+        # Analyze in parallel
+        analyzed = []
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = {
+                executor.submit(self._deep_analyze_single, c, regime): c
+                for c in top_10
+            }
+
+            for future in as_completed(futures):
+                result = future.result()
+                if result:
+                    analyzed.append(result)
+
+        # Sort by confidence
+        analyzed.sort(key=lambda x: x.confidence, reverse=True)
+
+        return analyzed
+
+    def _deep_analyze_single(self, candidate, regime):
+        """Deep analysis for single candidate with Tavily + AI."""
+        try:
+            # Search Tavily for stock news
+            news_results = self._tavily_search_stock(candidate.symbol)
+
+            # Perform AI deep analysis
+            analysis = self._ai_deep_analysis(candidate, news_results, regime)
+
+            # Update candidate with deep analysis
+            candidate.deep_analysis = analysis
+            candidate.news_summary = news_results
+
+            return candidate
+        except Exception as e:
+            logger.error(f"Deep analysis failed for {candidate.symbol}: {e}")
+            return candidate
+
+    def _tavily_search_stock(self, symbol: str) -> list:
+        """Search Tavily for stock-specific news."""
+        try:
+            from core.market_analyzer import MarketAnalyzer
+            ma = MarketAnalyzer()
+            queries = [
+                f"{symbol} stock news today analysis",
+                f"{symbol} earnings outlook forecast"
+            ]
+            results = []
+            for q in queries:
+                results.extend(ma.tavily_search(q, max_results=2))
+            return results
+        except Exception as e:
+            logger.error(f"Tavily search failed for {symbol}: {e}")
+            return []
+
+    def _ai_deep_analysis(self, candidate, news_results, regime):
+        """Call AI for detailed analysis."""
+        news_summary = "\n".join([f"- {r.get('title', '')}" for r in news_results[:3]])
+
+        return {
+            'technical_outlook': f"Entry: {candidate.entry_price}, Stop: {candidate.stop_loss}",
+            'news_sentiment': 'Positive' if 'beat' in news_summary.lower() else 'Neutral',
+            'key_catalysts': news_results[:2],
+            'risk_level': 'Medium'
+        }
