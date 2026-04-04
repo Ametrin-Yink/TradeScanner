@@ -127,7 +127,7 @@ class RelativeStrengthLongStrategy(BaseStrategy):
         elif rs_pct >= 85:
             score += 1.0
 
-        return min(4.0, score)
+        return min(6.0, score)
 
     def _calculate_sh(self, df: pd.DataFrame) -> float:
         """Support Hold - holding support while market declines."""
@@ -194,7 +194,7 @@ class RelativeStrengthLongStrategy(BaseStrategy):
         elif adr_pct < 0.04:
             score += 0.5
 
-        return min(4.0, score)
+        return min(3.0, score)
 
     def _calculate_vc(self, df: pd.DataFrame, data: Dict) -> float:
         """Volume Confirmation - accumulation volume pattern."""
@@ -220,7 +220,7 @@ class RelativeStrengthLongStrategy(BaseStrategy):
             elif vol_ratio >= 1.2:
                 score += 0.5
 
-        return min(3.0, score)
+        return min(2.0, score)
 
     def calculate_entry_exit(self, symbol: str, df: pd.DataFrame,
                             dimensions: List[ScoringDimension],
