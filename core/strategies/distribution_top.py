@@ -90,6 +90,7 @@ class DistributionTopStrategy(BaseStrategy):
     def _detect_resistance_level(self, df: pd.DataFrame) -> Optional[Dict]:
         """Detect resistance level with multiple touches using local maxima."""
         highs = df['high'].tail(90).values
+        df_tail = df.tail(90).reset_index(drop=True)
 
         # Find local maxima (peaks) manually
         peaks = []
@@ -109,16 +110,26 @@ class DistributionTopStrategy(BaseStrategy):
         level_high = np.max(peak_prices)
         level_low = np.min(peak_prices[peak_prices >= level_high - atr * 2.5])
 
-        touches = len([p for p in peak_prices if level_high >= p >= level_low])
+        # Get peak indices that are within the resistance level
+        level_peak_indices = [peaks[i] for i, p in enumerate(peak_prices) if level_high >= p >= level_low]
+        touches = len(level_peak_indices)
 
         if touches < self.PARAMS['min_touches']:
             return None
+
+        # Calculate days between touches for interval quality
+        if len(level_peak_indices) >= 2:
+            avg_days_between = np.mean(np.diff(level_peak_indices))
+        else:
+            avg_days_between = 0
 
         return {
             'high': float(level_high),
             'low': float(level_low),
             'touches': touches,
-            'width_atr': float((level_high - level_low) / atr) if atr > 0 else 0
+            'width_atr': float((level_high - level_low) / atr) if atr > 0 else 0,
+            'avg_days_between': float(avg_days_between),
+            'peak_indices': level_peak_indices
         }
 
     def calculate_dimensions(self, symbol: str, df: pd.DataFrame) -> List[ScoringDimension]:
@@ -183,6 +194,19 @@ class DistributionTopStrategy(BaseStrategy):
         elif touches == 2:
             score += 0.3
 
+        # Interval quality (0-1.5) - days between touches
+        avg_days = level.get('avg_days_between', 0)
+        if avg_days >= 15:
+            score += 1.5
+        elif 10 <= avg_days < 15:
+            # Linear interpolation from 1.0 to 1.5
+            score += 1.0 + (avg_days - 10) / 5 * 0.5
+        elif 7 <= avg_days < 10:
+            # Linear interpolation from 0.5 to 1.0
+            score += 0.5 + (avg_days - 7) / 3 * 0.5
+        elif 5 <= avg_days < 7:
+            score += 0.3
+
         # Width (0-1.0) - tighter is better
         width_atr = level['width_atr']
         if 1.0 <= width_atr <= 2.5:
@@ -195,7 +219,7 @@ class DistributionTopStrategy(BaseStrategy):
         return min(4.0, score)
 
     def _calculate_ds(self, df: pd.DataFrame) -> float:
-        """Distribution Signs - heavy volume on up-days at resistance."""
+        """Distribution Signs - heavy volume on up-days at resistance + price action exhaustion."""
         level = self._detect_resistance_level(df)
         if level is None:
             return 0.0
@@ -209,13 +233,82 @@ class DistributionTopStrategy(BaseStrategy):
                 if abs(row['high'] - level['high']) / level['high'] < 0.02:
                     heavy_vol_up_days += 1
 
+        # Score heavy volume on up-days (0-2.0)
         if heavy_vol_up_days >= 3:
-            return 2.0
+            vol_score = 2.0
         elif heavy_vol_up_days == 2:
-            return 1.3
+            vol_score = 1.3
         elif heavy_vol_up_days == 1:
-            return 0.6
-        return 0.0
+            vol_score = 0.6
+        else:
+            vol_score = 0.0
+
+        # Price action exhaustion detection (0-2.0)
+        price_action_signals = self._detect_price_action_exhaustion(df, level)
+        signal_count = len(price_action_signals)
+
+        if signal_count >= 3:
+            pa_score = 2.0
+        elif signal_count == 2:
+            pa_score = 1.5
+        elif signal_count == 1:
+            pa_score = 0.8
+        else:
+            pa_score = 0.0
+
+        return min(4.0, vol_score + pa_score)
+
+    def _detect_price_action_exhaustion(self, df: pd.DataFrame, level: Dict) -> List[str]:
+        """Detect price action exhaustion patterns at resistance."""
+        signals = []
+        recent_10d = df.tail(10).reset_index(drop=True)
+        level_high = level['high']
+
+        for idx, row in recent_10d.iterrows():
+            open_p = row['open']
+            high_p = row['high']
+            low_p = row['low']
+            close_p = row['close']
+
+            # Skip if not near resistance level
+            if abs(high_p - level_high) / level_high > 0.03:
+                continue
+
+            body = abs(close_p - open_p)
+            upper_shadow = high_p - max(open_p, close_p)
+            lower_shadow = min(open_p, close_p) - low_p
+
+            # Shooting star: upper shadow >= 2x body, CLV > 0.7
+            if body > 0 and upper_shadow >= 2 * body:
+                clv = ((close_p - low_p) - (high_p - close_p)) / (high_p - low_p) if (high_p - low_p) > 0 else 0
+                if clv > 0.7:
+                    signals.append(f"shooting_star_day{idx}")
+                    continue
+
+            # Long upper wick: upper shadow >= 3x body
+            if body > 0 and upper_shadow >= 3 * body:
+                signals.append(f"long_wick_day{idx}")
+                continue
+
+            # Failed breakout: breaks above resistance but closes below
+            if high_p > level_high and close_p < level_high:
+                signals.append(f"failed_breakout_day{idx}")
+                continue
+
+            # Gap fade: gap up but closes near low
+            if idx > 0:
+                prev_close = recent_10d.iloc[idx - 1]['close']
+                gap_pct = (open_p - prev_close) / prev_close
+                if gap_pct > 0.005:  # Gap up > 0.5%
+                    # Close near low (within 30% of range from low)
+                    day_range = high_p - low_p
+                    if day_range > 0:
+                        close_position = (close_p - low_p) / day_range
+                        if close_position < 0.3:  # Close in lower 30% of range
+                            signals.append(f"gap_fade_day{idx}")
+                            continue
+
+        return signals
 
     def _calculate_vc(self, df: pd.DataFrame) -> float:
         """Volume Confirmation - breakdown surge and follow-through."""
