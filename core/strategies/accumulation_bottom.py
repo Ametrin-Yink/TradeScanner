@@ -221,7 +221,7 @@ class AccumulationBottomStrategy(BaseStrategy):
         return min(4.0, score)
 
     def _calculate_as(self, df: pd.DataFrame) -> float:
-        """Accumulation Signs - heavy volume on down-days at support."""
+        """Accumulation Signs - heavy volume on down-days at support + price action strength."""
         level = self._detect_support_level(df)
         if level is None:
             return 0.0
@@ -229,37 +229,135 @@ class AccumulationBottomStrategy(BaseStrategy):
         recent = df.tail(30)
         avg_volume = df['volume'].tail(20).mean()
 
-        heavy_vol_down_days = 0
+        # Low-volume down-days at support (0-2.0)
+        low_vol_down_days = 0
         for idx, row in recent.iterrows():
-            if row['close'] < row['open'] and row['volume'] > avg_volume * 1.5:
+            if row['close'] < row['open'] and row['volume'] < avg_volume * 0.7:
                 if abs(row['low'] - level['low']) / level['low'] < 0.02:
-                    heavy_vol_down_days += 1
+                    low_vol_down_days += 1
 
-        if heavy_vol_down_days >= 3:
-            return 2.0
-        elif heavy_vol_down_days == 2:
-            return 1.3
-        elif heavy_vol_down_days == 1:
-            return 0.6
-        return 0.0
+        if low_vol_down_days >= 3:
+            low_vol_score = 2.0
+        elif low_vol_down_days == 2:
+            low_vol_score = 1.3
+        elif low_vol_down_days == 1:
+            low_vol_score = 0.6
+        else:
+            low_vol_score = 0.0
+
+        # Price action strength (0-2.0) - detect bullish patterns in recent 10 days
+        recent_10 = df.tail(10)
+        price_action_signals = 0
+
+        for idx, row in recent_10.iterrows():
+            open_p = row['open']
+            high_p = row['high']
+            low_p = row['low']
+            close_p = row['close']
+
+            body = abs(close_p - open_p)
+            lower_shadow = min(open_p, close_p) - low_p
+            upper_shadow = high_p - max(open_p, close_p)
+
+            # Check if price is near support level (within 2%)
+            near_support = abs(low_p - level['low']) / level['low'] < 0.02
+
+            if not near_support:
+                continue
+
+            # Hammer: lower shadow >= 2x body, CLV < 0.3
+            clv = (close_p - low_p) / (high_p - low_p) if (high_p - low_p) > 0 else 0.5
+            if body > 0 and lower_shadow >= 2 * body and clv < 0.3:
+                price_action_signals += 1
+                continue
+
+            # Long lower wick: lower shadow >= 3x body
+            if body > 0 and lower_shadow >= 3 * body:
+                price_action_signals += 1
+                continue
+
+            # Gap reversal: gap down then closes near high
+            # Gap down: open < previous close
+            # Closes near high: close >= high - small threshold
+            if idx > 0:
+                prev_close = df.loc[df.index[df.index.get_loc(idx) - 1], 'close']
+                if open_p < prev_close * 0.99 and close_p >= high_p * 0.98:
+                    price_action_signals += 1
+                    continue
+
+        # Failed breakdown detection (breaks below support then closes above)
+        for idx, row in recent_10.iterrows():
+            if row['low'] < level['low'] and row['close'] > level['low']:
+                price_action_signals += 1
+                break  # Only count once
+
+        # Score price action signals
+        if price_action_signals >= 3:
+            price_action_score = 2.0
+        elif price_action_signals == 2:
+            price_action_score = 1.5
+        elif price_action_signals == 1:
+            price_action_score = 0.8
+        else:
+            price_action_score = 0.0
+
+        return min(4.0, low_vol_score + price_action_score)
 
     def _calculate_vc(self, df: pd.DataFrame) -> float:
-        """Volume Confirmation - breakout surge and follow-through."""
-        recent_volume = df['volume'].iloc[-1]
+        """Volume Confirmation - reversal surge (0-2.0) and follow-through (0-1.0)."""
         avg_volume = df['volume'].tail(20).mean()
 
         if avg_volume == 0:
             return 0.0
 
-        volume_ratio = recent_volume / avg_volume
+        recent = df.tail(10)
+        level = self._detect_support_level(df)
 
-        if volume_ratio >= 2.5:
-            return 3.0
-        elif volume_ratio >= 1.8:
-            return 2.0 + (volume_ratio - 1.8) / 0.7 * 1.0
-        elif volume_ratio >= 1.2:
-            return 1.0 + (volume_ratio - 1.2) / 0.6 * 1.0
-        return 0.0
+        # Find best up-day volume in support zone (reversal surge) - max 2.0
+        best_volume_ratio = 0.0
+        reversal_day_idx = None
+
+        for i, (idx, row) in enumerate(recent.iterrows()):
+            if row['close'] > row['open']:  # Up-day
+                # Check if near support zone
+                if level:
+                    near_support = abs(row['low'] - level['low']) / level['low'] < 0.03
+                else:
+                    near_support = True
+
+                if near_support:
+                    vol_ratio = row['volume'] / avg_volume
+                    if vol_ratio > best_volume_ratio:
+                        best_volume_ratio = vol_ratio
+                        reversal_day_idx = i
+
+        # Score reversal surge (0-2.0)
+        if best_volume_ratio >= 3.0:
+            surge_score = 2.0
+        elif best_volume_ratio >= 2.0:
+            surge_score = 1.0 + (best_volume_ratio - 2.0) / 1.0 * 1.0
+        elif best_volume_ratio >= 1.5:
+            surge_score = 0.5 + (best_volume_ratio - 1.5) / 0.5 * 0.5
+        else:
+            surge_score = 0.0
+
+        # Follow-through score (0-1.0) - Day 2-3 volume >= 1.5x avg
+        follow_through_score = 0.0
+        if reversal_day_idx is not None and reversal_day_idx < len(recent) - 1:
+            # Check next 2 days
+            days_after = min(2, len(recent) - reversal_day_idx - 1)
+            for j in range(1, days_after + 1):
+                follow_idx = list(recent.index)[reversal_day_idx + j]
+                follow_row = df.loc[follow_idx]
+                follow_vol_ratio = follow_row['volume'] / avg_volume
+
+                if follow_vol_ratio >= 1.5:
+                    follow_through_score = 1.0
+                    break
+                elif follow_vol_ratio >= 1.2 and follow_through_score < 0.5:
+                    follow_through_score = 0.5
+
+        return min(3.0, surge_score + follow_through_score)
 
     def calculate_entry_exit(self, symbol: str, df: pd.DataFrame,
                             dimensions: List[ScoringDimension],
