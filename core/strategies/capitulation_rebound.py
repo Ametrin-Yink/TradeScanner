@@ -44,7 +44,7 @@ class CapitulationReboundStrategy(BaseStrategy):
         'min_listing_days': 50,
         'rsi_overbought': 80,
         'rsi_oversold': 22,  # Changed from 20 to 22 for v5.0
-        'ema_atr_multiplier': 5.0,
+        'ema_atr_multiplier': 4.0,
         'min_gaps': 2,
         'lookback_days': 5,
         'stop_atr_multiplier': 2.0,
@@ -162,7 +162,7 @@ class CapitulationReboundStrategy(BaseStrategy):
             return False
 
         if current_price >= ema50 - self.PARAMS['ema_atr_multiplier'] * atr:
-            logger.debug(f"CAP_REJ: {symbol} - Price {current_price:.2f} not below EMA50-5ATR {ema50 - self.PARAMS['ema_atr_multiplier'] * atr:.2f}")
+            logger.debug(f"CAP_REJ: {symbol} - Price {current_price:.2f} not below EMA50-4ATR {ema50 - self.PARAMS['ema_atr_multiplier'] * atr:.2f}")
             return False
 
         if gaps < self.PARAMS['min_gaps']:
@@ -218,7 +218,7 @@ class CapitulationReboundStrategy(BaseStrategy):
         ))
 
         # Dimension 2: EX - Extension Level
-        ex_score, ex_details = self._calculate_ex(distance_from_ema, gaps)
+        ex_score, ex_details = self._calculate_ex(distance_from_ema, gaps, df)
         dimensions.append(ScoringDimension(
             name='EX',
             score=ex_score,
@@ -262,15 +262,17 @@ class CapitulationReboundStrategy(BaseStrategy):
 
         mo_score = 0.0
 
-        # RSI oversold (capitulation detection)
-        if rsi < 15:
+        # RSI oversold (capitulation detection) - matches doc thresholds
+        if rsi < 12:
             mo_score += 3.0
-        elif rsi < 20:
-            mo_score += 2.0 + (20 - rsi) / 5.0
-        elif rsi < 25:
-            mo_score += 1.0 + (25 - rsi) / 5.0
+        elif rsi < 15:
+            mo_score += 2.5 + (15 - rsi) / 3.0 * 0.5
+        elif rsi < 18:
+            mo_score += 2.0 + (18 - rsi) / 3.0 * 0.5
+        elif rsi < 22:
+            mo_score += 1.0 + (22 - rsi) / 4.0 * 1.0
         else:
-            mo_score += max(0, (30 - rsi) / 10.0)
+            mo_score += 0
 
         # Expert suggestion B: RSI bullish divergence (core scoring)
         if check_rsi_divergence(df, 'bullish'):
@@ -334,7 +336,7 @@ class CapitulationReboundStrategy(BaseStrategy):
 
         return False
 
-    def _calculate_ex(self, distance_pct: float, gaps: int) -> Tuple[float, Dict]:
+    def _calculate_ex(self, distance_pct: float, gaps: int, df: pd.DataFrame = None) -> Tuple[float, Dict]:
         """Extension Level dimension (0-6)."""
         details = {
             'distance_from_ema_pct': distance_pct,
@@ -360,6 +362,22 @@ class CapitulationReboundStrategy(BaseStrategy):
             ex_score += 1.5
         elif gaps >= 2:
             ex_score += 1.0
+
+        # Consecutive down-day streak bonus (0-1.0 pts)
+        if df is not None and len(df) >= 10:
+            consecutive_down = 0
+            for i in range(1, min(10, len(df))):
+                if df['close'].iloc[-i] < df['close'].iloc[-i-1]:
+                    consecutive_down += 1
+                else:
+                    break
+
+            if consecutive_down >= 5:
+                ex_score += 1.0
+                details['consecutive_down_days'] = consecutive_down
+            elif consecutive_down >= 3:
+                ex_score += 0.5
+                details['consecutive_down_days'] = consecutive_down
 
         return round(min(6.0, ex_score), 2), details
 
