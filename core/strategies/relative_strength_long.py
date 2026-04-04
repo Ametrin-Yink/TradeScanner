@@ -104,28 +104,52 @@ class RelativeStrengthLongStrategy(BaseStrategy):
         ]
 
     def _calculate_rd(self, data: Dict, df: pd.DataFrame) -> float:
-        """RS Divergence - RS percentile and trend."""
+        """RS Divergence - 3 components: RS percentile, absolute divergence, consistency."""
         rs_pct = data.get('rs_percentile', 50)
-
         score = 0.0
 
-        # RS percentile (0-2.5)
+        # 1. RS percentile (0-3.0)
         if rs_pct >= 95:
-            score += 2.5
+            score += 3.0
         elif rs_pct >= 90:
-            score += 2.0
+            score += 2.5 + (rs_pct - 90) * 0.1
         elif rs_pct >= 85:
-            score += 1.5
+            score += 2.0 + (rs_pct - 85) * 0.1
         elif rs_pct >= 80:
-            score += 1.0
+            score += 1.5 + (rs_pct - 80) * 0.1
 
-        # RS trend improvement (0-1.5)
-        # Would need historical RS data for full implementation
-        # For now, placeholder based on current percentile
-        if rs_pct >= 90:
-            score += 1.5
-        elif rs_pct >= 85:
-            score += 1.0
+        # 2. Absolute divergence - stock vs SPY 20d return (0-2.0)
+        spy_df = getattr(self, '_spy_df', None)
+        if spy_df is not None and len(df) >= 20 and len(spy_df) >= 20:
+            stock_ret = (df['close'].iloc[-1] / df['close'].iloc[-20] - 1)
+            spy_ret = (spy_df['close'].iloc[-1] / spy_df['close'].iloc[-20] - 1)
+            divergence = stock_ret - spy_ret
+
+            if divergence >= 0.10 and spy_ret < 0:
+                score += 2.0
+            elif divergence >= 0.10:
+                score += min(1.5 + (divergence - 0.10) * 10, 2.0)
+            elif divergence >= 0.05:
+                score += 0.8 + (divergence - 0.05) * 14
+            elif divergence >= 0.02:
+                score += 0.3 + (divergence - 0.02) * 16.67
+
+        # 3. Consistency - days outperforming SPY in last 10 (0-1.0)
+        if spy_df is not None and len(df) >= 10 and len(spy_df) >= 10:
+            outperf_days = 0
+            for i in range(1, 11):
+                if len(df) > i and len(spy_df) > i:
+                    stock_daily = df['close'].iloc[-i] / df['close'].iloc[-i-1] - 1
+                    spy_daily = spy_df['close'].iloc[-i] / spy_df['close'].iloc[-i-1] - 1
+                    if stock_daily > spy_daily:
+                        outperf_days += 1
+
+            if outperf_days >= 8:
+                score += 1.0
+            elif outperf_days >= 6:
+                score += 0.7
+            elif outperf_days >= 5:
+                score += 0.5
 
         return min(6.0, score)
 
@@ -163,6 +187,12 @@ class RelativeStrengthLongStrategy(BaseStrategy):
         else:
             logger.debug(f"SPY data insufficient for divergence calculation ({len(spy_df)} rows)")
 
+        # Recent trend (0-0.5 pts)
+        if len(df) >= 5:
+            ret_5d = (df['close'].iloc[-1] / df['close'].iloc[-5] - 1)
+            if ret_5d > 0:
+                score += 0.5
+
         return min(4.0, score)
 
     def _calculate_cq(self, df: pd.DataFrame) -> float:
@@ -185,14 +215,25 @@ class RelativeStrengthLongStrategy(BaseStrategy):
         elif current_price < ema50 * 1.05:
             score += 1.0
 
-        # ADR declining (0-1.5)
-        adr_pct = ind.indicators.get('adr', {}).get('adr_pct', 0)
-        if adr_pct < 0.02:
-            score += 1.5
-        elif adr_pct < 0.03:
-            score += 1.0
-        elif adr_pct < 0.04:
-            score += 0.5
+        # Relative volatility vs SPY (0-1.5)
+        spy_df = getattr(self, '_spy_df', None)
+        if spy_df is not None and len(spy_df) >= 20:
+            stock_atr = ind.indicators.get('atr', {}).get('atr_14', 0)
+            stock_atr_pct = stock_atr / current_price if current_price > 0 else 0
+
+            spy_ind = TechnicalIndicators(spy_df)
+            spy_atr = spy_ind.indicators.get('atr', {}).get('atr_14', 0)
+            spy_price = spy_df['close'].iloc[-1]
+            spy_atr_pct = spy_atr / spy_price if spy_price > 0 else 0
+
+            if spy_atr_pct > 0:
+                rel_vol = stock_atr_pct / spy_atr_pct
+                if rel_vol < 0.8:
+                    score += 1.5
+                elif rel_vol < 1.2:
+                    score += 1.5 - (rel_vol - 0.8) * 1.75
+                elif rel_vol < 1.8:
+                    score += 0.8 - (rel_vol - 1.2) * 1.0
 
         return min(3.0, score)
 
