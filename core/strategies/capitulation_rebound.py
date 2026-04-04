@@ -1,4 +1,4 @@
-"""Strategy H: Parabolic/Capitulation v2.1 - Capitulation bottom detection only."""
+"""Strategy F: CapitulationRebound v5.0 - Capitulation bottom detection only."""
 from ..scoring_utils import calculate_clv, check_rsi_divergence
 from typing import Dict, List, Optional, Tuple, Any
 import logging
@@ -63,7 +63,7 @@ class CapitulationReboundStrategy(BaseStrategy):
         super().__init__(fetcher=fetcher, db=db)
         self.vix_data = None
 
-    def screen(self, symbols: List[str]) -> List[StrategyMatch]:
+    def screen(self, symbols: List[str], max_candidates: int = 5) -> List[StrategyMatch]:
         """
         Screen symbols for capitulation bottom setups.
         """
@@ -98,7 +98,7 @@ class CapitulationReboundStrategy(BaseStrategy):
         logger.info(f"CapitulationRebound: {len(prefiltered)}/{len(symbols)} passed pre-filter")
 
         # Use base class screen on pre-filtered symbols
-        return super().screen(prefiltered)
+        return super().screen(prefiltered, max_candidates=max_candidates)
 
     def _check_vix_filter(self) -> str:
         """

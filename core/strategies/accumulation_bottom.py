@@ -256,7 +256,7 @@ class AccumulationBottomStrategy(BaseStrategy):
         support_low = level['low'] if level else df['low'].tail(20).min()
 
         entry = round(current_price, 2)
-        stop = round(max(support_low - 0.5 * atr, entry * 0.96), 2)
+        stop = round(max(support_low - 0.5 * atr, entry * 0.94), 2)
         risk = entry - stop
         target = round(entry + risk * 2.5, 2)
 

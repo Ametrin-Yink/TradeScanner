@@ -64,17 +64,17 @@ class SupportBounceStrategy(BaseStrategy):
         self.sector_etf_data = {}
         self.stock_info = {}
 
-    def screen(self, symbols: List[str]) -> List[StrategyMatch]:
+    def screen(self, symbols: List[str], max_candidates: int = 5) -> List[StrategyMatch]:
         """
         Screen all symbols with Phase 0 pre-filter.
         - Support exists and within 10% (v5.0: removed SPY > EMA200 gate, depth range 2-10%)
         """
         # v5.0: SPY > EMA200 gate removed - regime-adaptive position sizing instead
-        logger.info("U&R: Phase 0 - Support Bounce v5.0 (no SPY gate)")
+        logger.info("SupportBounce: Phase 0 - Support Bounce v5.0 (no SPY gate)")
 
         # Pre-filter by support existence and distance
         prefiltered = []
-        logger.info("U&R: Phase 0.5 - Pre-filtering by support...")
+        logger.info("SupportBounce: Phase 0.5 - Pre-filtering by support...")
 
         for symbol in symbols:
             try:
@@ -91,13 +91,13 @@ class SupportBounceStrategy(BaseStrategy):
                 supports = sr_levels.get('support', [])
 
                 if not supports:
-                    logger.debug(f"U&R_REJ: {symbol} - No support levels found")
+                    logger.debug(f"SupportBounce_REJ: {symbol} - No support levels found")
                     continue
 
                 # Find nearest support
                 supports_below = [s for s in supports if s < current_price]
                 if not supports_below:
-                    logger.debug(f"U&R_REJ: {symbol} - No support below price {current_price:.2f}")
+                    logger.debug(f"SupportBounce_REJ: {symbol} - No support below price {current_price:.2f}")
                     continue
 
                 nearest_support = max(supports_below)
@@ -107,17 +107,17 @@ class SupportBounceStrategy(BaseStrategy):
                 min_depth = self.PARAMS['min_distance_from_support']
                 max_depth = self.PARAMS['max_distance_from_support']
                 if distance_pct < min_depth or distance_pct > max_depth:
-                    logger.debug(f"U&R_REJ: {symbol} - Depth {distance_pct:.2%} outside range [{min_depth:.0%}, {max_depth:.0%}]")
+                    logger.debug(f"SupportBounce_REJ: {symbol} - Depth {distance_pct:.2%} outside range [{min_depth:.0%}, {max_depth:.0%}]")
                     continue
 
-                logger.debug(f"U&R_PASS: {symbol} - Support at {nearest_support:.2f}, depth {distance_pct:.2%}")
+                logger.debug(f"SupportBounce_PASS: {symbol} - Support at {nearest_support:.2f}, depth {distance_pct:.2%}")
                 prefiltered.append(symbol)
 
             except Exception as e:
                 logger.debug(f"Error pre-filtering {symbol}: {e}")
                 continue
 
-        logger.info(f"U&R: {len(prefiltered)}/{len(symbols)} passed pre-filter")
+        logger.info(f"SupportBounce: {len(prefiltered)}/{len(symbols)} passed pre-filter")
 
         # Load sector ETF data for comparison
         self._load_sector_etf_data()
@@ -131,7 +131,7 @@ class SupportBounceStrategy(BaseStrategy):
             self.stock_info = {}
 
         # Use base class screen on pre-filtered symbols
-        return super().screen(prefiltered)
+        return super().screen(prefiltered, max_candidates=max_candidates)
 
     def _load_sector_etf_data(self):
         """Load sector ETF data for Sector Alpha comparison."""
@@ -243,11 +243,11 @@ class SupportBounceStrategy(BaseStrategy):
         if sector_alpha > 0:
             sq_score += sector_alpha
             sq_details['sector_alpha'] = sector_alpha
-        sq_score = min(6.0, sq_score)
+        sq_score = min(4.0, sq_score)
         dimensions.append(ScoringDimension(
             name='SQ',
             score=sq_score,
-            max_score=6.0,
+            max_score=4.0,
             details=sq_details
         ))
 
@@ -270,7 +270,7 @@ class SupportBounceStrategy(BaseStrategy):
         dimensions.append(ScoringDimension(
             name='RB',
             score=rb_score,
-            max_score=4.0,
+            max_score=6.0,
             details=rb_details
         ))
 

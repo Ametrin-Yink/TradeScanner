@@ -107,7 +107,7 @@ class DistributionTopStrategy(BaseStrategy):
         atr = TechnicalIndicators(df).indicators.get('atr', {}).get('atr14', df['close'].iloc[-1] * 0.02)
 
         level_high = np.max(peak_prices)
-        level_low = np.max(peak_prices[peak_prices >= level_high - atr * 2.5])
+        level_low = np.min(peak_prices[peak_prices >= level_high - atr * 2.5])
 
         touches = len([p for p in peak_prices if level_high >= p >= level_low])
 

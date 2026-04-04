@@ -105,12 +105,14 @@ class BaseStrategy(ABC):
         """
         pass
 
-    def calculate_score(self, dimensions: List[ScoringDimension]) -> Tuple[float, str]:
+    def calculate_score(self, dimensions: List[ScoringDimension], df: pd.DataFrame = None, symbol: str = None) -> Tuple[float, str]:
         """
         Calculate total score and tier from dimensions.
 
         Args:
             dimensions: List of dimension scores
+            df: Optional DataFrame for strategies that need it (e.g., for bonus calculation)
+            symbol: Optional symbol for strategies that need it
 
         Returns:
             Tuple of (total_score, tier)
@@ -213,14 +215,12 @@ class BaseStrategy(ABC):
 
         for symbol in symbols:
             try:
-                # Get data - prefer phase0_data if available
-                if symbol in phase0_data:
-                    df = phase0_data[symbol].get('df')
-                    cached_ind = phase0_data[symbol].get('ind')
-                else:
-                    df = self._get_data(symbol)
-                    cached_ind = None
+                # Get data - phase0_data now only contains scalars, fetch df on demand
+                phase0_data = getattr(self, 'phase0_data', {})
+                symbol_data = phase0_data.get(symbol, {})
 
+                # Always fetch data on-demand (phase0_data no longer stores DataFrames to save memory)
+                df = self._get_data(symbol)
                 if df is None:
                     logger.debug(f"No data for {symbol}")
                     continue
@@ -232,18 +232,13 @@ class BaseStrategy(ABC):
                 if not self.filter(symbol, df):
                     continue
 
-                # Calculate dimensions - pass cached indicators if available
-                if cached_ind is not None:
-                    # Temporarily set indicators in df for dimension calculation
-                    # Dimensions will use TechnicalIndicators which has class-level cache
-                    pass
-
+                # Calculate dimensions
                 dimensions = self.calculate_dimensions(symbol, df)
                 if not dimensions:
                     continue
 
                 # Calculate score and tier
-                score, tier = self.calculate_score(dimensions)
+                score, tier = self.calculate_score(dimensions, df, symbol)
                 if tier == 'C':
                     continue
 
@@ -321,5 +316,5 @@ class BaseStrategy(ABC):
                 return False
 
             return True
-        except:
+        except Exception:
             return False

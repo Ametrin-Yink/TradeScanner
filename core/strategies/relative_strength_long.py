@@ -97,10 +97,10 @@ class RelativeStrengthLongStrategy(BaseStrategy):
         vc_score = self._calculate_vc(df, data)
 
         return [
-            ScoringDimension(name='RD', score=rd_score, max_score=4.0, details={}),
+            ScoringDimension(name='RD', score=rd_score, max_score=6.0, details={}),
             ScoringDimension(name='SH', score=sh_score, max_score=4.0, details={}),
-            ScoringDimension(name='CQ', score=cq_score, max_score=4.0, details={}),
-            ScoringDimension(name='VC', score=vc_score, max_score=3.0, details={}),
+            ScoringDimension(name='CQ', score=cq_score, max_score=3.0, details={}),
+            ScoringDimension(name='VC', score=vc_score, max_score=2.0, details={}),
         ]
 
     def _calculate_rd(self, data: Dict, df: pd.DataFrame) -> float:
@@ -150,7 +150,9 @@ class RelativeStrengthLongStrategy(BaseStrategy):
         # Price holding while SPY declining (0-1.5)
         # Check if price is flat/up while SPY is down
         spy_df = getattr(self, '_spy_df', None)
-        if spy_df is not None and len(spy_df) >= 5:
+        if spy_df is None:
+            logger.debug(f"{df.get('symbol', 'unknown')}: SPY data not available for divergence calculation")
+        elif len(spy_df) >= 5:
             spy_return_5d = (spy_df['close'].iloc[-1] / spy_df['close'].iloc[-5] - 1)
             price_return_5d = (df['close'].iloc[-1] / df['close'].iloc[-5] - 1)
 
@@ -158,6 +160,8 @@ class RelativeStrengthLongStrategy(BaseStrategy):
                 score += 1.5
             elif spy_return_5d < -0.01 and price_return_5d > -0.01:
                 score += 1.0
+        else:
+            logger.debug(f"SPY data insufficient for divergence calculation ({len(spy_df)} rows)")
 
         return min(4.0, score)
 

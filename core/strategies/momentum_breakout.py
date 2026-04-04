@@ -347,17 +347,17 @@ class MomentumBreakoutStrategy(BaseStrategy):
 
         return min(bonus, self.PARAMS['bonus_max'])
 
-    def calculate_score(self, dimensions: List[ScoringDimension]) -> Tuple[float, str]:
+    def calculate_score(self, dimensions: List[ScoringDimension], df: pd.DataFrame = None, symbol: str = None) -> Tuple[float, str]:
         """
         Calculate final score with bonus pool.
         Raw scores can exceed 15, clamped to 15 for tier calculation.
         """
         base_score = sum(d.score for d in dimensions)
 
-        # Calculate bonus
-        # Note: We need df and symbol - get from most recent calculation
-        # For simplicity, we'll calculate without the dynamic bonus if data not available
+        # Calculate bonus if df and symbol available
         bonus = 0.0
+        if df is not None and symbol is not None:
+            bonus = self._calculate_bonus(dimensions, df, symbol)
 
         raw_score = base_score + bonus
 
@@ -478,9 +478,10 @@ class MomentumBreakoutStrategy(BaseStrategy):
         price_6m = close.iloc[-126] if len(close) >= 126 else close.iloc[0]
         price_12m = close.iloc[-252] if len(close) >= 252 else close.iloc[0]
 
-        rs_3m = (current_price - price_3m) / price_3m
-        rs_6m = (current_price - price_6m) / price_6m
-        rs_12m = (current_price - price_12m) / price_12m
+        # Guard against division by zero
+        rs_3m = (current_price - price_3m) / price_3m if price_3m > 0 else 0
+        rs_6m = (current_price - price_6m) / price_6m if price_6m > 0 else 0
+        rs_12m = (current_price - price_12m) / price_12m if price_12m > 0 else 0
 
         rs_score = rs_3m * 0.4 + rs_6m * 0.3 + rs_12m * 0.3
 
@@ -551,7 +552,7 @@ class MomentumBreakoutStrategy(BaseStrategy):
             f"50EMA: {tc.details.get('ema50_distance', 0)*100:.1f}% | 52w: {tc.details.get('distance_from_52w_high', 0)*100:.1f}%"
         ]
 
-    def screen(self, symbols: List[str]) -> List[StrategyMatch]:
+    def screen(self, symbols: List[str], max_candidates: int = 5) -> List[StrategyMatch]:
         """
         Screen all symbols with Phase 0 pre-filter.
         - 52-week high proximity <25%
@@ -563,7 +564,7 @@ class MomentumBreakoutStrategy(BaseStrategy):
         # Phase 0.1: Use phase0_data from screener if available
         phase0_data = getattr(self, 'phase0_data', None)
         if phase0_data:
-            logger.info("VCP-EP: Phase 0.1 - Using phase0_data from screener")
+            logger.info("MomentumBreakout: Phase 0.1 - Using phase0_data from screener")
             rs_scores = []
             for symbol in symbols:
                 if symbol in phase0_data:
@@ -576,7 +577,7 @@ class MomentumBreakoutStrategy(BaseStrategy):
                         'df': self._get_data(symbol)
                     })
         else:
-            logger.info("VCP-EP: Phase 0.1 - Calculating RS scores (no phase0_data)...")
+            logger.info("MomentumBreakout: Phase 0.1 - Calculating RS scores (no phase0_data)...")
             rs_scores = []
             for symbol in symbols:
                 try:
@@ -635,7 +636,7 @@ class MomentumBreakoutStrategy(BaseStrategy):
                 logger.debug(f"Error pre-filtering {item['symbol']}: {e}")
                 continue
 
-        logger.info(f"VCP-EP: {len(prefiltered)}/{len(symbols)} passed RS>80 + 52w high pre-filter")
+        logger.info(f"MomentumBreakout: {len(prefiltered)}/{len(symbols)} passed RS>{self.PARAMS['rs_percentile_min']} + 52w high pre-filter")
 
         # Use base class screen on pre-filtered symbols
-        return super().screen(prefiltered)
+        return super().screen(prefiltered, max_candidates=max_candidates)

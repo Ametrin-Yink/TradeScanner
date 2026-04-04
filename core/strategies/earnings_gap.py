@@ -83,9 +83,9 @@ class EarningsGapStrategy(BaseStrategy):
         vc_score = self._calculate_vc(df, data)
 
         return [
-            ScoringDimension(name='GS', score=gs_score, max_score=4.0, details={}),
+            ScoringDimension(name='GS', score=gs_score, max_score=5.0, details={}),
             ScoringDimension(name='QC', score=qc_score, max_score=4.0, details={}),
-            ScoringDimension(name='TC', score=tc_score, max_score=4.0, details={}),
+            ScoringDimension(name='TC', score=tc_score, max_score=3.0, details={}),
             ScoringDimension(name='VC', score=vc_score, max_score=3.0, details={}),
         ]
 

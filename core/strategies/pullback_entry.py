@@ -15,7 +15,7 @@ class PullbackEntryStrategy(BaseStrategy):
 
     NAME = "PullbackEntry"
     STRATEGY_TYPE = StrategyType.B  # Changed from SHORYUKEN
-    DESCRIPTION = "PullbackEntry v4.0 (unchanged)"
+    DESCRIPTION = "PullbackEntry v5.0"
     DIMENSIONS = ['TI', 'RC', 'VC', 'BONUS']
 
     # Shoryuken Parameters
@@ -43,12 +43,13 @@ class PullbackEntryStrategy(BaseStrategy):
         self.sector_counts = {}
         self.stock_info = {}
 
-    def screen(self, symbols: List[str]) -> List[StrategyMatch]:
+    def screen(self, symbols: List[str], max_candidates: int = 5) -> List[StrategyMatch]:
         """
         Screen all symbols with Phase 0 market statistics calculation.
 
         Args:
             symbols: List of stock symbols
+            max_candidates: Maximum candidates to return
 
         Returns:
             List of StrategyMatch objects
@@ -134,7 +135,7 @@ class PullbackEntryStrategy(BaseStrategy):
         self.market_data = {sym: data['df'] for sym, data in symbol_data.items()}
 
         # Call parent screen method
-        matches = super().screen(list(symbol_data.keys()))
+        matches = super().screen(list(symbol_data.keys()), max_candidates=max_candidates)
 
         # Sort by confidence and limit to 5 per tier for diversity
         scored_candidates = []
