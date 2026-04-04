@@ -66,6 +66,32 @@ class MomentumBreakoutStrategy(BaseStrategy):
 
         current_price = df['close'].iloc[-1]
 
+        # Layer 0: Tier 1 Pre-Filters (from documentation)
+        # Price > EMA200
+        ema200 = ind.indicators.get('ema', {}).get('ema_200')
+        if ema200 is None or current_price <= ema200:
+            logger.debug(f"MB_REJ: {symbol} - Price {current_price:.2f} <= EMA200 {ema200:.2f}")
+            return False
+
+        # 3-month return >= -20%
+        ret_3m = data.get('ret_3m')
+        if ret_3m is None:
+            # Fallback calculation if not in phase0_data
+            if len(df) >= 63:
+                price_3m = df['close'].iloc[-63]
+                ret_3m = (current_price - price_3m) / price_3m if price_3m > 0 else 0
+            else:
+                ret_3m = 0
+        if ret_3m < -0.20:
+            logger.debug(f"MB_REJ: {symbol} - 3m return {ret_3m:.2%} < -20%")
+            return False
+
+        # Avg 20d volume >= 100K
+        avg_volume_20d = df['volume'].tail(20).mean()
+        if avg_volume_20d < 100_000:
+            logger.debug(f"MB_REJ: {symbol} - Avg 20d volume {avg_volume_20d:.0f} < 100K")
+            return False
+
         # Layer 1: Liquidity
         dollar_volume = current_price * df['volume'].iloc[-1]
         if dollar_volume < self.PARAMS['min_dollar_volume']:
@@ -171,10 +197,9 @@ class MomentumBreakoutStrategy(BaseStrategy):
             score=tc_score,
             max_score=5.0,
             details={
-                'ema50_distance': ema50_distance['distance_pct'],
+                'rs_percentile': getattr(self, 'phase0_data', {}).get(symbol, {}).get('rs_percentile', 50),
                 'distance_from_52w_high': metrics_52w['distance_from_high'],
-                'clv': clv,
-                'rs_percentile': getattr(self, 'phase0_data', {}).get(symbol, {}).get('rs_percentile', 50)
+                'ema50_distance': ema50_distance['distance_pct'],
             }
         ))
 
@@ -205,14 +230,15 @@ class MomentumBreakoutStrategy(BaseStrategy):
         ))
 
         # Dimension 4: Volume Confirmation (VC)
-        vc_score = self._calculate_vc(platform, volume_ratio)
+        vc_score = self._calculate_vc(platform, volume_ratio, clv)
         dimensions.append(ScoringDimension(
             name='VC',
             score=vc_score,
             max_score=4.0,
             details={
                 'volume_ratio': volume_ratio,
-                'volume_contraction': platform['volume_contraction_ratio']
+                'volume_contraction': platform['volume_contraction_ratio'],
+                'clv': clv
             }
         ))
 
@@ -403,95 +429,90 @@ class MomentumBreakoutStrategy(BaseStrategy):
 
         return round(min(5.0, bs_score), 2)
 
-    def _calculate_vc(self, platform: Dict, volume_ratio: float) -> float:
-        """Volume Confirmation dimension (0-5)."""
+    def _calculate_vc(self, platform: Dict, volume_ratio: float, clv: float) -> float:
+        """
+        Volume Confirmation dimension (0-4.0) - v5.0 aligned with documentation.
+        Includes CLV component (0-0.5 pts) moved from TC.
+        """
         vc_score = 0.0
         vol_contract = platform['volume_contraction_ratio']
 
-        # Contraction
+        # 1. Base volume behavior - last 5d of base / avg20d before base (0-2.0 pts)
         if vol_contract < 0.50:
             vc_score += 2.0
-        elif vol_contract < 0.70:
-            vc_score += 2.0 - (vol_contract - 0.50) / 0.20
+        elif vol_contract < 0.65:
+            vc_score += 1.5 + (0.65 - vol_contract) / 0.15 * 0.5  # 1.5-2.0
+        elif vol_contract < 0.80:
+            vc_score += 0.8 + (0.80 - vol_contract) / 0.15 * 0.7  # 0.8-1.5
+        elif vol_contract < 1.00:
+            vc_score += 0.2 + (1.00 - vol_contract) / 0.20 * 0.6  # 0.2-0.8
         else:
-            vc_score += max(0.0, 1.0 - (vol_contract - 0.70) / 0.20)
+            vc_score += 0  # > 1.00
 
-        # Expansion
-        if volume_ratio > 3.0:
-            vc_score += 3.0
-        elif volume_ratio > 2.0:
-            vc_score += 2.0 + (volume_ratio - 2.0)
+        # 2. Breakout volume - breakout day / avg20d (0-1.5 pts)
+        if volume_ratio >= 3.0:
+            vc_score += 1.5
+        elif volume_ratio >= 2.0:
+            vc_score += 1.0 + (volume_ratio - 2.0) / 1.0 * 0.5  # 1.0-1.5
+        elif volume_ratio >= 1.5:
+            vc_score += 0.5 + (volume_ratio - 1.5) / 0.5 * 0.5  # 0.5-1.0
+        elif volume_ratio >= 1.0:
+            vc_score += 0 + (volume_ratio - 1.0) / 0.5 * 0.5  # 0-0.5
         else:
-            vc_score += max(0.0, volume_ratio / 2.0 * 2.0)
+            vc_score += 0  # < 1.0x
 
-        return round(min(5.0, vc_score), 2)
+        # 3. CLV on breakout bar (0-0.5 pts) - MOVED FROM TC
+        if clv >= 0.85:
+            vc_score += 0.5
+        elif clv >= 0.65:
+            vc_score += 0 + (clv - 0.65) / 0.20 * 0.5  # 0-0.5
+        # < 0.65: 0 points
+
+        return round(min(4.0, vc_score), 2)
 
     def _calculate_tc(self, ema50_dist: Dict, metrics_52w: Dict, clv: float, df: pd.DataFrame, symbol: str) -> float:
         """
-        Trend Context dimension (0-5) - v5.0 with TC promoted and RS gate.
+        Trend Context dimension (0-5) - v5.0 aligned with documentation.
         """
         tc_score = 0.0
-        ema_dist = ema50_dist['distance_pct']
+        current_price = df['close'].iloc[-1]
+        ind = TechnicalIndicators(df)
+        ind.calculate_all()
 
-        # EMA proximity
-        if ema_dist < 0.05:
+        # 1. RS Strength (0-2.0 pts) - percentile-based from phase0_data
+        data = getattr(self, 'phase0_data', {}).get(symbol, {})
+        rs_pct = data.get('rs_percentile', 50)
+
+        if rs_pct >= 90:
             tc_score += 2.0
-        elif ema_dist < 0.10:
-            tc_score += 2.0 - (ema_dist - 0.05) / 0.05
-        else:
-            tc_score += max(0.0, 1.0 - (ema_dist - 0.10) / 0.05)
+        elif rs_pct >= 75:
+            tc_score += 1.5 + (rs_pct - 75) / 15 * 0.5  # 1.5-2.0
+        elif rs_pct >= 60:
+            tc_score += 1.0 + (rs_pct - 60) / 15 * 0.5  # 1.0-1.5
+        elif rs_pct >= 50:
+            tc_score += 0.5 + (rs_pct - 50) / 10 * 0.5  # 0.5-1.0
+        # else: 0, but this shouldn't happen due to pre-filter
 
-        # 52w high proximity
+        # 2. EMA Structure (0-2.0 pts) - 3 conditions from documentation
+        ema50 = ind.indicators.get('ema', {}).get('ema_50')
+        ema200 = ind.indicators.get('ema', {}).get('ema_200')
+
+        if ema50 and current_price > ema50 * 1.05:
+            tc_score += 1.0  # Price > EMA50 * 1.05
+        if ema200 and current_price > ema200:
+            tc_score += 0.5  # Price > EMA200
+        if ema50 and ema200 and ema50 > ema200:
+            tc_score += 0.5  # EMA50 > EMA200
+
+        # 3. 52-Week High Proximity (0-1.0 pts) - per documentation
         dist_52w = metrics_52w['distance_from_high']
-        if dist_52w < 0.03:
-            tc_score += 2.0
-        elif dist_52w < 0.05:
-            tc_score += 2.0 - (dist_52w - 0.03) / 0.02
-        else:
-            tc_score += max(0.0, 1.0 - (dist_52w - 0.05) / 0.02)
-
-        # CLV bonus
-        if clv > 0.85:
+        if dist_52w <= 0.05:  # <= 5%
             tc_score += 1.0
-        elif clv > 0.65:
-            tc_score += (clv - 0.65) / 0.20
+        elif dist_52w <= 0.15:  # 5-15%
+            tc_score += 1.0 - (dist_52w - 0.05) / 0.10  # 1.0-0.0 linear
+        # > 15%: 0 points
 
-        # RS bonus (from Momentum strategy) - now capped since TC is primary
-        rs_bonus = self._calculate_rs_bonus(df)
-        tc_score = min(5.0, tc_score + rs_bonus)
-
-        return round(tc_score, 2)
-
-    def _calculate_rs_bonus(self, df: pd.DataFrame) -> float:
-        """
-        Calculate RS bonus score (0-1 points) for TC dimension.
-        Merged from original Momentum strategy.
-        """
-        if len(df) < 252:
-            return 0.0
-
-        close = df['close']
-        current_price = close.iloc[-1]
-
-        # Calculate RS components
-        price_3m = close.iloc[-63] if len(close) >= 63 else close.iloc[0]
-        price_6m = close.iloc[-126] if len(close) >= 126 else close.iloc[0]
-        price_12m = close.iloc[-252] if len(close) >= 252 else close.iloc[0]
-
-        # Guard against division by zero
-        rs_3m = (current_price - price_3m) / price_3m if price_3m > 0 else 0
-        rs_6m = (current_price - price_6m) / price_6m if price_6m > 0 else 0
-        rs_12m = (current_price - price_12m) / price_12m if price_12m > 0 else 0
-
-        rs_score = rs_3m * 0.4 + rs_6m * 0.3 + rs_12m * 0.3
-
-        # Convert to 0-1 bonus
-        if rs_score > 0.5:
-            return 1.0
-        elif rs_score > 0.3:
-            return 0.5 + (rs_score - 0.3) / 0.2 * 0.5
-        else:
-            return max(0.0, rs_score / 0.3 * 0.5)
+        return round(min(5.0, tc_score), 2)
 
     def calculate_entry_exit(
         self,
@@ -511,11 +532,35 @@ class MomentumBreakoutStrategy(BaseStrategy):
 
         current_price = df['close'].iloc[-1]
         platform_low = platform['platform_low'] if platform else df['low'].tail(20).min()
+        platform_high = platform['platform_high'] if platform else df['high'].tail(20).max()
+
+        # Get pattern type from CQ dimension
+        cq_dim = next((d for d in dimensions if d.name == 'CQ'), None)
+        pattern_type = cq_dim.details.get('pattern_type', 'vcp') if cq_dim else 'vcp'
 
         entry = round(current_price, 2)
-        stop = round(platform_low * 0.98, 2)  # Platform low - 2% buffer
+
+        # Pattern-specific stop loss calculation
+        if pattern_type in ('vcp', 'flat', 'ascending'):
+            stop = platform_low * 0.98
+        elif pattern_type == 'HTF':
+            # High tight flag: use flag low (platform low) with 1.5% buffer
+            stop = platform_low * 0.985
+        else:  # loose base or unknown
+            atr = ind.indicators.get('atr', {}).get('atr_14', entry * 0.02)
+            stop = entry - 1.5 * atr
+
+        # Apply 8% stop floor: never more than 8% below entry
+        stop = max(stop, entry * 0.92)
+        stop = round(stop, 2)
+
         risk = entry - stop
-        target = round(entry + risk * 3, 2)  # 3R
+
+        # Target: 3R baseline, 4R for S-tier
+        if tier == 'S':
+            target = round(entry + risk * 4, 2)  # 4R for S-tier
+        else:
+            target = round(entry + risk * 3, 2)  # 3R baseline
 
         return entry, stop, target
 
