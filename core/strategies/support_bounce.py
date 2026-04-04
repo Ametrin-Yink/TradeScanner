@@ -265,8 +265,8 @@ class SupportBounceStrategy(BaseStrategy):
             details=vd_details
         ))
 
-        # Dimension 3: Rebound Setup (RB) - 4 points max
-        rb_score, rb_details = self._calculate_rb(ind, df, clv)
+        # Dimension 3: Rebound Setup (RB) - 6 points max
+        rb_score, rb_details = self._calculate_rb(ind, df, clv, symbol)
         dimensions.append(ScoringDimension(
             name='RB',
             score=rb_score,
@@ -538,61 +538,100 @@ class SupportBounceStrategy(BaseStrategy):
 
     def _calculate_vd(self, volume_ratio: float, df: pd.DataFrame) -> Tuple[float, Dict]:
         """
-        Volume Dryness (VD) - 5 points max.
-        Contraction degree + Contraction duration.
+        Volume Dynamics (VD) - 5 points max.
+        3-phase pattern: Climax -> Dry-up -> Surge
+        - Phase 1: Climax (0-1.5 pts): Volume >= 3x avg20d
+        - Phase 2: Dry-up (0-1.5 pts): Volume < 0.6x avg
+        - Phase 3: Surge (0-2.0 pts): Volume on reclaim >= 2x avg
         """
         details = {
             'volume_ratio': volume_ratio,
-            'contraction_days': 0,
+            'phase1_climax': 0.0,
+            'phase2_dryup': 0.0,
+            'phase3_surge': 0.0,
             'vd_dry_up': False
         }
 
         vd_score = 0.0
+        vol_ma20 = df['volume'].iloc[-20:].mean() if len(df) >= 20 else df['volume'].mean()
 
-        # Volume contraction degree (0-3 pts)
-        if volume_ratio < 0.5:
-            vd_score += 3.0
-            details['vd_dry_up'] = True
-        elif volume_ratio < 0.65:
-            vd_score += 2.5
-        elif volume_ratio < 0.8:
-            vd_score += 2.0
-        elif volume_ratio < 1.0:
-            vd_score += 1.0
-        else:
-            vd_score += 0.5
-
-        # Contraction duration bonus (0-2 pts)
-        contraction_days = 0
-        for i in range(1, min(10, len(df))):
+        # Phase 1: Climax detection (look back up to 5 days)
+        climax_score = 0.0
+        climax_found = False
+        for i in range(1, min(6, len(df))):
             idx = -(i + 1)
             if idx < -len(df):
                 break
-            vol_ratio_hist = df['volume'].iloc[idx] / df['volume'].iloc[idx-20:idx].mean() if idx >= -len(df) + 20 else 1.0
-            if vol_ratio_hist < 0.8:
-                contraction_days += 1
-            else:
+            day_vol = df['volume'].iloc[idx]
+            day_avg = df['volume'].iloc[max(-len(df), idx-20):idx].mean() if idx >= -len(df) + 20 else vol_ma20
+            if day_avg > 0:
+                day_ratio = day_vol / day_avg
+                if day_ratio >= 4.0:
+                    climax_score = 1.5
+                    climax_found = True
+                    details['climax_day'] = i
+                    details['climax_ratio'] = day_ratio
+                    break
+                elif day_ratio >= 3.0:
+                    # Linear interpolation: 3x = 1.0, 4x = 1.5
+                    climax_score = 1.0 + (day_ratio - 3.0) * 0.5
+                    climax_found = True
+                    details['climax_day'] = i
+                    details['climax_ratio'] = day_ratio
+                    break
+
+        details['phase1_climax'] = round(climax_score, 2)
+        vd_score += climax_score
+
+        # Phase 2: Dry-up detection (current volume)
+        dryup_score = 0.0
+        if volume_ratio < 0.4:
+            dryup_score = 1.5
+            details['vd_dry_up'] = True
+        elif volume_ratio < 0.6:
+            # Linear interpolation: 0.4x = 1.5, 0.6x = 1.0
+            dryup_score = 1.5 - (volume_ratio - 0.4) * 2.5
+            details['vd_dry_up'] = True
+
+        details['phase2_dryup'] = round(dryup_score, 2)
+        vd_score += dryup_score
+
+        # Phase 3: Surge detection (volume on reclaim >= 2x avg)
+        surge_score = 0.0
+        # Look for recent surge after dry-up (last 3 days)
+        for i in range(1, min(4, len(df))):
+            idx = -(i + 1)
+            if idx < -len(df):
                 break
+            day_vol = df['volume'].iloc[idx]
+            day_avg = df['volume'].iloc[max(-len(df), idx-20):idx].mean() if idx >= -len(df) + 20 else vol_ma20
+            if day_avg > 0:
+                day_ratio = day_vol / day_avg
+                if day_ratio >= 3.0:
+                    surge_score = 2.0
+                    details['surge_day'] = i
+                    details['surge_ratio'] = day_ratio
+                    break
+                elif day_ratio >= 2.0:
+                    # Linear interpolation: 2x = 1.0, 3x = 2.0
+                    surge_score = 1.0 + (day_ratio - 2.0)
+                    details['surge_day'] = i
+                    details['surge_ratio'] = day_ratio
+                    break
 
-        details['contraction_days'] = contraction_days
-
-        if contraction_days >= 3:
-            vd_score += 2.0
-        elif contraction_days == 2:
-            vd_score += 1.5
-        elif contraction_days == 1:
-            vd_score += 0.5
+        details['phase3_surge'] = round(surge_score, 2)
+        vd_score += surge_score
 
         return round(min(5.0, vd_score), 2), details
 
-    def _calculate_rb(self, ind: TechnicalIndicators, df: pd.DataFrame, clv: float) -> Tuple[float, Dict]:
+    def _calculate_rb(self, ind: TechnicalIndicators, df: pd.DataFrame, clv: float, symbol: str = '') -> Tuple[float, Dict]:
         """
-        Rebound Setup (RB) - 4 points max.
+        Rebound Setup (RB) - 6 points max.
         v5.0: Continuous 1-5 day reclaim scoring based on days since false breakdown.
-        - 1 day = full points (4.0)
-        - 2-3 days = medium points (3.0)
-        - 4-5 days = lower points (2.0)
-        - >5 days = filter catches (not valid)
+        - 1 day = full points (2.0)
+        - 2-3 days = medium points (1.0-1.5)
+        - 4-5 days = lower points (0.5-0.75)
+        - Plus sector alignment (0-1.0 pts)
         """
         today = df.iloc[-1]
         current_price = today['close']
@@ -608,12 +647,16 @@ class SupportBounceStrategy(BaseStrategy):
         # Calculate days since false breakdown (reclaim)
         days_since_breakdown = self._calculate_days_since_breakdown(df)
 
+        # Calculate sector alignment score
+        sector_alignment = self._calculate_sector_alignment(symbol)
+
         details = {
             'clv': clv,
             'lower_shadow_pct': 0,
             'has_hammer': False,
             'prior_halt': False,
-            'days_since_breakdown': days_since_breakdown
+            'days_since_breakdown': days_since_breakdown,
+            'sector_alignment': sector_alignment
         }
 
         rb_score = 0.0
@@ -655,7 +698,51 @@ class SupportBounceStrategy(BaseStrategy):
         elif clv >= 0.4:
             rb_score += 0.4
 
-        return round(min(4.0, rb_score), 2), details
+        # Sector alignment bonus (0-1.0 pts)
+        rb_score += sector_alignment
+
+        return round(min(6.0, rb_score), 2), details
+
+    def _calculate_sector_alignment(self, symbol: str) -> float:
+        """
+        Calculate sector alignment score based on sector ETF vs EMA50.
+        Returns 0-1.0 points:
+        - Above EMA50 by >2%: +1.0
+        - Within EMA50±2%: +0.5
+        - Below EMA50 by >2%: 0
+        """
+        if not self.stock_info or not symbol or symbol not in self.stock_info:
+            return 0.0
+
+        sector = self.stock_info.get(symbol, {}).get('sector', 'Unknown')
+        if sector == 'Unknown' or sector not in self.PARAMS['sector_etfs']:
+            return 0.0
+
+        etf_symbol = self.PARAMS['sector_etfs'][sector]
+        if etf_symbol not in self.sector_etf_data:
+            return 0.0
+
+        etf_df = self.sector_etf_data[etf_symbol]
+        if len(etf_df) < 50:
+            return 0.0
+
+        etf_price = etf_df['close'].iloc[-1]
+        etf_ema50 = etf_df['close'].ewm(span=50).mean().iloc[-1]
+
+        if etf_ema50 == 0:
+            return 0.0
+
+        etf_vs_ema_pct = (etf_price - etf_ema50) / etf_ema50
+
+        # Above EMA50 by >2%: +1.0
+        if etf_vs_ema_pct > 0.02:
+            return 1.0
+        # Within EMA50±2%: +0.5
+        elif abs(etf_vs_ema_pct) <= 0.02:
+            return 0.5
+        # Below EMA50 by >2%: 0
+        else:
+            return 0.0
 
     def _calculate_days_since_breakdown(self, df: pd.DataFrame) -> int:
         """
