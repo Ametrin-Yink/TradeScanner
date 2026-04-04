@@ -29,6 +29,7 @@ class EarningsGapStrategy(BaseStrategy):
         'min_dollar_volume_gap_day': 100e6,
         'min_rs_percentile': 50,
         'max_consolidation_days': 10,
+        'min_price': 10.0,
     }
 
     def filter(self, symbol: str, df: pd.DataFrame) -> bool:
@@ -60,6 +61,11 @@ class EarningsGapStrategy(BaseStrategy):
         dollar_volume = current_price * avg_volume
         if dollar_volume < self.PARAMS['min_dollar_volume_gap_day']:
             logger.debug(f"EG_REJ: {symbol} - dollar volume too low")
+            return False
+
+        # Check minimum price
+        if current_price < self.PARAMS['min_price']:
+            logger.debug(f"EG_REJ: {symbol} - price too low: ${current_price:.2f}")
             return False
 
         logger.debug(f"EG_PASS: {symbol} - gap {gap_1d_pct:.2%}, days {days_to_earnings}")
