@@ -29,9 +29,11 @@ class AccumulationBottomStrategy(BaseStrategy):
     DIRECTION = 'long'
 
     PARAMS = {
+        'min_market_cap': 3_000_000_000,
+        'min_volume': 200_000,
         'min_dollar_volume': 50_000_000,
         'min_atr_pct': 0.015,
-        'min_listing_days': 60,
+        'min_listing_days': 180,
         'max_distance_from_60d_low': 0.08,
         'min_touches': 2,
         'rsi_max': 40,
@@ -41,6 +43,21 @@ class AccumulationBottomStrategy(BaseStrategy):
         """Filter for accumulation bottom candidates."""
         if len(df) < self.PARAMS['min_listing_days']:
             logger.debug(f"ACC_REJ: {symbol} - Insufficient data ({len(df)} < {self.PARAMS['min_listing_days']})")
+            return False
+
+        # Get pre-calculated data from phase0 if available
+        data = self.phase0_data.get(symbol, {}) if hasattr(self, 'phase0_data') else {}
+
+        # Market cap check
+        market_cap = data.get('market_cap', 0)
+        if market_cap < self.PARAMS['min_market_cap']:
+            logger.debug(f"ACC_REJ: {symbol} - Market cap ${market_cap:,.0f} < ${self.PARAMS['min_market_cap']:,.0f}")
+            return False
+
+        # Volume check
+        avg_volume = df['volume'].tail(20).mean()
+        if avg_volume < self.PARAMS['min_volume']:
+            logger.debug(f"ACC_REJ: {symbol} - Avg volume {avg_volume:,.0f} < {self.PARAMS['min_volume']:,.0f}")
             return False
 
         ind = TechnicalIndicators(df)
