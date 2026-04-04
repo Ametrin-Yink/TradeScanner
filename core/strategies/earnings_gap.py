@@ -194,7 +194,7 @@ class EarningsGapStrategy(BaseStrategy):
             elif rs_pct <= 40:
                 score += 1.0
 
-        return min(4.0, score)
+        return min(3.0, score)
 
     def _calculate_vc(self, df: pd.DataFrame, data: Dict) -> float:
         """Volume Confirmation - elevated volume on gap day."""
