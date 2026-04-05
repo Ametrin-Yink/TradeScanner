@@ -178,6 +178,20 @@ class SupportBounceStrategy(BaseStrategy):
         if distance_pct < min_depth or distance_pct > max_depth:
             return False
 
+        # v7.0: Support touch requirement - ≥3 touches in 60d OR ≥2 touches in 30d
+        atr = ind.indicators.get('atr', {}).get('atr', current_price * 0.02)
+        support_touches = self._calculate_support_touches(df, nearest_support, atr)
+        touch_dates = support_touches.get('touch_dates', [])
+
+        # Count touches in 60d and 30d windows
+        touches_60d = len([d for d in touch_dates if d <= 60])
+        touches_30d = len([d for d in touch_dates if d <= 30])
+
+        # v7.0: Require ≥3 in 60d OR ≥2 in 30d (recency matters more)
+        if not (touches_60d >= 3 or touches_30d >= 2):
+            logger.debug(f"{symbol}: v7.0 touch requirement failed (60d:{touches_60d}, 30d:{touches_30d})")
+            return False
+
         # Defense 2: Volume Trap Veto (Falling Knife Detection)
         volume_data = ind.indicators.get('volume', {})
         volume_ratio = volume_data.get('volume_ratio', 1.0)
@@ -194,8 +208,6 @@ class SupportBounceStrategy(BaseStrategy):
         # Check volume contraction (normal U&R requires dry volume)
         if volume_ratio > 0.9:
             return False
-
-        return True
 
         return True
 
@@ -383,11 +395,17 @@ class SupportBounceStrategy(BaseStrategy):
         return min(6.0, sq_score), sq_details
 
     def _calculate_support_touches(self, df: pd.DataFrame, support_level: float, atr: float) -> Dict:
-        """Calculate support touches within tolerance (±0.5 ATR)."""
+        """
+        Calculate support touches within tolerance (±0.5 ATR).
+
+        v7.0: Now tracks touch_dates list for recency-based filtering.
+        Returns touch_dates as list of days ago for each touch.
+        """
         tolerance = atr * self.PARAMS['support_tolerance_atr']
         touches = 0
         last_touch_idx = None
         bounce_strengths = []
+        touch_dates = []  # v7.0: Track days ago for each touch
 
         # Look back 90 days (about 63 trading days)
         lookback = min(63, len(df) - 1)
@@ -406,6 +424,7 @@ class SupportBounceStrategy(BaseStrategy):
             if abs(low - support_level) <= tolerance or low <= support_level + tolerance:
                 touches += 1
                 last_touch_idx = i
+                touch_dates.append(i)  # v7.0: Record this touch
 
                 # Calculate bounce strength (close vs open after touch)
                 if close > open_price:
@@ -418,7 +437,8 @@ class SupportBounceStrategy(BaseStrategy):
             'touches': touches,
             'last_touch_days': last_touch_idx if last_touch_idx else 90,
             'avg_bounce_strength': avg_bounce,
-            'bounce_count': len(bounce_strengths)
+            'bounce_count': len(bounce_strengths),
+            'touch_dates': touch_dates,  # v7.0: Return touch dates list
         }
 
     def _calculate_recency_weight(self, days_since_touch: int) -> float:
@@ -627,10 +647,16 @@ class SupportBounceStrategy(BaseStrategy):
     def _calculate_rb(self, ind: TechnicalIndicators, df: pd.DataFrame, clv: float, symbol: str = '') -> Tuple[float, Dict]:
         """
         Rebound Setup (RB) - 6 points max.
+
         v5.0: Continuous 1-5 day reclaim scoring based on days since false breakdown.
+        v7.0: Changes:
+          - Add depth ≥2% hard gate (depth<2% returns 0 score)
+          - Remove 4-5 day reclaim scoring (expired)
+
+        Scoring:
         - 1 day = full points (2.0)
         - 2-3 days = medium points (1.0-1.5)
-        - 4-5 days = lower points (0.5-0.75)
+        - 4-5 days = EXPIRED (v7.0: removed 0.5 pts)
         - Plus sector alignment (0-1.0 pts)
         """
         today = df.iloc[-1]
@@ -647,6 +673,15 @@ class SupportBounceStrategy(BaseStrategy):
         # Calculate days since false breakdown (reclaim)
         days_since_breakdown = self._calculate_days_since_breakdown(df)
 
+        # v7.0: Calculate depth from support for hard gate
+        current_price = df['close'].iloc[-1]
+        calc = SupportResistanceCalculator(df)
+        sr_levels = calc.calculate_all()
+        supports = sr_levels.get('support', [])
+        supports_below = [s for s in supports if s < current_price]
+        nearest_support = max(supports_below) if supports_below else current_price * 0.99
+        depth_pct = abs(current_price - nearest_support) / current_price
+
         # Calculate sector alignment score
         sector_alignment = self._calculate_sector_alignment(symbol)
 
@@ -656,13 +691,20 @@ class SupportBounceStrategy(BaseStrategy):
             'has_hammer': False,
             'prior_halt': False,
             'days_since_breakdown': days_since_breakdown,
+            'depth_pct': depth_pct,
             'sector_alignment': sector_alignment
         }
 
         rb_score = 0.0
 
-        # v5.0: Continuous reclaim scoring based on days since breakdown
-        # Score linearly from 1 day (full) to 5 days (minimum)
+        # v7.0: Hard gate - depth must be ≥2%
+        if depth_pct < 0.02:
+            details['depth_gate_failed'] = True
+            details['reclaim_score'] = 'depth_too_shallow'
+            return 0.0, details
+
+        # v5.0/v7.0: Continuous reclaim scoring based on days since breakdown
+        # v7.0: 4-5 day reclaims now EXPIRED (removed 0.5 pts scoring)
         if days_since_breakdown <= 1:
             rb_score += 2.0  # 1 day = full reclaim score
             details['reclaim_score'] = 'full'
@@ -671,9 +713,8 @@ class SupportBounceStrategy(BaseStrategy):
             rb_score += 2.0 - (days_since_breakdown - 1) * 0.5
             details['reclaim_score'] = 'medium'
         elif days_since_breakdown <= 5:
-            # Linear interpolation: 4 days = 0.75, 5 days = 0.5
-            rb_score += 1.0 - (days_since_breakdown - 3) * 0.25
-            details['reclaim_score'] = 'low'
+            # v7.0: 4-5 days = EXPIRED (removed 0.5 pts scoring)
+            details['reclaim_score'] = 'expired'
         else:
             details['reclaim_score'] = 'expired'
 
