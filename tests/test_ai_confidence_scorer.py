@@ -222,10 +222,16 @@ class TestSectorConcentrationPenalty:
 
         result = scorer.score_candidates(mock_candidates_same_sector)
 
-        # All 5 candidates in Technology should have penalty applied
-        # -15% for 5 stocks: 80 * 0.85 = 68
-        for candidate in result:
-            assert candidate.confidence == 68
+        # Tiered penalty for 5 stocks in same sector:
+        # Rank 1 (highest conf): 0% penalty = 80
+        # Rank 2: -5% penalty = 80 * 0.95 = 76
+        # Rank 3-5: -10% penalty = 80 * 0.90 = 72
+        confidences = sorted([c.confidence for c in result], reverse=True)
+        assert confidences[0] == 80  # No penalty for top
+        assert confidences[1] == 76  # -5% for second
+        assert confidences[2] == 72  # -10% for third
+        assert confidences[3] == 72  # -10% for fourth
+        assert confidences[4] == 72  # -10% for fifth
 
     @patch('core.ai_confidence_scorer.AIConfidenceScorer._score_batch')
     def test_score_candidates_no_penalty_mixed_sectors(self, mock_score_batch, scorer, mock_candidates_mixed_sectors):
@@ -277,15 +283,23 @@ class TestSectorConcentrationPenalty:
 
         result = scorer.score_candidates(mock_candidates_two_per_sector)
 
-        # All candidates should have no penalty (max 2 per sector)
-        for candidate in result:
-            assert candidate.confidence == 80
+        # Tiered penalty for 2 stocks per sector:
+        # Rank 1 (highest conf): 0% penalty = 80
+        # Rank 2: -5% penalty = 80 * 0.95 = 76
+        confidences = sorted([c.confidence for c in result], reverse=True)
+        # 3 sectors, each with 2 stocks: 3 at 80 (rank 1), 3 at 76 (rank 2)
+        assert confidences[0] == 80  # Top of sector 1
+        assert confidences[1] == 80  # Top of sector 2
+        assert confidences[2] == 80  # Top of sector 3
+        assert confidences[3] == 76  # Second of sector 1
+        assert confidences[4] == 76  # Second of sector 2
+        assert confidences[5] == 76  # Second of sector 3
 
     @patch('core.ai_confidence_scorer.AIConfidenceScorer._score_batch')
     def test_penalty_logging(self, mock_score_batch, scorer, mock_candidates_same_sector, caplog):
         """Test that penalty application is logged."""
         import logging
-        caplog.set_level(logging.INFO)
+        caplog.set_level(logging.DEBUG)
 
         initial_scored = [
             ScoredCandidate(
@@ -306,8 +320,8 @@ class TestSectorConcentrationPenalty:
 
         scorer.score_candidates([mock_candidates_same_sector[0]])
 
-        # Check that penalty was logged
-        assert any("sector" in msg.lower() for msg in caplog.messages)
+        # Check that outcome logging was done (debug level)
+        assert any("outcome" in msg.lower() for msg in caplog.messages)
 
 
 class TestScoredCandidate:

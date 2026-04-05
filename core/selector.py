@@ -25,7 +25,8 @@ class CandidateSelector:
     def select_top_30(
         self,
         candidates: List[StrategyMatch],
-        market_sentiment: str = 'neutral'
+        market_sentiment: str = 'neutral',
+        regime: str = None
     ) -> List[ScoredCandidate]:
         """Select and score top 30 candidates using AI."""
 
@@ -35,7 +36,7 @@ class CandidateSelector:
 
         # Score all candidates (up to 30)
         logger.info(f"AI scoring {len(candidates)} candidates")
-        scored = self.scorer.score_candidates(candidates, market_sentiment)
+        scored = self.scorer.score_candidates(candidates, market_sentiment, regime=regime)
 
         if not scored:
             logger.warning("AI scoring returned empty, using fallback")
@@ -100,7 +101,8 @@ class CandidateSelector:
 
 def select_and_score_candidates(
     candidates: List[StrategyMatch],
-    market_sentiment: str = 'neutral'
+    market_sentiment: str = 'neutral',
+    regime: str = None
 ) -> List[ScoredCandidate]:
     """
     Convenience function to select and score candidates.
@@ -108,9 +110,10 @@ def select_and_score_candidates(
     Args:
         candidates: List of strategy matches from screener
         market_sentiment: Market sentiment for context
+        regime: Market regime for outcome tracking (e.g., 'bull_strong', 'bear_moderate')
 
     Returns:
         List of top 30 ScoredCandidate sorted by confidence
     """
     selector = CandidateSelector()
-    return selector.select_top_30(candidates, market_sentiment)
+    return selector.select_top_30(candidates, market_sentiment, regime=regime)

@@ -2,6 +2,7 @@
 import logging
 import json
 import re
+from datetime import datetime
 from typing import List, Dict, Optional
 from dataclasses import dataclass
 
@@ -10,6 +11,7 @@ import numpy as np
 
 from core.screener import StrategyMatch
 from config.settings import settings
+from data.db import Database
 
 logger = logging.getLogger(__name__)
 
@@ -86,8 +88,9 @@ class AIConfidenceScorer:
         }
     }
 
-    def __init__(self):
-        """Initialize with API configuration."""
+    def __init__(self, db: Database = None):
+        """Initialize with API configuration and database."""
+        self.db = db or Database()
         self.dashscope_api_key = settings.get_secret('dashscope.api_key')
         self.dashscope_base = settings.get_secret('dashscope.api_base') or settings.get('ai', {}).get('api_base', 'https://coding.dashscope.aliyuncs.com/v1')
         self.model = settings.get_secret('dashscope.model') or settings.get('ai', {}).get('model', 'qwen-max')
@@ -95,20 +98,32 @@ class AIConfidenceScorer:
     def score_candidates(
         self,
         candidates: List[StrategyMatch],
-        market_sentiment: str = 'neutral'
+        market_sentiment: str = 'neutral',
+        regime: str = None,
+        scan_date: str = None
     ) -> List[ScoredCandidate]:
         """
-        Score all candidates using AI analysis.
+        Score all candidates using AI analysis and log outcomes for tracking.
 
         Args:
             candidates: List of strategy matches from screener
             market_sentiment: 'bullish', 'bearish', 'neutral', or 'watch'
+            regime: Market regime for outcome tracking (e.g., 'bull_strong', 'bear_moderate')
+            scan_date: Scan date for outcome tracking (defaults to today)
 
         Returns:
             List of ScoredCandidate with AI-calculated confidence
         """
         if not candidates:
             return []
+
+        # Default scan_date to today if not provided
+        if scan_date is None:
+            scan_date = datetime.now().date().isoformat()
+
+        # Default regime to market_sentiment if not provided
+        if regime is None:
+            regime = market_sentiment
 
         # Process in batches of 20 to manage context length
         batch_size = 20
@@ -131,7 +146,36 @@ class AIConfidenceScorer:
         # Sort by confidence descending
         all_scored.sort(key=lambda x: x.confidence, reverse=True)
 
+        # NEW: Log outcomes for tracking (after scoring is complete)
+        self._log_outcomes(all_scored, regime, scan_date)
+
         return all_scored
+
+    def _log_outcomes(
+        self,
+        scored_candidates: List[ScoredCandidate],
+        regime: str,
+        scan_date: str
+    ):
+        """Log AI confidence outcomes to database for quarterly audits.
+
+        This is a best-effort operation - failures are logged but don't affect scoring.
+        """
+        try:
+            for match in scored_candidates:
+                self.db.save_ai_confidence_outcome(
+                    scan_date=scan_date,
+                    symbol=match.symbol,
+                    strategy=match.strategy,
+                    ai_confidence=match.confidence,
+                    tier=match.technical_snapshot.get('tier', 'C'),
+                    regime=regime,
+                    entry_price=match.entry_price
+                )
+            logger.debug(f"Logged {len(scored_candidates)} AI confidence outcomes for {scan_date}")
+        except Exception as e:
+            # Log silently - outcome tracking is secondary to scoring
+            logger.debug(f"AI confidence outcome logging skipped: {e}")
 
     def _extract_sector(self, candidate) -> str:
         """

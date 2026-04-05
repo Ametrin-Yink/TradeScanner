@@ -457,6 +457,123 @@ class Database:
                 return dict(row)
             return None
 
+    def create_ai_confidence_outcomes_table(self):
+        """Create table for AI confidence outcome tracking."""
+        conn = self.get_connection()
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS ai_confidence_outcomes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                scan_date TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                strategy TEXT NOT NULL,
+                ai_confidence INTEGER NOT NULL,
+                tier TEXT NOT NULL,
+                regime TEXT NOT NULL,
+                entry_price REAL,
+                outcome_5d_return REAL,
+                outcome_10d_return REAL,
+                recorded_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.commit()
+        logger.info("Created ai_confidence_outcomes table")
+
+    def save_ai_confidence_outcome(
+        self,
+        scan_date: str,
+        symbol: str,
+        strategy: str,
+        ai_confidence: int,
+        tier: str,
+        regime: str,
+        entry_price: float
+    ):
+        """Record AI confidence outcome for later audit."""
+        conn = self.get_connection()
+        conn.execute("""
+            INSERT INTO ai_confidence_outcomes
+            (scan_date, symbol, strategy, ai_confidence, tier, regime, entry_price)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (scan_date, symbol, strategy, ai_confidence, tier, regime, entry_price))
+        conn.commit()
+
+    def update_ai_confidence_outcome(
+        self,
+        id: int,
+        outcome_5d: float,
+        outcome_10d: float = None
+    ):
+        """Update outcome returns after 5/10 days."""
+        conn = self.get_connection()
+        conn.execute("""
+            UPDATE ai_confidence_outcomes
+            SET outcome_5d_return = ?, outcome_10d_return = ?
+            WHERE id = ?
+        """, (outcome_5d, outcome_10d, id))
+        conn.commit()
+
+    def get_ai_confidence_outcomes(
+        self,
+        strategy: str = None,
+        regime: str = None,
+        tier: str = None,
+        symbol: str = None,
+        scan_date: str = None,
+        min_confidence: int = None,
+        max_confidence: int = None
+    ) -> List[Dict[str, Any]]:
+        """Query AI confidence outcomes with optional filters.
+
+        Args:
+            strategy: Filter by strategy name
+            regime: Filter by market regime
+            tier: Filter by tier (S/A/B/C)
+            symbol: Filter by symbol
+            scan_date: Filter by scan date
+            min_confidence: Minimum AI confidence score
+            max_confidence: Maximum AI confidence score
+
+        Returns:
+            List of outcome records as dictionaries
+        """
+        conn = self.get_connection()
+        conn.row_factory = sqlite3.Row
+
+        # Build dynamic query with filters
+        conditions = []
+        params = []
+
+        if strategy:
+            conditions.append("strategy = ?")
+            params.append(strategy)
+        if regime:
+            conditions.append("regime = ?")
+            params.append(regime)
+        if tier:
+            conditions.append("tier = ?")
+            params.append(tier)
+        if symbol:
+            conditions.append("symbol = ?")
+            params.append(symbol)
+        if scan_date:
+            conditions.append("scan_date = ?")
+            params.append(scan_date)
+        if min_confidence is not None:
+            conditions.append("ai_confidence >= ?")
+            params.append(min_confidence)
+        if max_confidence is not None:
+            conditions.append("ai_confidence <= ?")
+            params.append(max_confidence)
+
+        where_clause = ""
+        if conditions:
+            where_clause = "WHERE " + " AND ".join(conditions)
+
+        query = f"SELECT * FROM ai_confidence_outcomes {where_clause} ORDER BY recorded_at DESC"
+
+        cursor = conn.execute(query, params)
+        return [dict(row) for row in cursor.fetchall()]
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS stocks (
@@ -570,6 +687,21 @@ CREATE TABLE IF NOT EXISTS workflow_status (
     candidates_count INTEGER,
     report_path TEXT,
     error_message TEXT
+);
+
+-- AI confidence outcome tracking for quarterly audits
+CREATE TABLE IF NOT EXISTS ai_confidence_outcomes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scan_date TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    strategy TEXT NOT NULL,
+    ai_confidence INTEGER NOT NULL,
+    tier TEXT NOT NULL,
+    regime TEXT NOT NULL,
+    entry_price REAL,
+    outcome_5d_return REAL,
+    outcome_10d_return REAL,
+    recorded_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 """
 
