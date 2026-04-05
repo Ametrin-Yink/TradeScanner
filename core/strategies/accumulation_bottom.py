@@ -29,12 +29,12 @@ class AccumulationBottomStrategy(BaseStrategy):
     DIRECTION = 'long'
 
     PARAMS = {
-        'min_market_cap': 3_000_000_000,
-        'min_volume': 200_000,
+        'min_market_cap': 2_500_000_000,
+        'min_volume': 150_000,
         'min_dollar_volume': 50_000_000,
         'min_atr_pct': 0.015,
         'min_listing_days': 180,
-        'max_distance_from_60d_low': 0.08,
+        'max_distance_from_60d_low': 0.10,
         'min_touches': 2,
         'rsi_max': 40,
     }
