@@ -43,8 +43,8 @@ class CapitulationReboundStrategy(BaseStrategy):
         'min_atr_pct': 0.015,
         'min_listing_days': 50,
         'rsi_overbought': 80,
-        'rsi_oversold': 22,  # Changed from 20 to 22 for v5.0
-        'ema_atr_multiplier': 4.0,
+        'rsi_oversold': 25,  # v7.0: Changed from 22 to 25 for looser pre-filter
+        'ema_atr_multiplier': 3.0,  # v7.0: Changed from 4.0 to 3.0 for looser pre-filter
         'min_gaps': 2,
         'lookback_days': 5,
         'stop_atr_multiplier': 2.0,
@@ -167,11 +167,20 @@ class CapitulationReboundStrategy(BaseStrategy):
             return False
 
         if current_price >= ema50 - self.PARAMS['ema_atr_multiplier'] * atr:
-            logger.debug(f"CAP_REJ: {symbol} - Price {current_price:.2f} not below EMA50-4ATR {ema50 - self.PARAMS['ema_atr_multiplier'] * atr:.2f}")
+            logger.debug(f"CAP_REJ: {symbol} - Price {current_price:.2f} not below EMA50-{self.PARAMS['ema_atr_multiplier']}×ATR {ema50 - self.PARAMS['ema_atr_multiplier'] * atr:.2f}")
             return False
 
-        if gaps < self.PARAMS['min_gaps']:
-            logger.debug(f"CAP_REJ: {symbol} - Gaps {gaps} < {self.PARAMS['min_gaps']}")
+        # v7.0: Count consecutive down-days for alternative exhaustion signal
+        consecutive_down = 0
+        for i in range(1, min(6, len(df))):
+            if df['close'].iloc[-i] < df['close'].iloc[-i-1]:
+                consecutive_down += 1
+            else:
+                break
+
+        # v7.0: Accept >=2 gap-downs OR >=5 consecutive down-days
+        if gaps < self.PARAMS['min_gaps'] and consecutive_down < 5:
+            logger.debug(f"CAP_REJ: {symbol} - No exhaustion signal (gaps={gaps}, down_streak={consecutive_down})")
             return False
 
         logger.debug(f"CAP_PASS: {symbol} - All pre-filters passed")
