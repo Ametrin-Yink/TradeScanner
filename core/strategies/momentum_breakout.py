@@ -451,9 +451,11 @@ class MomentumBreakoutStrategy(BaseStrategy):
 
     def calculate_score(self, dimensions: List[ScoringDimension], df: pd.DataFrame = None, symbol: str = None) -> Tuple[float, str]:
         """
-        Calculate final score with bonus pool.
-        Raw scores can exceed 15, clamped to 15 for tier calculation.
+        Calculate final score with bonus pool, normalized to 0-15 scale.
+        A1 max raw score: 18.5 (5+4+4+4+1.5 bonus) -> normalized to 0-15 scale.
         """
+        from .base_strategy import normalize_score
+
         base_score = sum(d.score for d in dimensions)
 
         # Calculate bonus if df and symbol available
@@ -463,22 +465,25 @@ class MomentumBreakoutStrategy(BaseStrategy):
 
         raw_score = base_score + bonus
 
-        # Clamp to 15 for tier calculation
-        clamped_score = min(raw_score, 15.0)
+        # Normalize to 0-15 scale using STRATEGY_MAX_SCORES
+        normalized_score = normalize_score(raw_score, self.NAME)
 
-        # Determine tier based on clamped score
-        if clamped_score >= self.TIER_S_MIN:
+        # Cap at 15.0
+        final_score = min(normalized_score, 15.0)
+
+        # Determine tier based on final score
+        if final_score >= self.TIER_S_MIN:
             tier = 'S'
-        elif clamped_score >= self.TIER_A_MIN:
+        elif final_score >= self.TIER_A_MIN:
             tier = 'A'
-        elif clamped_score >= self.TIER_B_MIN:
+        elif final_score >= self.TIER_B_MIN:
             tier = 'B'
         else:
             tier = 'C'
 
-        logger.debug(f"MB Score: base={base_score:.1f} bonus={bonus:.1f} raw={raw_score:.1f} clamped={clamped_score:.1f} tier={tier}")
+        logger.debug(f"MB Score: base={base_score:.1f} bonus={bonus:.1f} raw={raw_score:.1f} norm={normalized_score:.2f} final={final_score:.2f} tier={tier}")
 
-        return clamped_score, tier
+        return final_score, tier
 
     def _calculate_bs(self, breakout_pct: float, platform_range_pct: float) -> float:
         """Breakout Strength dimension (0-4.0)."""
@@ -807,6 +812,14 @@ class PreBreakoutCompressionStrategy(MomentumBreakoutStrategy):
         'bonus_max': 1.5,  # Same bonus pool as A1
     }
 
+    def calculate_score(self, dimensions: List[ScoringDimension], df: pd.DataFrame = None, symbol: str = None) -> Tuple[float, str]:
+        """
+        A2 uses base class normalization (not A1's bonus-based scoring).
+        A2 max raw score: 17.0 (5+4+4+4) -> normalized to 0-15 scale.
+        """
+        # Use base class calculate_score with normalization
+        return BaseStrategy.calculate_score(self, dimensions, df, symbol)
+
     def filter(self, symbol: str, df: pd.DataFrame) -> bool:
         """
         A2 filter: within base, not yet broken out.
@@ -1007,16 +1020,25 @@ class PreBreakoutCompressionStrategy(MomentumBreakoutStrategy):
 
         # Component 3: Wave count (simplified)
         # Count how many times range contracted in last 15 days
+        # FIX: Use proper negative indexing for rolling windows
         wave_count = 0
+        prev_range = None
         for i in range(3):
-            start = i * 5
-            end = start + 5
-            period_range = df['high'].iloc[-end:-start if end else None].max() - \
-                          df['low'].iloc[-end:-start if end else None].min()
-            if period_range < range_5d:
-                wave_count += 1
+            # Get 5-day periods: days -5 to 0, -10 to -5, -15 to -10
+            start_idx = -(i + 1) * 5
+            end_idx = start_idx + 5
+            if end_idx >= 0:
+                period_data = df.iloc[start_idx:end_idx]
+            else:
+                period_data = df.iloc[start_idx:]
 
-        if wave_count >= 3:
+            if len(period_data) >= 3:
+                period_range = period_data['high'].max() - period_data['low'].min()
+                if prev_range is not None and period_range < prev_range:
+                    wave_count += 1
+                prev_range = period_range
+
+        if wave_count >= 2:  # FIX: 2+ waves shows contraction pattern
             cp_score += 1.0
 
         # Component 4: Proximity to pivot (platform high)
@@ -1123,7 +1145,7 @@ class PreBreakoutCompressionStrategy(MomentumBreakoutStrategy):
                     data = phase0_data[symbol]
                     rs_scores.append({
                         'symbol': symbol,
-                        'rs': data.get('rs_raw', 0),
+                        'rs': data.get('rs_raw', 0),  # Matches premarket_prep: 3m return
                         'percentile': data.get('rs_percentile', 50),
                         'distance_52w': data.get('distance_from_52w_high', 0),
                         'df': self._get_data(symbol)
@@ -1139,17 +1161,14 @@ class PreBreakoutCompressionStrategy(MomentumBreakoutStrategy):
 
                     current_price = df['close'].iloc[-1]
 
-                    # Calculate returns
-                    price_3m = df['close'].iloc[-63] if len(df) >= 63 else df['close'].iloc[0]
-                    price_6m = df['close'].iloc[-126] if len(df) >= 126 else df['close'].iloc[0]
-                    price_12m = df['close'].iloc[-252] if len(df) >= 252 else df['close'].iloc[0]
+                    # FIX: Match premarket_prep.py RS calculation (3m return only)
+                    # rs_raw = ret_3m if ret_3m is not None else 0
+                    if len(df) >= 63:
+                        price_3m = df['close'].iloc[-63]
+                        rs_raw = (current_price / price_3m - 1) * 100
+                    else:
+                        rs_raw = 0
 
-                    ret_3m = (current_price - price_3m) / price_3m
-                    ret_6m = (current_price - price_6m) / price_6m
-                    ret_12m = (current_price - price_12m) / price_12m
-
-                    # RS score
-                    rs_raw = 0.4 * ret_3m + 0.3 * ret_6m + 0.3 * ret_12m
                     rs_scores.append({'symbol': symbol, 'rs': rs_raw, 'df': df})
                 except Exception as e:
                     logger.debug(f"Error calculating RS for {symbol}: {e}")

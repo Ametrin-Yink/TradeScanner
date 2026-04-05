@@ -27,7 +27,8 @@ class TestScreenerV7:
             candidates.append(match)
 
         # Call _allocate_by_table with 8 slots
-        allocation = {'A': 8}
+        # v7.0: Use 'A1' instead of 'A' (A1/A2 split)
+        allocation = {'A1': 8}
         result = screener._allocate_by_table(candidates, allocation, 'neutral')
 
         # Should only have 4 due to sector cap
@@ -56,7 +57,8 @@ class TestScreenerV7:
                 candidates.append(match)
 
         # Call _allocate_by_table with 18 slots (6 per sector * 3 sectors)
-        allocation = {'A': 18}
+        # v7.0: Use 'A1' instead of 'A' (A1/A2 split)
+        allocation = {'A1': 18}
         result = screener._allocate_by_table(candidates, allocation, 'neutral')
 
         # Should have exactly 12 (4 per sector * 3 sectors)
@@ -97,7 +99,8 @@ class TestScreenerV7:
         ]
 
         # Call _allocate_by_table
-        allocation = {'A': 1, 'B': 1}
+        # v7.0: Use 'A1' instead of 'A' (A1/A2 split)
+        allocation = {'A1': 1, 'B': 1}
         result = screener._allocate_by_table(candidates, allocation, 'neutral')
 
         # Should only have 1 candidate (duplicate resolved, keeping higher score)
@@ -124,7 +127,8 @@ class TestScreenerV7:
             candidates.append(match)
 
         # Call _allocate_by_table - Unknown sector should NOT count against cap
-        allocation = {'A': 6}
+        # v7.0: Use 'A1' instead of 'A' (A1/A2 split)
+        allocation = {'A1': 6}
         result = screener._allocate_by_table(candidates, allocation, 'neutral')
 
         # Unknown sector candidates should not be limited by sector cap
