@@ -2,8 +2,11 @@
 from typing import Dict, Type, List
 from .base_strategy import BaseStrategy, StrategyMatch, ScoringDimension, StrategyType
 
-# Import all 8 strategies (A-H)
-from .momentum_breakout import MomentumBreakoutStrategy          # A
+# Import all 8 strategies (A-H with A1/A2 sub-modes)
+from .momentum_breakout import (
+    MomentumBreakoutStrategy,      # A1
+    PreBreakoutCompressionStrategy  # A2
+)
 from .pullback_entry import PullbackEntryStrategy                # B
 from .support_bounce import SupportBounceStrategy                # C
 from .distribution_top import DistributionTopStrategy            # D
@@ -12,9 +15,10 @@ from .capitulation_rebound import CapitulationReboundStrategy    # F
 from .earnings_gap import EarningsGapStrategy                    # G
 from .relative_strength_long import RelativeStrengthLongStrategy # H
 
-# Strategy registry - clean A-H mapping
+# Strategy registry - clean A-H mapping with A1/A2 sub-modes
 STRATEGY_REGISTRY: Dict[StrategyType, Type[BaseStrategy]] = {
-    StrategyType.A: MomentumBreakoutStrategy,
+    StrategyType.A1: MomentumBreakoutStrategy,
+    StrategyType.A2: PreBreakoutCompressionStrategy,
     StrategyType.B: PullbackEntryStrategy,
     StrategyType.C: SupportBounceStrategy,
     StrategyType.D: DistributionTopStrategy,
@@ -26,7 +30,8 @@ STRATEGY_REGISTRY: Dict[StrategyType, Type[BaseStrategy]] = {
 
 # Strategy name to letter mapping (for allocation table)
 STRATEGY_NAME_TO_LETTER = {
-    "MomentumBreakout": "A",
+    "MomentumBreakout": "A1",
+    "PreBreakoutCompression": "A2",
     "PullbackEntry": "B",
     "SupportBounce": "C",
     "DistributionTop": "D",
@@ -38,7 +43,8 @@ STRATEGY_NAME_TO_LETTER = {
 
 # Strategy letter to metadata
 STRATEGY_METADATA = {
-    'A': {'name': 'MomentumBreakout', 'direction': 'long'},
+    'A1': {'name': 'MomentumBreakout', 'direction': 'long'},
+    'A2': {'name': 'PreBreakoutCompression', 'direction': 'long'},
     'B': {'name': 'PullbackEntry', 'direction': 'long'},
     'C': {'name': 'SupportBounce', 'direction': 'long'},
     'D': {'name': 'DistributionTop', 'direction': 'short'},
@@ -73,7 +79,8 @@ __all__ = [
     'StrategyMatch',
     'ScoringDimension',
     'StrategyType',
-    'MomentumBreakoutStrategy',      # A
+    'MomentumBreakoutStrategy',      # A1
+    'PreBreakoutCompressionStrategy', # A2
     'PullbackEntryStrategy',         # B
     'SupportBounceStrategy',         # C
     'DistributionTopStrategy',       # D

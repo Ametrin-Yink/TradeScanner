@@ -73,11 +73,11 @@ class StrategyScreener:
         self._spy_data: Optional[pd.DataFrame] = None
         self._spy_return_5d: float = 0.0
 
-        # Initialize all strategy plugins
+        # Initialize all strategy plugins (9 strategies with A1/A2 sub-modes)
         self._strategies = {}
-        for strategy_type in [StrategyType.A, StrategyType.B, StrategyType.C,
-                               StrategyType.D, StrategyType.E, StrategyType.F,
-                               StrategyType.G, StrategyType.H]:
+        for strategy_type in [StrategyType.A1, StrategyType.A2, StrategyType.B,
+                               StrategyType.C, StrategyType.D, StrategyType.E,
+                               StrategyType.F, StrategyType.G, StrategyType.H]:
             self._strategies[strategy_type] = create_strategy(
                 strategy_type, fetcher=self.fetcher, db=self.db
             )

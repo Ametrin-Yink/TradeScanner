@@ -47,15 +47,16 @@ def normalize_score(raw_score: float, strategy_name: str) -> float:
 
 
 class StrategyType(Enum):
-    """8 trading strategies - clean A-H naming."""
-    A = "A"  # MomentumBreakout
-    B = "B"  # PullbackEntry
-    C = "C"  # SupportBounce
-    D = "D"  # DistributionTop (short)
-    E = "E"  # AccumulationBottom (long)
-    F = "F"  # CapitulationRebound
-    G = "G"  # EarningsGap
-    H = "H"  # RelativeStrengthLong
+    """8 trading strategies with A1/A2 sub-modes."""
+    A1 = "A1"  # MomentumBreakout (confirmed breakout)
+    A2 = "A2"  # PreBreakoutCompression (pre-breakout)
+    B = "B"    # PullbackEntry
+    C = "C"    # SupportBounce
+    D = "D"    # DistributionTop (short)
+    E = "E"    # AccumulationBottom (long)
+    F = "F"    # CapitulationRebound
+    G = "G"    # EarningsGap
+    H = "H"    # RelativeStrengthLong
 
 
 @dataclass

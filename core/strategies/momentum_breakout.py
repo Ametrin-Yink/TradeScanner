@@ -13,15 +13,15 @@ logger = logging.getLogger(__name__)
 
 class MomentumBreakoutStrategy(BaseStrategy):
     """
-    Strategy A: MomentumBreakout v5.0
+    Strategy A1: MomentumBreakout v5.0 - Confirmed breakout.
     - Multi-pattern CQ (VCP, HTF, flat, ascending, loose)
     - TC promoted to primary gate (RS >= 50th)
     - Bonus pool (+3 max, clamped to 15)
     """
 
     NAME = "MomentumBreakout"
-    STRATEGY_TYPE = StrategyType.A  # Changed from EP
-    DESCRIPTION = "MomentumBreakout v5.0 - multi-pattern momentum"
+    STRATEGY_TYPE = StrategyType.A1  # A1: Confirmed breakout
+    DESCRIPTION = "MomentumBreakout v5.0 - confirmed breakout"
     DIMENSIONS = ['TC', 'CQ', 'BS', 'VC']
 
     # VCP-EP Parameters
@@ -44,7 +44,7 @@ class MomentumBreakoutStrategy(BaseStrategy):
         # v5.0: TC promoted to primary gate
         'min_rs_percentile': 50,               # NEW: TC is now primary gate
         'max_raw_score': 20.0,                  # NEW: Allow raw scores up to 20
-        'bonus_max': 3.0,                       # NEW: Bonus pool max
+        'bonus_max': 1.5,                       # A1: Bonus pool max (reduced from 3.0, VCP structure moved to A2)
     }
 
     def filter(self, symbol: str, df: pd.DataFrame) -> bool:
@@ -318,11 +318,10 @@ class MomentumBreakoutStrategy(BaseStrategy):
 
     def _calculate_bonus(self, dimensions: List[ScoringDimension], df: pd.DataFrame, symbol: str) -> float:
         """
-        Calculate bonus points from confluence factors per Strategy_Description_v5.md.
-        Max bonus is capped at 3.0.
+        Calculate bonus points for A1 (confirmed breakout).
+        Max bonus is capped at 1.5 (VCP structure bonus moved to A2's CP dimension).
 
         Bonus pool:
-        - VCP structure: 2.0 max (vol_contraction_quality + range_contraction_quality + wave_count)
         - Sector leadership: 0.5 max (sector ETF RS >= 80th AND sector ETF > EMA50)
         - Earnings catalyst: 0.5 max (7-21 days to earnings)
         - Accumulation divergence: 0.5 max (OBV rising while price flat)
@@ -330,53 +329,21 @@ class MomentumBreakoutStrategy(BaseStrategy):
         bonus = 0.0
         ind = TechnicalIndicators(df)
 
-        # Bonus 1: VCP structure bonus (2.0 max)
-        cq_dim = next((d for d in dimensions if d.name == 'CQ'), None)
-        if cq_dim and cq_dim.details.get('pattern_type') == 'VCP':
-            # Calculate VCP structure components from platform data
-            platform = ind.detect_vcp_platform(
-                lookback_range=self.PARAMS['platform_lookback'],
-                max_range_pct=self.PARAMS['platform_max_range'],
-                concentration_threshold=self.PARAMS['concentration_threshold']
-            )
-            if platform:
-                # Volume contraction quality (0-0.7)
-                vol_contract_ratio = platform.get('volume_contraction_ratio', 1.0)
-                if vol_contract_ratio < 0.4:
-                    vol_contraction_quality = 0.7
-                elif vol_contract_ratio < 0.7:
-                    vol_contraction_quality = 0.7 - (vol_contract_ratio - 0.4) / 0.3 * 0.4
-                else:
-                    vol_contraction_quality = max(0, 0.3 - (vol_contract_ratio - 0.7) / 0.3 * 0.3)
+        # NOTE: VCP structure bonus (2.0 max) removed for A1 - this is now A2's primary value
+        # A1 focuses on confirmed breakouts, A2 focuses on compression setups
 
-                # Range contraction quality (0-0.7)
-                range_pct = platform.get('platform_range_pct', 0.15)
-                if range_pct < 0.05:
-                    range_contraction_quality = 0.7
-                elif range_pct < 0.12:
-                    range_contraction_quality = 0.7 - (range_pct - 0.05) / 0.07 * 0.35
-                else:
-                    range_contraction_quality = max(0, 0.35 - (range_pct - 0.12) / 0.08 * 0.35)
-
-                # Wave count bonus (0-0.6) - count contraction waves in platform
-                contraction_quality = platform.get('contraction_quality', 0.5)
-                wave_count_bonus = min(0.6, contraction_quality * 0.6)
-
-                vcp_bonus = vol_contraction_quality + range_contraction_quality + wave_count_bonus
-                bonus += min(2.0, vcp_bonus)
-
-        # Bonus 2: Sector leadership (0.5 max)
+        # Bonus 1: Sector leadership (0.5 max)
         sector_bonus = self._calculate_sector_leadership_bonus(symbol)
         bonus += sector_bonus
 
-        # Bonus 3: Earnings catalyst (0.5 max)
+        # Bonus 2: Earnings catalyst (0.5 max)
         phase0_data = getattr(self, 'phase0_data', {})
         data = phase0_data.get(symbol, {})
         days_to_earnings = data.get('days_to_earnings')
         if days_to_earnings is not None and 7 <= days_to_earnings <= 21:
             bonus += 0.5
 
-        # Bonus 4: Accumulation divergence (0.5 max)
+        # Bonus 3: Accumulation divergence (0.5 max)
         accum_bonus = self._calculate_accumulation_divergence(df)
         bonus += accum_bonus
 
@@ -809,6 +776,419 @@ class MomentumBreakoutStrategy(BaseStrategy):
                 continue
 
         logger.info(f"MomentumBreakout: {len(prefiltered)}/{len(symbols)} passed RS>{self.PARAMS['rs_percentile_min']} + 52w high pre-filter")
+
+        # Use base class screen on pre-filtered symbols
+        return super().screen(prefiltered, max_candidates=max_candidates)
+
+
+class PreBreakoutCompressionStrategy(MomentumBreakoutStrategy):
+    """
+    Strategy A2: PreBreakoutCompression - Anticipatory breakout setups.
+
+    Shares A1's slot budget but uses CP dimension instead of BS.
+    Scores lower by design (no confirmed breakout), typically B-tier.
+
+    Dimensions: ['TC', 'CQ', 'CP', 'VC']
+    - TC: Trend Context (same as A1)
+    - CQ: Consolidation Quality (same as A1)
+    - CP: Compression (NEW - measures volume/range contraction)
+    - VC: Volume Confirmation (same as A1, but for compression detection)
+    """
+
+    NAME = "PreBreakoutCompression"
+    STRATEGY_TYPE = StrategyType.A2
+    DESCRIPTION = "PreBreakoutCompression - VCP compression before breakout"
+    DIMENSIONS = ['TC', 'CQ', 'CP', 'VC']  # CP replaces BS
+
+    # Inherit most params from A1, but adjust for pre-breakout
+    PARAMS = {
+        **MomentumBreakoutStrategy.PARAMS,
+        'breakout_pct': 0.0,  # No breakout required - still in base
+        'bonus_max': 1.5,  # Same bonus pool as A1
+    }
+
+    def filter(self, symbol: str, df: pd.DataFrame) -> bool:
+        """
+        A2 filter: within base, not yet broken out.
+
+        Requirements:
+        - Price within 5% of platform high (not yet broken out)
+        - Price > platform low (still in base)
+        - RS >= 50th percentile (TC gate)
+        - Valid VCP platform detected
+        """
+        # TC hard gate - RS >= 50th percentile
+        data = getattr(self, 'phase0_data', {}).get(symbol, {})
+        rs_pct = data.get('rs_percentile', 0)
+
+        if rs_pct < self.PARAMS['min_rs_percentile']:
+            logger.debug(f"A2_REJ: {symbol} - RS {rs_pct:.1f} < {self.PARAMS['min_rs_percentile']} (TC gate)")
+            return False
+
+        if len(df) < self.PARAMS['min_listing_days']:
+            logger.debug(f"A2_REJ: {symbol} - Insufficient data: {len(df)} < {self.PARAMS['min_listing_days']}")
+            return False
+
+        ind = TechnicalIndicators(df)
+        ind.calculate_all()
+
+        current_price = df['close'].iloc[-1]
+
+        # Layer 0: Tier 1 Pre-Filters
+        ema200 = ind.indicators.get('ema', {}).get('ema200')
+        if ema200 is None or current_price <= ema200:
+            logger.debug(f"A2_REJ: {symbol} - Price {current_price:.2f} <= EMA200 {ema200:.2f}")
+            return False
+
+        ret_3m = data.get('ret_3m')
+        if ret_3m is None:
+            if len(df) >= 63:
+                price_3m = df['close'].iloc[-63]
+                ret_3m = (current_price - price_3m) / price_3m if price_3m > 0 else 0
+            else:
+                ret_3m = 0
+        if ret_3m < -0.20:
+            logger.debug(f"A2_REJ: {symbol} - 3m return {ret_3m:.2%} < -20%")
+            return False
+
+        # Layer 1: VCP Platform Detection
+        platform = ind.detect_vcp_platform(
+            lookback_range=self.PARAMS['platform_lookback'],
+            max_range_pct=self.PARAMS['platform_max_range'],
+            concentration_threshold=self.PARAMS['concentration_threshold']
+        )
+
+        if platform is None or not platform.get('is_valid'):
+            logger.debug(f"A2_REJ: {symbol} - No valid VCP platform detected")
+            return False
+
+        # Layer 2: Pre-breakout requirement - price still INSIDE base
+        platform_high = platform['platform_high']
+        platform_low = platform['platform_low']
+
+        # Price should be within 5% of platform high (not yet broken out)
+        distance_from_high = (current_price - platform_high) / platform_high
+        if distance_from_high > 0.05:
+            logger.debug(f"A2_REJ: {symbol} - Price already broke out: {distance_from_high:.2%} > 5%")
+            return False
+
+        # Price should be above platform low (still in base, not breaking down)
+        if current_price < platform_low:
+            logger.debug(f"A2_REJ: {symbol} - Price below platform low (breaking down)")
+            return False
+
+        # Price should be in upper half of base (showing strength)
+        base_range = platform_high - platform_low
+        position_in_base = (current_price - platform_low) / base_range if base_range > 0 else 0
+        if position_in_base < 0.3:
+            logger.debug(f"A2_REJ: {symbol} - Price in lower {position_in_base:.0%} of base")
+            return False
+
+        logger.debug(f"A2_PASS: {symbol} - Pre-breakout compression detected (distance:{distance_from_high:.2%}, position:{position_in_base:.0%})")
+        return True
+
+    def calculate_dimensions(self, symbol: str, df: pd.DataFrame) -> List[ScoringDimension]:
+        """Calculate 4 dimensions with CP instead of BS."""
+        ind = TechnicalIndicators(df)
+        ind.calculate_all()
+
+        current_price = df['close'].iloc[-1]
+        platform = ind.detect_vcp_platform(
+            lookback_range=self.PARAMS['platform_lookback'],
+            max_range_pct=self.PARAMS['platform_max_range'],
+            concentration_threshold=self.PARAMS['concentration_threshold']
+        )
+
+        if not platform:
+            return []
+
+        platform_high = platform['platform_high']
+        platform_low = platform['platform_low']
+        platform_range_pct = platform['platform_range_pct']
+        breakout_pct = (current_price - platform_high) / platform_high  # Will be negative or small positive
+        clv = ind.calculate_clv()
+        current_volume = df['volume'].iloc[-1]
+        volume_sma20 = df['volume'].tail(20).mean()
+        volume_ratio = current_volume / volume_sma20 if volume_sma20 > 0 else 0
+
+        ema50_distance = ind.distance_from_ema50()
+        metrics_52w = ind.calculate_52w_metrics()
+
+        dimensions = []
+
+        # Dimension 1: Trend Context (TC) - same as A1
+        tc_score = self._calculate_tc(ema50_distance, metrics_52w, clv, df, symbol)
+        dimensions.append(ScoringDimension(
+            name='TC',
+            score=tc_score,
+            max_score=5.0,
+            details={
+                'rs_percentile': getattr(self, 'phase0_data', {}).get(symbol, {}).get('rs_percentile', 50),
+                'distance_from_52w_high': metrics_52w['distance_from_high'],
+                'ema50_distance': ema50_distance['distance_pct'],
+            }
+        ))
+
+        # Dimension 2: Consolidation Quality (CQ) - same as A1
+        pattern_type, cq_score = self._detect_consolidation_pattern(ind, df, platform)
+        dimensions.append(ScoringDimension(
+            name='CQ',
+            score=cq_score,
+            max_score=4.0,
+            details={
+                'pattern_type': pattern_type,
+                'platform_range_pct': platform_range_pct,
+                'concentration_ratio': platform['concentration_ratio'],
+                'contraction_quality': platform.get('contraction_quality', 0.5)
+            }
+        ))
+
+        # Dimension 3: Compression (CP) - NEW, replaces BS
+        cp_score = self._calculate_cp(df=df, platform=platform)
+        dimensions.append(ScoringDimension(
+            name='CP',
+            score=cp_score,
+            max_score=4.0,
+            details={
+                'volume_contraction': platform['volume_contraction_ratio'],
+                'range_contraction': platform_range_pct,
+                'distance_from_pivot': breakout_pct,
+            }
+        ))
+
+        # Dimension 4: Volume Confirmation (VC) - same as A1
+        vc_score = self._calculate_vc(platform, volume_ratio, clv)
+        dimensions.append(ScoringDimension(
+            name='VC',
+            score=vc_score,
+            max_score=4.0,
+            details={
+                'volume_ratio': volume_ratio,
+                'volume_contraction': platform['volume_contraction_ratio'],
+                'clv': clv
+            }
+        ))
+
+        return dimensions
+
+    def _calculate_cp(self, df: pd.DataFrame, platform: Dict) -> float:
+        """
+        Compression Score (CP) - Max 4.0
+
+        Components:
+        1. Volume contraction: last 5d avg < 60% of 20d avg -> +1.5; 60-70% -> +0.8
+        2. Range contraction: last 5d range < 50% of 20d ATR -> +1.5; 50-70% -> +0.8
+        3. Wave count: >=3 contraction waves -> +1.0
+        4. Proximity to pivot: within 1.5% -> full score; 1.5-3% -> interpolate
+        """
+        cp_score = 0.0
+
+        # Component 1: Volume contraction
+        vol_5d = df['volume'].tail(5).mean()
+        vol_20d = df['volume'].tail(20).mean()
+        vol_contract = vol_5d / vol_20d if vol_20d > 0 else 1.0
+
+        if vol_contract < 0.50:
+            cp_score += 1.5
+        elif vol_contract < 0.60:
+            cp_score += 1.2
+        elif vol_contract < 0.70:
+            cp_score += 0.8
+
+        # Component 2: Range contraction
+        range_5d = (df['high'].tail(5).max() - df['low'].tail(5).min())
+        atr_20d = df['high'].tail(20).mean() - df['low'].tail(20).mean()
+        range_contract = range_5d / atr_20d if atr_20d > 0 else 1.0
+
+        if range_contract < 0.50:
+            cp_score += 1.5
+        elif range_contract < 0.70:
+            cp_score += 0.8
+
+        # Component 3: Wave count (simplified)
+        # Count how many times range contracted in last 15 days
+        wave_count = 0
+        for i in range(3):
+            start = i * 5
+            end = start + 5
+            period_range = df['high'].iloc[-end:-start if end else None].max() - \
+                          df['low'].iloc[-end:-start if end else None].min()
+            if period_range < range_5d:
+                wave_count += 1
+
+        if wave_count >= 3:
+            cp_score += 1.0
+
+        # Component 4: Proximity to pivot (platform high)
+        if platform:
+            platform_high = platform['platform_high']
+            current_price = df['close'].iloc[-1]
+            distance = abs(current_price - platform_high) / platform_high
+
+            if distance < 0.015:  # Within 1.5%
+                cp_score += 1.0
+            elif distance < 0.03:  # Within 3%
+                cp_score += 0.5 + (0.03 - distance) / 0.015 * 0.5
+
+        return min(4.0, cp_score)
+
+    def calculate_entry_exit(
+        self,
+        symbol: str,
+        df: pd.DataFrame,
+        dimensions: List[ScoringDimension],
+        score: float,
+        tier: str
+    ) -> Tuple[float, float, float]:
+        """Calculate entry, stop, and target prices for pre-breakout setup."""
+        ind = TechnicalIndicators(df)
+        platform = ind.detect_vcp_platform(
+            lookback_range=self.PARAMS['platform_lookback'],
+            max_range_pct=self.PARAMS['platform_max_range'],
+            concentration_threshold=self.PARAMS['concentration_threshold']
+        )
+
+        current_price = df['close'].iloc[-1]
+        platform_low = platform['platform_low'] if platform else df['low'].tail(20).min()
+        platform_high = platform['platform_high'] if platform else df['high'].tail(20).max()
+
+        # Entry: either current price (if already in position) or above platform high
+        # For A2, we enter slightly before breakout
+        entry = round(current_price, 2)
+
+        # Stop loss: below platform low with buffer
+        stop = platform_low * 0.97  # 3% below platform low
+        stop = max(stop, entry * 0.92)  # 8% stop floor
+        stop = round(stop, 2)
+
+        risk = entry - stop
+
+        # Target: same as A1 - 3R baseline, 4R for S-tier
+        if tier == 'S':
+            target = round(entry + risk * 4, 2)  # 4R for S-tier
+        else:
+            target = round(entry + risk * 3, 2)  # 3R baseline
+
+        return entry, stop, target
+
+    def build_match_reasons(
+        self,
+        symbol: str,
+        df: pd.DataFrame,
+        dimensions: List[ScoringDimension],
+        score: float,
+        tier: str
+    ) -> List[str]:
+        """Build human-readable match reasons for A2."""
+        tc = next((d for d in dimensions if d.name == 'TC'), None)
+        cq = next((d for d in dimensions if d.name == 'CQ'), None)
+        cp = next((d for d in dimensions if d.name == 'CP'), None)
+        vc = next((d for d in dimensions if d.name == 'VC'), None)
+
+        position_pct = self.calculate_position_pct(tier)
+
+        ind = TechnicalIndicators(df)
+        platform = ind.detect_vcp_platform(
+            lookback_range=self.PARAMS['platform_lookback'],
+            max_range_pct=self.PARAMS['platform_max_range'],
+            concentration_threshold=self.PARAMS['concentration_threshold']
+        )
+
+        pattern_type = cq.details.get('pattern_type', 'VCP') if cq else 'VCP'
+        distance_from_pivot = cp.details.get('distance_from_pivot', 0) * 100
+
+        return [
+            f"Score: {score:.2f}/15 (Tier {tier}-{position_pct*100:.0f}%)",
+            f"TC:{tc.score:.2f} CQ:{cq.score:.2f} CP:{cp.score:.2f} VC:{vc.score:.2f}",
+            f"{pattern_type.upper()} {platform['platform_days']}d compression (±{platform['platform_range_pct']*100:.1f}%)",
+            f"Distance from pivot: {distance_from_pivot:.1f}% | Vol {vc.details.get('volume_ratio', 0):.1f}x",
+            f"50EMA: {tc.details.get('ema50_distance', 0)*100:.1f}% | 52w: {tc.details.get('distance_from_52w_high', 0)*100:.1f}%"
+        ]
+
+    def screen(self, symbols: List[str], max_candidates: int = 5) -> List[StrategyMatch]:
+        """
+        Screen all symbols with Phase 0 pre-filter for A2.
+        - 52-week high proximity <25%
+        - RS > 50 percentile (lower bar than A1, looking for emerging momentum)
+        """
+        prefiltered = []
+
+        # Phase 0.1: Use phase0_data from screener if available
+        phase0_data = getattr(self, 'phase0_data', None)
+        if phase0_data:
+            logger.info("PreBreakoutCompression: Phase 0.1 - Using phase0_data from screener")
+            rs_scores = []
+            for symbol in symbols:
+                if symbol in phase0_data:
+                    data = phase0_data[symbol]
+                    rs_scores.append({
+                        'symbol': symbol,
+                        'rs': data.get('rs_raw', 0),
+                        'percentile': data.get('rs_percentile', 50),
+                        'distance_52w': data.get('distance_from_52w_high', 0),
+                        'df': self._get_data(symbol)
+                    })
+        else:
+            logger.info("PreBreakoutCompression: Phase 0.1 - Calculating RS scores (no phase0_data)...")
+            rs_scores = []
+            for symbol in symbols:
+                try:
+                    df = self._get_data(symbol)
+                    if df is None or len(df) < self.PARAMS['min_listing_days']:
+                        continue
+
+                    current_price = df['close'].iloc[-1]
+
+                    # Calculate returns
+                    price_3m = df['close'].iloc[-63] if len(df) >= 63 else df['close'].iloc[0]
+                    price_6m = df['close'].iloc[-126] if len(df) >= 126 else df['close'].iloc[0]
+                    price_12m = df['close'].iloc[-252] if len(df) >= 252 else df['close'].iloc[0]
+
+                    ret_3m = (current_price - price_3m) / price_3m
+                    ret_6m = (current_price - price_6m) / price_6m
+                    ret_12m = (current_price - price_12m) / price_12m
+
+                    # RS score
+                    rs_raw = 0.4 * ret_3m + 0.3 * ret_6m + 0.3 * ret_12m
+                    rs_scores.append({'symbol': symbol, 'rs': rs_raw, 'df': df})
+                except Exception as e:
+                    logger.debug(f"Error calculating RS for {symbol}: {e}")
+                    continue
+
+            # Calculate RS percentile if not using phase0_data
+            if not rs_scores:
+                return []
+            all_rs = [s['rs'] for s in rs_scores]
+            for item in rs_scores:
+                below = sum(1 for r in all_rs if r < item['rs'])
+                item['percentile'] = (below / len(all_rs)) * 100
+
+        # Phase 0.2: Pre-filter by 52w high and RS > 50 (lower bar than A1)
+        logger.info(f"A2: Phase 0.2 - Pre-filtering by 52w high and RS > 50...")
+        for item in rs_scores:
+            try:
+                if item['percentile'] < 50:  # Lower bar than A1's 80
+                    continue
+
+                # Use pre-calculated distance_52w from phase0_data if available
+                distance_52w = item.get('distance_52w')
+                if distance_52w is None:
+                    # Fallback: calculate 52w metrics
+                    df = item['df']
+                    if df is None:
+                        continue
+                    ind = TechnicalIndicators(df)
+                    metrics_52w = ind.calculate_52w_metrics()
+                    distance_52w = metrics_52w.get('distance_from_high', 1.0)
+
+                # Relaxed pre-filter: <25% from 52w high
+                if distance_52w < 0.25:
+                    prefiltered.append(item['symbol'])
+            except Exception as e:
+                logger.debug(f"Error pre-filtering {item['symbol']}: {e}")
+                continue
+
+        logger.info(f"PreBreakoutCompression: {len(prefiltered)}/{len(symbols)} passed RS>50 + 52w high pre-filter")
 
         # Use base class screen on pre-filtered symbols
         return super().screen(prefiltered, max_candidates=max_candidates)

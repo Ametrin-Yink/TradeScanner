@@ -5,20 +5,22 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-# Phase 1 Allocation Table (30 total slots) - clean A-H naming
+# Phase 1 Allocation Table (30 total slots) - clean A-H naming with A1/A2 sub-modes
 REGIME_ALLOCATION_TABLE: Dict[str, Dict[str, int]] = {
     'bull_strong': {
-        'A': 8,  # MomentumBreakout
-        'B': 6,  # PullbackEntry
-        'C': 4,  # SupportBounce
-        'D': 0,  # DistributionTop
-        'E': 0,  # AccumulationBottom
-        'F': 0,  # CapitulationRebound
-        'G': 8,  # EarningsGap
-        'H': 4,  # RelativeStrengthLong
+        'A1': 4,  # MomentumBreakout (confirmed)
+        'A2': 4,  # PreBreakoutCompression (pre-breakout)
+        'B': 6,   # PullbackEntry
+        'C': 4,   # SupportBounce
+        'D': 0,   # DistributionTop
+        'E': 0,   # AccumulationBottom
+        'F': 0,   # CapitulationRebound
+        'G': 8,   # EarningsGap
+        'H': 4,   # RelativeStrengthLong
     },
     'bull_moderate': {
-        'A': 8,
+        'A1': 4,
+        'A2': 4,
         'B': 6,
         'C': 4,
         'D': 0,
@@ -28,7 +30,8 @@ REGIME_ALLOCATION_TABLE: Dict[str, Dict[str, int]] = {
         'H': 4,
     },
     'neutral': {
-        'A': 6,
+        'A1': 3,
+        'A2': 3,
         'B': 5,
         'C': 5,
         'D': 4,
@@ -38,7 +41,8 @@ REGIME_ALLOCATION_TABLE: Dict[str, Dict[str, int]] = {
         'H': 3,
     },
     'bear_moderate': {
-        'A': 4,
+        'A1': 2,
+        'A2': 2,
         'B': 4,
         'C': 4,
         'D': 5,
@@ -48,17 +52,19 @@ REGIME_ALLOCATION_TABLE: Dict[str, Dict[str, int]] = {
         'H': 6,
     },
     'bear_strong': {
-        'A': 0,
+        'A1': 1,  # NEW: A gets 2 slots in bear_strong (split A1/A2)
+        'A2': 1,
         'B': 0,
         'C': 4,
         'D': 6,
         'E': 6,
         'F': 8,
         'G': 0,
-        'H': 6,
+        'H': 4,  # Reduced from 6 to make room for A
     },
     'extreme_vix': {
-        'A': 0,
+        'A1': 0,
+        'A2': 0,
         'B': 0,
         'C': 0,
         'D': 3,
@@ -80,7 +86,7 @@ REGIME_SCALARS = {
 }
 
 # Strategies exempt from extreme regime scalar reduction
-EXTREME_EXEMPT_STRATEGIES = ['CapitulationRebound', 'RelativeStrengthLong', 'EarningsGap', 'SupportBounce']
+EXTREME_EXEMPT_STRATEGIES = ['CapitulationRebound', 'RelativeStrengthLong', 'EarningsGap', 'SupportBounce', 'PreBreakoutCompression']
 
 
 class MarketRegimeDetector:
