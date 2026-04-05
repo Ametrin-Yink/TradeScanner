@@ -31,6 +31,7 @@ class DistributionTopStrategy(BaseStrategy):
 
     PARAMS = {
         'min_dollar_volume': 50_000_000,
+        'min_dollar_volume_short': 30_000_000,  # v7.0: liquidity guard for short strategies
         'min_atr_pct': 0.015,
         'min_listing_days': 60,
         'max_distance_from_60d_high': 0.08,
