@@ -37,14 +37,31 @@ class EarningsGapStrategy(BaseStrategy):
         phase0_data = getattr(self, 'phase0_data', {})
         data = phase0_data.get(symbol, {})
 
-        # Check earnings timing
+        # Check earnings timing with gap-size-dependent window
         days_to_earnings = data.get('days_to_earnings')
-        if days_to_earnings is None or days_to_earnings > 0 or days_to_earnings < -self.PARAMS['max_days_post_earnings']:
-            logger.debug(f"EG_REJ: {symbol} - not in earnings window: {days_to_earnings}")
+        gap_1d_pct = data.get('gap_1d_pct', 0)
+
+        if days_to_earnings is None or days_to_earnings > 0:
+            logger.debug(f"EG_REJ: {symbol} - not post-earnings: {days_to_earnings}")
+            return False
+
+        # v7.0: Gap-size-dependent eligibility window
+        days_post_earnings = abs(days_to_earnings)
+        gap_size = abs(gap_1d_pct)
+
+        # Determine max days eligible by gap size
+        if gap_size >= 0.10:
+            max_days = 5
+        elif gap_size >= 0.07:
+            max_days = 3
+        else:
+            max_days = 2
+
+        if days_post_earnings > max_days or days_post_earnings < 1:
+            logger.debug(f"EG_REJ: {symbol} - Outside eligibility window (gap={gap_size:.1%}, days={days_post_earnings}, max={max_days})")
             return False
 
         # Check gap size
-        gap_1d_pct = data.get('gap_1d_pct', 0)
         if abs(gap_1d_pct) < self.PARAMS['min_gap_pct']:
             logger.debug(f"EG_REJ: {symbol} - gap too small: {gap_1d_pct:.2%}")
             return False
