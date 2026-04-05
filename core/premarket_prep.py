@@ -615,6 +615,17 @@ class PreMarketPrep:
 
                 g_eligible = (days_post_earnings >= 1 and days_post_earnings <= g_max_days)
 
+            # NEW: Detect VCP platform (Task 12a)
+            vcp_data = indicators.detect_vcp_platform(
+                lookback_range=(15, 60),
+                max_range_pct=0.12,
+                concentration_threshold=0.50
+            )
+
+            vcp_detected = vcp_data is not None and vcp_data.get('is_valid', False)
+            vcp_tightness = vcp_data.get('platform_range_pct') if vcp_data else None
+            vcp_volume_ratio = vcp_data.get('volume_contraction_ratio') if vcp_data else None
+
             return {
                 'cache_date': datetime.now().date().isoformat(),
                 'current_price': current_price,
@@ -650,6 +661,10 @@ class PreMarketPrep:
                 'g_max_days': g_max_days,
                 'days_post_earnings': days_post_earnings,
                 'g_eligible': g_eligible,
+                # v7.0 Task 12a: VCP pre-calculation
+                'vcp_detected': vcp_detected,
+                'vcp_tightness': vcp_tightness,
+                'vcp_volume_ratio': vcp_volume_ratio,
             }
 
         except Exception as e:

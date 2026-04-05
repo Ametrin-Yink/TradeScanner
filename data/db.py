@@ -69,7 +69,11 @@ class Database:
             # v7.0 Strategy G eligibility pre-calculation
             'g_max_days': 'INTEGER',
             'days_post_earnings': 'INTEGER',
-            'g_eligible': 'INTEGER'
+            'g_eligible': 'INTEGER',
+            # v7.0 Task 12a: VCP pre-calculation
+            'vcp_detected': 'BOOLEAN',
+            'vcp_tightness': 'REAL',
+            'vcp_volume_ratio': 'REAL'
         }
 
         for column, dtype in new_columns.items():
@@ -163,7 +167,9 @@ class Database:
             'accum_ratio_15d', 'days_to_earnings', 'earnings_date', 'gap_1d_pct',
             'gap_direction', 'spy_regime',
             # v7.0 Strategy G eligibility
-            'g_max_days', 'days_post_earnings', 'g_eligible'
+            'g_max_days', 'days_post_earnings', 'g_eligible',
+            # v7.0 Task 12a: VCP pre-calculation
+            'vcp_detected', 'vcp_tightness', 'vcp_volume_ratio'
         ]
 
         values = []
@@ -660,7 +666,10 @@ CREATE TABLE IF NOT EXISTS tier1_cache (
     spy_regime TEXT,
     g_max_days INTEGER,
     days_post_earnings INTEGER,
-    g_eligible INTEGER
+    g_eligible INTEGER,
+    vcp_detected BOOLEAN,
+    vcp_tightness REAL,
+    vcp_volume_ratio REAL
 );
 
 -- Tier 3 cache (market data)
