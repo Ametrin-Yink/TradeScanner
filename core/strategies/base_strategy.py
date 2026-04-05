@@ -16,6 +16,36 @@ from data.db import Database
 logger = logging.getLogger(__name__)
 
 
+# Strategy max scores for normalization to 0-15 scale
+STRATEGY_MAX_SCORES = {
+    'MomentumBreakout': 18.5,
+    'PreBreakoutCompression': 18.5,
+    'PullbackEntry': 17.0,
+    'SupportBounce': 15.0,
+    'DistributionTop': 15.0,
+    'AccumulationBottom': 15.0,
+    'CapitulationRebound': 15.0,
+    'EarningsGap': 15.0,
+    'RelativeStrengthLong': 13.0,
+}
+
+
+def normalize_score(raw_score: float, strategy_name: str) -> float:
+    """
+    Normalize raw score to 0-15 scale.
+
+    Args:
+        raw_score: Raw score from strategy
+        strategy_name: Strategy NAME (e.g., 'MomentumBreakout')
+
+    Returns:
+        Normalized score on 0-15 scale
+    """
+    strategy_max = STRATEGY_MAX_SCORES.get(strategy_name, 15.0)
+    normalized = (raw_score / strategy_max) * 15.0
+    return round(normalized, 2)
+
+
 class StrategyType(Enum):
     """8 trading strategies - clean A-H naming."""
     A = "A"  # MomentumBreakout
@@ -107,7 +137,7 @@ class BaseStrategy(ABC):
 
     def calculate_score(self, dimensions: List[ScoringDimension], df: pd.DataFrame = None, symbol: str = None) -> Tuple[float, str]:
         """
-        Calculate total score and tier from dimensions.
+        Calculate total score and tier from dimensions with normalization.
 
         Args:
             dimensions: List of dimension scores
@@ -117,14 +147,18 @@ class BaseStrategy(ABC):
         Returns:
             Tuple of (total_score, tier)
         """
-        total = round(sum(d.score for d in dimensions), 2)
-        total = min(total, self.MAX_SCORE)
+        raw_total = round(sum(d.score for d in dimensions), 2)
 
-        if total >= self.TIER_S_MIN:
+        # Normalize to 0-15 scale
+        total = normalize_score(raw_total, self.NAME)
+        total = min(total, 15.0)  # Cap at 15
+
+        # Tier thresholds on normalized 0-15 scale
+        if total >= self.TIER_S_MIN:  # 12
             return total, 'S'
-        elif total >= self.TIER_A_MIN:
+        elif total >= self.TIER_A_MIN:  # 9
             return total, 'A'
-        elif total >= self.TIER_B_MIN:
+        elif total >= self.TIER_B_MIN:  # 7
             return total, 'B'
         else:
             return total, 'C'  # Reject
