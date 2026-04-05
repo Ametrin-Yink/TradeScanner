@@ -572,7 +572,9 @@ class MomentumBreakoutStrategy(BaseStrategy):
         elif vol_contract < 1.00:
             vc_score += 0.2 + (1.00 - vol_contract) / 0.20 * 0.6  # 0.2-0.8
         else:
-            vc_score += 0  # > 1.00
+            # A1 FIX: Don't penalize >1.0, just don't reward it
+            # Stocks active during base can still break out successfully
+            vc_score += 0.1  # Minimal points, no penalty
 
         # 2. Breakout volume - breakout day / avg20d (0-1.5 pts)
         if volume_ratio >= 3.0:
