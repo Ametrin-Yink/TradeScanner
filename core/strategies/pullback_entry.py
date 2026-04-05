@@ -305,7 +305,7 @@ class PullbackEntryStrategy(BaseStrategy):
             }
         ))
 
-        # Dimension 4: Environment Bonus - +2/-10 points (v5.0: ETF-based sector leadership)
+        # Dimension 4: Environment Bonus - +2/-10 points (v7.0: momentum persistence replaces gap veto)
         bonus_score = 0
 
         # v5.0: Sector leadership bonus (0-1.0) based on sector ETF performance
@@ -313,9 +313,10 @@ class PullbackEntryStrategy(BaseStrategy):
         sector_leadership_score = self._calculate_sector_leadership(sector)
         bonus_score += sector_leadership_score
 
-        # Gap estimation (0-1.0)
-        gap_data = ind.estimate_gap_impact()
-        bonus_score += gap_data.get('score', 0)
+        # v7.0: Momentum persistence vs SPY (0-1.0) - replaces gap veto bonus
+        # Rewards presence of relative strength, not absence of badness
+        momentum_persistence_score = self._calculate_momentum_persistence(symbol, df)
+        bonus_score += momentum_persistence_score
 
         dimensions.append(ScoringDimension(
             name='BONUS',
@@ -324,8 +325,10 @@ class PullbackEntryStrategy(BaseStrategy):
             details={
                 'sector': sector,
                 'sector_leadership_score': sector_leadership_score,
-                'gap_estimate_pct': gap_data.get('gap_estimate_pct', 0),
-                'gap_score': gap_data.get('score', 0)
+                'momentum_persistence_score': momentum_persistence_score,
+                'stock_5d_return': self._calculate_momentum_persistence_details(symbol, df).get('stock_5d_return', 0),
+                'spy_5d_return': self._calculate_momentum_persistence_details(symbol, df).get('spy_5d_return', 0),
+                'outperformance_pct': self._calculate_momentum_persistence_details(symbol, df).get('outperformance_pct', 0)
             }
         ))
 
@@ -582,3 +585,79 @@ class PullbackEntryStrategy(BaseStrategy):
         except Exception as e:
             logger.debug(f"Error calculating sector leadership for {sector}: {e}")
             return 0.0
+
+    def _calculate_momentum_persistence(self, symbol: str, df: pd.DataFrame) -> float:
+        """
+        Calculate momentum persistence vs SPY (0-1.0 pts).
+
+        Measures stock's 5d return relative to SPY's 5d return.
+        Rewards presence of relative strength during pullback.
+
+        Scoring:
+        - Outperformance > 2%: +1.0
+        - Outperformance > 1%: +0.5
+        - Otherwise: 0
+
+        Args:
+            symbol: Stock symbol
+            df: OHLCV DataFrame
+
+        Returns:
+            Momentum persistence score 0-1.0
+        """
+        if len(df) < 5:
+            return 0.0
+
+        # Stock 5d return
+        stock_return = (df['close'].iloc[-1] - df['close'].iloc[-5]) / df['close'].iloc[-5]
+
+        # SPY 5d return
+        spy_df = self.sector_etf_data.get('SPY')
+        if spy_df is None or len(spy_df) < 5:
+            return 0.0
+
+        spy_return = (spy_df['close'].iloc[-1] - spy_df['close'].iloc[-5]) / spy_df['close'].iloc[-5]
+
+        # Outperformance
+        outperformance = stock_return - spy_return
+
+        # Score based on outperformance
+        if outperformance > 0.02:
+            return 1.0
+        elif outperformance > 0.01:
+            return 0.5
+        else:
+            return 0.0
+
+    def _calculate_momentum_persistence_details(self, symbol: str, df: pd.DataFrame) -> Dict[str, float]:
+        """
+        Calculate momentum persistence details for reporting.
+
+        Args:
+            symbol: Stock symbol
+            df: OHLCV DataFrame
+
+        Returns:
+            Dict with stock_5d_return, spy_5d_return, outperformance_pct
+        """
+        if len(df) < 5:
+            return {'stock_5d_return': 0.0, 'spy_5d_return': 0.0, 'outperformance_pct': 0.0}
+
+        # Stock 5d return
+        stock_return = (df['close'].iloc[-1] - df['close'].iloc[-5]) / df['close'].iloc[-5]
+
+        # SPY 5d return
+        spy_df = self.sector_etf_data.get('SPY')
+        if spy_df is None or len(spy_df) < 5:
+            return {'stock_5d_return': stock_return, 'spy_5d_return': 0.0, 'outperformance_pct': 0.0}
+
+        spy_return = (spy_df['close'].iloc[-1] - spy_df['close'].iloc[-5]) / spy_df['close'].iloc[-5]
+
+        # Outperformance
+        outperformance = stock_return - spy_return
+
+        return {
+            'stock_5d_return': stock_return,
+            'spy_5d_return': spy_return,
+            'outperformance_pct': outperformance
+        }
