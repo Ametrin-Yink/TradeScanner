@@ -1,5 +1,5 @@
 import logging
-from typing import Dict
+from typing import Dict, Optional
 import pandas as pd
 import numpy as np
 
@@ -144,6 +144,40 @@ class MarketRegimeDetector:
         logger.info(f"Regime: {regime} (SPY=${current_price:.2f}, EMA50=${ema50:.2f}, EMA200=${ema200:.2f}, VIX={vix_current:.1f})")
         return regime
 
+    def _apply_hard_rules(self, preliminary_regime: str,
+                          spy_data: Dict, iwm_data: Optional[pd.DataFrame]) -> str:
+        """
+        Apply hard technical rules to override AI sentiment.
+
+        Hard Rules:
+        1. SPY < EMA50 AND IWM < EMA200 → floor at bear_moderate
+        2. VIX > 30 → extreme_vix (already exists, handled before this method)
+
+        Args:
+            preliminary_regime: Regime from AI sentiment analysis
+            spy_data: Dict with 'price' and 'ema50' keys
+            iwm_data: IWM DataFrame with 'close' column
+
+        Returns:
+            Final regime string after applying hard rules
+        """
+        # Rule 1: Broad market weakness floor
+        spy_below_ema50 = spy_data.get('price', 0) < spy_data.get('ema50', float('inf'))
+
+        iwm_below_ema200 = False
+        if iwm_data is not None and len(iwm_data) >= 200:
+            iwm_price = iwm_data['close'].iloc[-1]
+            iwm_ema200 = iwm_data['close'].ewm(span=200, adjust=False).mean().iloc[-1]
+            iwm_below_ema200 = iwm_price < iwm_ema200
+
+        if spy_below_ema50 and iwm_below_ema200:
+            # Floor at bear_moderate - AI can call bear_strong but not bull/neutral
+            if preliminary_regime in ['neutral', 'bull_moderate', 'bull_strong']:
+                logger.info(f"Hard rule override: SPY<EMA50 + IWM<EMA200 → floor at bear_moderate (was {preliminary_regime})")
+                return 'bear_moderate'
+
+        return preliminary_regime
+
     def detect_regime_ai(self, spy_df: pd.DataFrame, vix_df: pd.DataFrame,
                          tavily_results: list, ai_sentiment: str) -> str:
         """
@@ -151,8 +185,9 @@ class MarketRegimeDetector:
 
         Priority:
         1. If VIX > 30 AND tavily shows fear/extreme volatility -> extreme_vix
-        2. Use ai_sentiment if confidence >= 70
-        3. Fallback to technical detection
+        2. Apply hard rules (SPY/IWM technical floor)
+        3. Use ai_sentiment if valid regime
+        4. Fallback to technical detection
 
         Returns one of: bull_strong, bull_moderate, neutral,
         bear_moderate, bear_strong, extreme_vix
@@ -163,14 +198,44 @@ class MarketRegimeDetector:
         if vix_current > 30:
             return 'extreme_vix'
 
-        # Trust AI sentiment if provided
+        # Step 1: Get preliminary regime from AI sentiment
         valid_regimes = ['bull_strong', 'bull_moderate', 'neutral',
                          'bear_moderate', 'bear_strong', 'extreme_vix']
-        if ai_sentiment in valid_regimes:
-            return ai_sentiment
 
-        # Fallback to technical
-        return self.detect_regime(spy_df, vix_df)
+        if ai_sentiment in valid_regimes:
+            preliminary_regime = ai_sentiment
+        else:
+            # Fallback to technical
+            preliminary_regime = self.detect_regime(spy_df, vix_df)
+
+        # Step 2: Get IWM data for hard rules
+        iwm_df = self._get_iwm_data()
+
+        # Step 3: Apply hard rules
+        spy_data = {
+            'price': spy_df['close'].iloc[-1],
+            'ema50': spy_df['close'].ewm(span=50, adjust=False).mean().iloc[-1]
+        }
+
+        final_regime = self._apply_hard_rules(preliminary_regime, spy_data, iwm_df)
+
+        logger.info(f"Final regime: {final_regime} (preliminary: {preliminary_regime})")
+
+        return final_regime
+
+    def _get_iwm_data(self) -> Optional[pd.DataFrame]:
+        """
+        Get IWM DataFrame from tier3 cache.
+
+        Returns:
+            IWM DataFrame with 'close' column, or None if not available
+        """
+        from data.db import db
+        try:
+            return db.get_tier3_cache('IWM')
+        except Exception as e:
+            logger.warning(f"Failed to load IWM data: {e}")
+            return None
 
     def get_allocation(self, regime: str) -> Dict[str, int]:
         """
