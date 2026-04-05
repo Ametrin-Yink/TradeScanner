@@ -42,7 +42,7 @@ DEFAULT_SETTINGS = {
         "generate_charts": True,
         "chart_candles": 60,
         "web_port": 19801,
-        "retention_days": 15,
+        "retention_days": 60,
     },
     "notification": {
         "discord_enabled": True,
