@@ -448,8 +448,9 @@ class StrategyScreener:
         regime: str
     ) -> List[StrategyMatch]:
         """
-        Select candidates with duplicate handling.
+        Select candidates with duplicate handling and sector cap.
         If stock appears in multiple strategies, keep highest technical score.
+        Apply soft sector cap of max 4 candidates per sector.
         Return up to 30 unique candidates.
         """
         from collections import defaultdict
@@ -471,20 +472,37 @@ class StrategyScreener:
             strategy_cands.sort(key=lambda x: x.technical_snapshot.get('score', 0), reverse=True)
             selected_by_letter[letter] = strategy_cands[:slots]
 
-        # Flatten and handle duplicates - keep best score per symbol
+        # Flatten and handle duplicates with sector cap
+        SECTOR_MAX = 4  # Soft cap per sector
+        sector_counts = defaultdict(int)  # Track sector counts
         best_by_symbol = {}
+
         for letter, candidates in selected_by_letter.items():
             for c in candidates:
                 symbol = c.symbol
+                sector = c.technical_snapshot.get('sector', 'Unknown')
                 current_score = c.technical_snapshot.get('score', 0)
+
+                # Skip if sector already at cap (Unknown sector exempt from cap)
+                if sector != 'Unknown' and sector_counts[sector] >= SECTOR_MAX:
+                    logger.debug(f"Skipping {symbol} ({sector}): sector at cap ({sector_counts[sector]}/{SECTOR_MAX})")
+                    continue
 
                 if symbol not in best_by_symbol:
                     best_by_symbol[symbol] = c
+                    if sector != 'Unknown':
+                        sector_counts[sector] += 1
                 else:
                     # Keep the one with higher technical score
                     existing_score = best_by_symbol[symbol].technical_snapshot.get('score', 0)
                     if current_score > existing_score:
+                        # Decrement old sector count, increment new
+                        old_sector = best_by_symbol[symbol].technical_snapshot.get('sector', 'Unknown')
+                        if old_sector != 'Unknown' and old_sector != sector:
+                            sector_counts[old_sector] -= 1
                         best_by_symbol[symbol] = c
+                        if sector != 'Unknown':
+                            sector_counts[sector] += 1
 
         # Convert to list (up to 30)
         selected = list(best_by_symbol.values())
@@ -496,6 +514,7 @@ class StrategyScreener:
         final = selected[:30]
 
         logger.info(f"Selected {len(final)} unique candidates (removed {len(selected) - len(final)} duplicates)")
+        logger.info(f"Sector distribution: {dict(sector_counts)}")
 
         # Set regime on all
         for c in final:
