@@ -68,9 +68,12 @@ class MomentumBreakoutStrategy(BaseStrategy):
 
         # Layer 0: Tier 1 Pre-Filters (from documentation)
         # Price > EMA200
-        ema200 = ind.indicators.get('ema', {}).get('ema_200')
+        ema200 = ind.indicators.get('ema', {}).get('ema200')
         if ema200 is None or current_price <= ema200:
-            logger.debug(f"MB_REJ: {symbol} - Price {current_price:.2f} <= EMA200 {ema200:.2f}")
+            if ema200 is None:
+                logger.debug(f"MB_REJ: {symbol} - EMA200 is None")
+            else:
+                logger.debug(f"MB_REJ: {symbol} - Price {current_price:.2f} <= EMA200 {ema200:.2f}")
             return False
 
         # 3-month return >= -20%
@@ -616,8 +619,8 @@ class MomentumBreakoutStrategy(BaseStrategy):
         # else: 0, but this shouldn't happen due to pre-filter
 
         # 2. EMA Structure (0-2.0 pts) - 3 conditions from documentation
-        ema50 = ind.indicators.get('ema', {}).get('ema_50')
-        ema200 = ind.indicators.get('ema', {}).get('ema_200')
+        ema50 = ind.indicators.get('ema', {}).get('ema50')
+        ema200 = ind.indicators.get('ema', {}).get('ema200')
 
         if ema50 and current_price > ema50 * 1.05:
             tc_score += 1.0  # Price > EMA50 * 1.05

@@ -87,8 +87,8 @@ class RelativeStrengthLongStrategy(BaseStrategy):
         # RD: RS Divergence
         rd_score = self._calculate_rd(data, df)
 
-        # SH: Support Hold
-        sh_score = self._calculate_sh(df)
+        # SH: Support Hold (updated to use data param for 52w high)
+        sh_score = self._calculate_sh(df, data)
 
         # CQ: Compression Quality
         cq_score = self._calculate_cq(df)
@@ -104,11 +104,16 @@ class RelativeStrengthLongStrategy(BaseStrategy):
         ]
 
     def _calculate_rd(self, data: Dict, df: pd.DataFrame) -> float:
-        """RS Divergence - 3 components: RS percentile, absolute divergence, consistency."""
+        """
+        RS Divergence - 3 components per v5.0 spec:
+        1. RS percentile (0-3.0) - current RS rank vs universe
+        2. Absolute divergence (0-2.0) - stock vs SPY 20d return
+        3. Consistency (0-1.0) - RS percentile stability over last 10 days
+        """
         rs_pct = data.get('rs_percentile', 50)
         score = 0.0
 
-        # 1. RS percentile (0-3.0)
+        # 1. RS percentile (0-3.0) per v5.0 spec
         if rs_pct >= 95:
             score += 3.0
         elif rs_pct >= 90:
@@ -134,60 +139,118 @@ class RelativeStrengthLongStrategy(BaseStrategy):
             elif divergence >= 0.02:
                 score += 0.3 + (divergence - 0.02) * 16.67
 
-        # 3. Consistency - days outperforming SPY in last 10 (0-1.0)
-        if spy_df is not None and len(df) >= 10 and len(spy_df) >= 10:
-            outperf_days = 0
-            for i in range(1, 11):
-                if len(df) > i and len(spy_df) > i:
-                    stock_daily = df['close'].iloc[-i] / df['close'].iloc[-i-1] - 1
-                    spy_daily = spy_df['close'].iloc[-i] / spy_df['close'].iloc[-i-1] - 1
-                    if stock_daily > spy_daily:
-                        outperf_days += 1
-
-            if outperf_days >= 8:
-                score += 1.0
-            elif outperf_days >= 6:
-                score += 0.7
-            elif outperf_days >= 5:
-                score += 0.5
+        # 3. Consistency - RS percentile stability over last 10 days (0-1.0)
+        # Per v5.0 spec: "Score 1.0 if RS percentile has been >= 75th for all of last 10 trading days"
+        consistency_score = self._calculate_rs_consistency(df, spy_df)
+        score += consistency_score
 
         return min(6.0, score)
 
-    def _calculate_sh(self, df: pd.DataFrame) -> float:
-        """Support Hold - holding support while market declines."""
-        current_price = df['close'].iloc[-1]
-        low_20d = df['low'].tail(20).min()
+    def _calculate_rs_consistency(self, df: pd.DataFrame, spy_df: pd.DataFrame) -> float:
+        """
+        Calculate RS percentile stability over last 10 trading days.
 
+        Per v5.0 spec:
+        - Calculate 3m return for each of the last 10 days
+        - Rank each day's RS vs universe (approximated by checking if RS > 0)
+        - Score 1.0 if RS percentile >= 75th for all 10 days
+        - Otherwise score 0
+
+        Note: True RS percentile requires universe-wide data for each historical day.
+        Since we only have single-stock data here, we approximate by checking if the
+        stock's 3m return was positive (outperforming a flat market) for all 10 days.
+        This is a reasonable proxy since RS percentile >= 75th typically requires
+        sustained positive relative performance.
+        """
+        if len(df) < 73:  # Need 10 days + 63 days for 3m return
+            return 0.0
+
+        if spy_df is None or len(spy_df) < 73:
+            return 0.0
+
+        days_at_75th_or_higher = 0
+
+        for i in range(10):
+            # Get data as of i days ago
+            end_idx = -(i + 1)
+            start_idx = -(i + 64)  # 63 trading days before end_idx
+
+            if abs(start_idx) > len(df) or abs(start_idx) > len(spy_df):
+                continue
+
+            # Calculate 3m return as of i days ago
+            stock_ret_3m = (df['close'].iloc[end_idx] / df['close'].iloc[start_idx] - 1)
+            spy_ret_3m = (spy_df['close'].iloc[end_idx] / spy_df['close'].iloc[start_idx] - 1)
+
+            # RS raw = 3m return (simplified - full calc would need 6m/12m too)
+            rs_raw = stock_ret_3m
+
+            # Approximation: RS >= 75th percentile typically means:
+            # - Positive 3m return AND outperforming SPY
+            # This is a heuristic since we can't calculate true percentile without universe data
+            if rs_raw >= 0.05 and stock_ret_3m > spy_ret_3m:
+                days_at_75th_or_higher += 1
+
+        # Per spec: all 10 days must be >= 75th percentile for full score
+        if days_at_75th_or_higher >= 10:
+            return 1.0
+        elif days_at_75th_or_higher >= 7:
+            return 0.7
+        elif days_at_75th_or_higher >= 5:
+            return 0.5
+        else:
+            return 0.0
+
+    def _calculate_sh(self, df: pd.DataFrame, data: Dict) -> float:
+        """
+        Structure Health - per v5.0 spec (4.0 max).
+
+        Components:
+        1. EMA alignment (0-2.0 pts)
+        2. 52-week high proximity (0-1.5 pts)
+        3. Recent trend (0-0.5 pts)
+        """
+        ind = TechnicalIndicators(df)
+        ind.calculate_all()
+
+        current_price = df['close'].iloc[-1]
         score = 0.0
 
-        # Near support (0-2.5)
-        distance_from_low = (current_price - low_20d) / low_20d
-        if distance_from_low < 0.01:
-            score += 2.5
-        elif distance_from_low < 0.03:
+        # 1. EMA alignment (0-2.0 pts) per v5.0 spec
+        ema8 = ind.indicators.get('ema', {}).get('ema8', current_price)
+        ema21 = ind.indicators.get('ema', {}).get('ema21', current_price)
+        ema50 = ind.indicators.get('ema', {}).get('ema50', current_price)
+        ema200 = ind.indicators.get('ema', {}).get('ema200', current_price)
+
+        # Check full stack alignment
+        full_stack = (current_price > ema21 > ema50 > ema200)
+        price_above_ema50 = current_price > ema50
+        ema50_above_ema200 = ema50 > ema200
+        price_above_ema200 = current_price > ema200
+
+        if full_stack:
             score += 2.0
-        elif distance_from_low < 0.05:
+        elif price_above_ema50 and ema50_above_ema200:
             score += 1.5
-        elif distance_from_low < 0.08:
-            score += 1.0
+        elif price_above_ema200:
+            score += 0.8
+        # else: 0 points (price < EMA200)
 
-        # Price holding while SPY declining (0-1.5)
-        # Check if price is flat/up while SPY is down
-        spy_df = getattr(self, '_spy_df', None)
-        if spy_df is None:
-            logger.debug(f"{df.get('symbol', 'unknown')}: SPY data not available for divergence calculation")
-        elif len(spy_df) >= 5:
-            spy_return_5d = (spy_df['close'].iloc[-1] / spy_df['close'].iloc[-5] - 1)
-            price_return_5d = (df['close'].iloc[-1] / df['close'].iloc[-5] - 1)
+        # 2. 52-week high proximity (0-1.5 pts) per v5.0 spec
+        high_52w = df['high'].tail(252).max() if len(df) >= 252 else df['high'].max()
+        distance_from_52w = (high_52w - current_price) / high_52w if high_52w > 0 else 1.0
 
-            if spy_return_5d < -0.02 and price_return_5d > -0.01:
-                score += 1.5
-            elif spy_return_5d < -0.01 and price_return_5d > -0.01:
-                score += 1.0
-        else:
-            logger.debug(f"SPY data insufficient for divergence calculation ({len(spy_df)} rows)")
+        if distance_from_52w <= 0.05:
+            score += 1.5
+        elif distance_from_52w <= 0.10:
+            # Linear interpolation: 5-10% = 1.0-1.5
+            score += 1.0 + (0.10 - distance_from_52w) / 0.05 * 0.5
+        elif distance_from_52w <= 0.15:
+            # Linear interpolation: 10-15% = 0.5-1.0
+            score += 0.5 + (0.15 - distance_from_52w) / 0.05 * 0.5
+        # else: > 15% = 0 points
 
-        # Recent trend (0-0.5 pts)
+        # 3. Recent trend (0-0.5 pts)
         if len(df) >= 5:
             ret_5d = (df['close'].iloc[-1] / df['close'].iloc[-5] - 1)
             if ret_5d > 0:
@@ -196,26 +259,20 @@ class RelativeStrengthLongStrategy(BaseStrategy):
         return min(4.0, score)
 
     def _calculate_cq(self, df: pd.DataFrame) -> float:
-        """Compression Quality - price tightening near support."""
+        """
+        Compression Quality - per v5.0 spec (3.0 max).
+
+        Components:
+        1. Volatility vs SPY (0-1.5 pts) - relative ATR
+        2. Base quality during SPY weakness (0-1.5 pts) - price range % in last 10d
+        """
         ind = TechnicalIndicators(df)
         ind.calculate_all()
 
         current_price = df['close'].iloc[-1]
-        ema8 = ind.indicators.get('ema', {}).get('ema8', current_price)
-        ema21 = ind.indicators.get('ema', {}).get('ema21', current_price)
-        ema50 = ind.indicators.get('ema', {}).get('ema50', current_price)
-
         score = 0.0
 
-        # EMA compression (0-2.5)
-        if current_price > ema8 * 0.99 and current_price < ema50 * 1.01:
-            score += 2.5
-        elif current_price > ema21 * 0.98 and current_price < ema50 * 1.02:
-            score += 1.5
-        elif current_price < ema50 * 1.05:
-            score += 1.0
-
-        # Relative volatility vs SPY (0-1.5)
+        # 1. Volatility vs SPY (0-1.5 pts) per v5.0 spec
         spy_df = getattr(self, '_spy_df', None)
         if spy_df is not None and len(spy_df) >= 20:
             stock_atr = ind.indicators.get('atr', {}).get('atr_14', 0)
@@ -231,9 +288,30 @@ class RelativeStrengthLongStrategy(BaseStrategy):
                 if rel_vol < 0.8:
                     score += 1.5
                 elif rel_vol < 1.2:
-                    score += 1.5 - (rel_vol - 0.8) * 1.75
+                    # Linear interpolation: 0.8-1.2 = 1.5-0.8
+                    score += 1.5 - (rel_vol - 0.8) / 0.4 * 0.7
                 elif rel_vol < 1.8:
-                    score += 0.8 - (rel_vol - 1.2) * 1.0
+                    # Linear interpolation: 1.2-1.8 = 0.8-0.2
+                    score += 0.8 - (rel_vol - 1.2) / 0.6 * 0.6
+                # else: > 1.8 = 0 points
+
+        # 2. Base quality during SPY weakness (0-1.5 pts)
+        # Measure stock's price range % during last 10d
+        if len(df) >= 10:
+            recent_10d = df.tail(10)
+            high_10d = recent_10d['high'].max()
+            low_10d = recent_10d['low'].min()
+            price_range_pct = (high_10d - low_10d) / low_10d if low_10d > 0 else 1.0
+
+            if price_range_pct < 0.05:
+                score += 1.5
+            elif price_range_pct < 0.08:
+                # Linear interpolation: 5-8% = 1.5-1.0
+                score += 1.5 - (price_range_pct - 0.05) / 0.03 * 0.5
+            elif price_range_pct < 0.12:
+                # Linear interpolation: 8-12% = 1.0-0.5
+                score += 1.0 - (price_range_pct - 0.08) / 0.04 * 0.5
+            # else: > 12% = 0 points
 
         return min(3.0, score)
 

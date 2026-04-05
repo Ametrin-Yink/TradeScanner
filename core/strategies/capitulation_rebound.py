@@ -109,8 +109,13 @@ class CapitulationReboundStrategy(BaseStrategy):
         Returns: 'reject', 'limit', or 'normal'
         """
         try:
-            # Try to get VIX data
-            vix_df = self._get_data('^VIX')
+            # Use cached Tier 3 VIX data from market_data (set by screener)
+            vix_df = self.market_data.get('^VIX') if hasattr(self, 'market_data') else None
+            if vix_df is None:
+                # Fallback: try to get from fetcher (should not happen in production)
+                logger.warning("VIX not in market_data cache, attempting fetch fallback")
+                vix_df = self._get_data('^VIX')
+
             if vix_df is None or len(vix_df) < 10:
                 logger.warning("VIX data unavailable, defaulting to normal mode")
                 return 'normal'
