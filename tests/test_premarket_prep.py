@@ -55,8 +55,10 @@ class TestPreMarketPrep:
 
     def test_calculate_tier1_metrics(self, prep):
         """Test Tier 1 metrics calculation."""
-        # Create sample data
-        dates = pd.date_range(end='2026-04-01', periods=100, freq='D')
+        # Create sample data ending yesterday (to pass stale data guard)
+        from datetime import timedelta
+        today = datetime.now().date()
+        dates = pd.date_range(end=today - timedelta(days=1), periods=100, freq='D')
         df = pd.DataFrame({
             'open': np.linspace(100, 150, 100) + np.random.randn(100) * 2,
             'high': np.linspace(102, 152, 100) + np.random.randn(100) * 2,

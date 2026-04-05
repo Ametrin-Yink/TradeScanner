@@ -513,6 +513,50 @@ class PreMarketPrep:
 
         return avg_vol_up / avg_vol_down
 
+    def _get_current_date(self) -> datetime:
+        """Get current date. Extracted for testability.
+
+        Returns:
+            Current date
+        """
+        return datetime.now().date()
+
+    def _is_data_stale(self, df: Optional[pd.DataFrame], max_stale_days: int = 2) -> bool:
+        """
+        Check if data is stale (no update within N trading days).
+
+        Handles weekend edge case: Friday data is valid on Monday/Tuesday.
+
+        Args:
+            df: OHLCV DataFrame
+            max_stale_days: Maximum days since last update (default 2)
+
+        Returns:
+            True if data is stale and should be excluded
+        """
+        if df is None or len(df) == 0:
+            return True
+
+        last_date = df.index[-1]
+        today = self._get_current_date()
+
+        # Handle timezone-aware indices and pandas Timestamps
+        if hasattr(last_date, 'date'):
+            last_date = last_date.date()
+
+        # Calculate calendar days since last update
+        days_since_update = (today - last_date).days
+
+        # Weekend handling: Friday data is valid on Monday/Tuesday
+        # Friday has weekday() == 4
+        if last_date.weekday() == 4:  # Last update was Friday
+            # Monday (0) or Tuesday (1) is acceptable for Friday data
+            if today.weekday() in [0, 1]:  # Today is Monday or Tuesday
+                return False
+
+        # For other days, require update within max_stale_days
+        return days_since_update > max_stale_days
+
     def _calculate_tier1_metrics(self, symbol: str, df: pd.DataFrame) -> Optional[Dict]:
         """Calculate Tier 1 universal metrics for a symbol.
 
@@ -525,6 +569,11 @@ class PreMarketPrep:
         """
         try:
             if len(df) < 50:
+                return None
+
+            # v7.0 Task 12b: Stale data guard
+            if self._is_data_stale(df, max_stale_days=2):
+                logger.debug(f"STALE_REJ: {symbol} - Data not updated within 2 days")
                 return None
 
             indicators = TechnicalIndicators(df, symbol=symbol)
