@@ -65,7 +65,11 @@ class Database:
             'earnings_date': 'TEXT',
             'gap_1d_pct': 'REAL',
             'gap_direction': 'TEXT',
-            'spy_regime': 'TEXT'
+            'spy_regime': 'TEXT',
+            # v7.0 Strategy G eligibility pre-calculation
+            'g_max_days': 'INTEGER',
+            'days_post_earnings': 'INTEGER',
+            'g_eligible': 'INTEGER'
         }
 
         for column, dtype in new_columns.items():
@@ -157,7 +161,9 @@ class Database:
             'rs_raw', 'rs_percentile', 'distance_from_52w_high', 'high_60d', 'low_60d',
             'gaps_5d', 'rsi_14', 'data_days',
             'accum_ratio_15d', 'days_to_earnings', 'earnings_date', 'gap_1d_pct',
-            'gap_direction', 'spy_regime'
+            'gap_direction', 'spy_regime',
+            # v7.0 Strategy G eligibility
+            'g_max_days', 'days_post_earnings', 'g_eligible'
         ]
 
         values = []
@@ -528,7 +534,16 @@ CREATE TABLE IF NOT EXISTS tier1_cache (
     rs_raw REAL, rs_percentile REAL,
     distance_from_52w_high REAL, high_60d REAL, low_60d REAL,
     gaps_5d INTEGER, rsi_14 REAL,
-    data_days INTEGER
+    data_days INTEGER,
+    accum_ratio_15d REAL,
+    days_to_earnings INTEGER,
+    earnings_date TEXT,
+    gap_1d_pct REAL,
+    gap_direction TEXT,
+    spy_regime TEXT,
+    g_max_days INTEGER,
+    days_post_earnings INTEGER,
+    g_eligible INTEGER
 );
 
 -- Tier 3 cache (market data)

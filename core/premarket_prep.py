@@ -598,6 +598,23 @@ class PreMarketPrep:
                 except:
                     pass  # Invalid date format
 
+            # NEW: Determine G-eligibility by gap size
+            # days_post_earnings: days since earnings (positive = after earnings)
+            days_post_earnings = -days_to_earnings if days_to_earnings and days_to_earnings < 0 else None
+            g_max_days = None
+            g_eligible = False
+
+            if days_post_earnings is not None and gap_1d_pct is not None:
+                abs_gap = abs(gap_1d_pct)
+                if abs_gap >= 0.10:
+                    g_max_days = 5
+                elif abs_gap >= 0.07:
+                    g_max_days = 3
+                else:
+                    g_max_days = 2
+
+                g_eligible = (days_post_earnings >= 1 and days_post_earnings <= g_max_days)
+
             return {
                 'cache_date': datetime.now().date().isoformat(),
                 'current_price': current_price,
@@ -629,6 +646,10 @@ class PreMarketPrep:
                 'earnings_date': earnings_date,
                 'gap_1d_pct': gap_1d_pct,
                 'gap_direction': gap_direction,
+                # v7.0 Strategy G eligibility
+                'g_max_days': g_max_days,
+                'days_post_earnings': days_post_earnings,
+                'g_eligible': g_eligible,
             }
 
         except Exception as e:
