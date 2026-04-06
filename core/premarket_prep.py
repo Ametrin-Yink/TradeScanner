@@ -1,11 +1,13 @@
 """Phase 0: Pre-market data preparation.
 
 Initializes stock database, fetches Tier 3 market data,
-fetches market data for all stocks, and calculates Tier 1 universal metrics.
+fetches market data for all stocks, calculates Tier 1 universal metrics,
+and pre-calculates all ETF data (market/sector ETFs).
 Stocks with market cap <$2B are filtered out during pre-calculation.
 """
 import gc
 import logging
+import time
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -17,6 +19,7 @@ import yfinance as yf
 from core.stock_universe import StockUniverseManager, get_all_market_etfs
 from core.fetcher import DataFetcher
 from core.indicators import TechnicalIndicators
+from core.etf_prep import ETFPreCalculator
 from data.db import Database
 from config.settings import settings
 
@@ -33,6 +36,8 @@ class PreMarketPrep:
     4. Update market cap from yfinance
     5. Filter stocks by market cap (>=$2B)
     6. Calculate Tier 1 universal metrics for qualifying stocks
+    6b. Update RS percentiles across universe
+    7. Pre-calculate ETF data (market/sector ETFs)
     """
 
     # Minimum market cap for screening ($2B)
@@ -66,6 +71,7 @@ class PreMarketPrep:
                 - symbols: List[str] - stocks passing market cap filter
                 - etfs: List[str] - market index ETFs
                 - tier3_data: Dict[str, pd.DataFrame] - market data
+                - etf_cache: Dict[str, Dict] - pre-calculated ETF data
                 - tier1_cache_count: int - number of symbols with Tier 1 cache
                 - market_cap_filtered: int - number of stocks filtered out
                 - duration: int - execution time in seconds
@@ -79,7 +85,7 @@ class PreMarketPrep:
         logger.info("=" * 50)
 
         # Step 1: Initialize stock database
-        logger.info("\n[1/5] Initializing stock database...")
+        logger.info("\n[1/6] Initializing stock database...")
         try:
             init_result = self.universe_manager.initialize_database()
             all_stocks = init_result['symbols']
@@ -92,12 +98,12 @@ class PreMarketPrep:
             all_stocks = self.db.get_active_stocks()
 
         # Step 2: Fetch Tier 3 market data
-        logger.info("\n[2/5] Fetching Tier 3 market data...")
+        logger.info("\n[2/6] Fetching Tier 3 market data...")
         tier3_data = self._fetch_tier3_data()
         logger.info(f"✓ Tier 3 data fetched: {len(tier3_data)} symbols")
 
         # Step 3: Update market data for all symbols (stocks + ETFs)
-        logger.info("\n[3/5] Updating market data for all symbols...")
+        logger.info("\n[3/6] Updating market data for all symbols...")
         all_symbols = self.db.get_active_stocks()
         fetch_stats = self._update_market_data(all_symbols)
         logger.info(f"✓ Market data updated: {fetch_stats['success']}/{fetch_stats['total']} symbols")
@@ -106,20 +112,30 @@ class PreMarketPrep:
             errors.extend(fetch_stats['errors'])
 
         # Step 4: Apply pre-filter (market cap, price, volume)
-        logger.info("\n[4/5] Applying pre-filter criteria...")
+        logger.info("\n[4/6] Applying pre-filter criteria...")
         prefilter_stats = self._apply_prefilter()
         qualifying_stocks = prefilter_stats['qualifying_stocks']
         logger.info(f"✓ Pre-filter: {len(qualifying_stocks)} stocks passed")
         logger.info(f"  (market cap >=$2B, price $2-3000, volume >=100K)")
 
         # Step 5: Update earnings dates (conditional, memory-optimized)
-        logger.info("\n[5/5] Updating earnings dates...")
+        logger.info("\n[5/6] Updating earnings dates...")
         self._update_earnings_dates(qualifying_stocks)
 
         # Step 6: Calculate Tier 1 universal metrics
-        logger.info("\n[6/6] Calculating Tier 1 universal metrics...")
+        logger.info("\n[6/7] Calculating Tier 1 universal metrics...")
         tier1_count = self._calculate_tier1_cache(qualifying_stocks)
         logger.info(f"✓ Tier 1 cache calculated: {tier1_count} symbols")
+
+        # Step 6b: Update RS percentiles across universe
+        logger.info("\n[6b/7] Updating RS percentiles...")
+        self.update_rs_percentiles()
+
+        # Step 7: Pre-calculate ETF data (market/sector ETFs)
+        logger.info("\n[7/7] Pre-calculating ETF data...")
+        etf_prep = ETFPreCalculator(db=self.db)
+        etf_cache = etf_prep.calculate_all_etfs()
+        logger.info(f"✓ ETF pre-calculation complete: {len(etf_cache)} ETFs cached")
 
         duration = (datetime.now() - start_time).total_seconds()
 
@@ -127,6 +143,7 @@ class PreMarketPrep:
         logger.info(f"PHASE 0 Complete in {duration:.1f}s")
         logger.info(f"  Stocks for screening: {len(qualifying_stocks)}")
         logger.info(f"  Market ETFs: {len(self.universe_manager.get_market_etfs())}")
+        logger.info(f"  ETF cache: {len(etf_cache)} ETFs")
         logger.info("=" * 50)
 
         # Phase 0 is successful if we have qualifying stocks and Tier 1 cache
@@ -138,6 +155,7 @@ class PreMarketPrep:
             'symbols': qualifying_stocks,
             'etfs': self.universe_manager.get_market_etfs(),
             'tier3_data': tier3_data,
+            'etf_cache': etf_cache,
             'tier1_cache_count': tier1_count,
             'prefilter_stats': prefilter_stats,
             'duration': int(duration),
@@ -170,7 +188,7 @@ class PreMarketPrep:
         return tier3_data
 
     def _update_market_data(self, symbols: List[str]) -> Dict:
-        """Update market data for all symbols using incremental fetch.
+        """Update market data for all symbols using batch fetch with caching.
 
         Args:
             symbols: List of stock symbols
@@ -181,10 +199,12 @@ class PreMarketPrep:
         success = 0
         failed = 0
         errors = []
-
-        # Process in batches to avoid memory issues
         total = len(symbols)
 
+        logger.info(f"Fetching market data for {total} symbols (batch mode, cache enabled)...")
+
+        # Process in batches to avoid memory issues AND respect rate limits
+        # With max_workers=4 and request_delay=0.15s, effective rate is ~27 req/sec
         for i in range(0, total, self.batch_size):
             batch = symbols[i:i + self.batch_size]
             batch_num = i // self.batch_size + 1
@@ -192,19 +212,24 @@ class PreMarketPrep:
 
             logger.info(f"Fetching batch {batch_num}/{total_batches}: {len(batch)} symbols")
 
-            for symbol in batch:
-                try:
-                    df = self.fetcher.fetch_stock_data(symbol, use_cache=True)
-                    if df is not None and not df.empty:
-                        success += 1
-                    else:
-                        failed += 1
-                        errors.append(f"{symbol}: No data returned")
-                except Exception as e:
-                    failed += 1
-                    errors.append(f"{symbol}: {e}")
+            # Use batch fetch with parallel workers (4 workers, 0.15s delay between requests)
+            results = self.fetcher.fetch_multiple(batch, period="13mo", interval="1d", use_cache=True)
 
-            logger.debug(f"  Batch complete: {success} success, {failed} failed")
+            success += len(results)
+            batch_failed = len(batch) - len(results)
+            failed += batch_failed
+
+            if batch_failed > 0:
+                failed_symbols = [s for s in batch if s not in results]
+                errors.extend([f"{s}: No data returned" for s in failed_symbols])
+
+            logger.debug(f"  Batch complete: {len(results)} success, {batch_failed} failed")
+
+            # Rate limit pause between batches to avoid yfinance throttling
+            # 0.1s per symbol in batch, capped at 5 seconds
+            if i + self.batch_size < total:
+                pause = min(5.0, 0.1 * len(batch))
+                time.sleep(pause)
 
             # Memory cleanup between batches
             import gc
@@ -485,7 +510,10 @@ class PreMarketPrep:
 
     def _calculate_accum_ratio(self, df: pd.DataFrame, days: int = 15) -> float:
         """
-        Calculate accumulation ratio: avg volume on up-days / avg volume on down-days.
+        Calculate accumulation ratio: sum volume on up-days / sum volume on down-days.
+
+        Per Strategy Description v7.0:
+        accum_ratio = sum(vol on up-days, 15d) / sum(vol on down-days, 15d)
         """
         if len(df) < days:
             return 1.0
@@ -499,19 +527,19 @@ class PreMarketPrep:
             recent['price_change'] = recent[close_col].diff()
             up_days = recent[recent['price_change'] > 0]
             down_days = recent[recent['price_change'] < 0]
-            avg_vol_up = up_days[volume_col].mean() if len(up_days) > 0 else 0
-            avg_vol_down = down_days[volume_col].mean() if len(down_days) > 0 else 0
+            sum_vol_up = up_days[volume_col].sum() if len(up_days) > 0 else 0
+            sum_vol_down = down_days[volume_col].sum() if len(down_days) > 0 else 0
         else:
             recent['price_change'] = recent['close'].diff()
             up_days = recent[recent['price_change'] > 0]
             down_days = recent[recent['price_change'] < 0]
-            avg_vol_up = up_days['volume'].mean() if len(up_days) > 0 else 0
-            avg_vol_down = down_days['volume'].mean() if len(down_days) > 0 else 0
+            sum_vol_up = up_days['volume'].sum() if len(up_days) > 0 else 0
+            sum_vol_down = down_days['volume'].sum() if len(down_days) > 0 else 0
 
-        if avg_vol_down == 0:
+        if sum_vol_down == 0:
             return 1.0
 
-        return avg_vol_up / avg_vol_down
+        return sum_vol_up / sum_vol_down
 
     def _get_current_date(self) -> datetime:
         """Get current date. Extracted for testability.
@@ -526,6 +554,7 @@ class PreMarketPrep:
         Check if data is stale (no update within N trading days).
 
         Handles weekend edge case: Friday data is valid on Monday/Tuesday.
+        Also handles holidays: Thursday data is valid on Monday after a Friday holiday.
 
         Args:
             df: OHLCV DataFrame
@@ -548,10 +577,16 @@ class PreMarketPrep:
         days_since_update = (today - last_date).days
 
         # Weekend handling: Friday data is valid on Monday/Tuesday
-        # Friday has weekday() == 4
         if last_date.weekday() == 4:  # Last update was Friday
             # Monday (0) or Tuesday (1) is acceptable for Friday data
             if today.weekday() in [0, 1]:  # Today is Monday or Tuesday
+                return False
+
+        # Holiday handling: Thursday data is valid on Monday after a Friday holiday
+        # (e.g., Good Friday, when markets are closed)
+        if last_date.weekday() == 3:  # Last update was Thursday
+            if today.weekday() == 0:  # Today is Monday
+                # 3 calendar days but only 1 trading day (Friday was a holiday)
                 return False
 
         # For other days, require update within max_stale_days
@@ -597,21 +632,21 @@ class PreMarketPrep:
             ema50 = ema_data.get('ema50', df['close'].ewm(span=50).mean().iloc[-1])
             ema200 = ema_data.get('ema200', df['close'].ewm(span=200).mean().iloc[-1])
 
-            # ATR/ADR
+            # ATR/ADR (decimal format, not percentage)
             atr = ind.get('atr', {}).get('atr14', df['high'].tail(14).mean() - df['low'].tail(14).mean())
-            atr_pct = (atr / current_price * 100) if current_price > 0 else 0
+            atr_pct = (atr / current_price) if current_price > 0 else 0
             adr = ind.get('adr', {}).get('adr20', df['high'].tail(20).mean() - df['low'].tail(20).mean())
-            adr_pct = (adr / current_price * 100) if current_price > 0 else 0
+            adr_pct = (adr / current_price) if current_price > 0 else 0
 
-            # Returns (3m, 6m, 12m, 5d)
+            # Returns (3m, 6m, 12m, 5d) - use 0 for insufficient data
             close = df['close']
-            ret_3m = (close.iloc[-1] / close.iloc[-min(63, len(close))] - 1) * 100 if len(close) >= 63 else None
-            ret_6m = (close.iloc[-1] / close.iloc[-min(126, len(close))] - 1) * 100 if len(close) >= 126 else None
-            ret_12m = (close.iloc[-1] / close.iloc[-min(252, len(close))] - 1) * 100 if len(close) >= 252 else None
-            ret_5d = (close.iloc[-1] / close.iloc[-min(5, len(close))] - 1) * 100 if len(close) >= 5 else None
+            ret_3m = (close.iloc[-1] / close.iloc[-63] - 1) * 100 if len(close) >= 63 else 0.0
+            ret_6m = (close.iloc[-1] / close.iloc[-126] - 1) * 100 if len(close) >= 126 else 0.0
+            ret_12m = (close.iloc[-1] / close.iloc[-252] - 1) * 100 if len(close) >= 252 else 0.0
+            ret_5d = (close.iloc[-1] / close.iloc[-5] - 1) * 100 if len(close) >= 5 else 0.0
 
             # RS scores
-            rs_raw = ret_3m if ret_3m is not None else 0
+            rs_raw = ret_3m
             rs_percentile = 50.0  # Will be calculated across universe
 
             # 52-week metrics
@@ -629,26 +664,25 @@ class PreMarketPrep:
             # RSI
             rsi = ind.get('rsi', {}).get('rsi14', 50)
 
-            # NEW: Calculate accum_ratio_15d (for Strategy H)
+            # Accumulation ratio (Strategy H)
             accum_ratio = self._calculate_accum_ratio(df, days=15)
 
-            # NEW: Calculate gap metrics (for Strategy G)
+            # Gap metrics (Strategy G)
             gap_1d_pct = (df['open'].iloc[-1] / df['close'].iloc[-2] - 1) if len(df) >= 2 else 0
             gap_direction = 'up' if gap_1d_pct > 0.02 else ('down' if gap_1d_pct < -0.02 else 'none')
 
-            # NEW: Get earnings date from DB cache (already populated by Step 5)
-            today = datetime.now().date()
+            # Earnings date from DB cache
             earnings_date = self.db.get_stock_earnings_date(symbol)
             days_to_earnings = None
             if earnings_date:
                 try:
+                    today = datetime.now().date()
                     ed = datetime.fromisoformat(earnings_date).date()
                     days_to_earnings = (ed - today).days
                 except:
-                    pass  # Invalid date format
+                    pass
 
-            # NEW: Determine G-eligibility by gap size
-            # days_post_earnings: days since earnings (positive = after earnings)
+            # G-eligibility by gap size
             days_post_earnings = -days_to_earnings if days_to_earnings and days_to_earnings < 0 else None
             g_max_days = None
             g_eligible = False
@@ -664,7 +698,7 @@ class PreMarketPrep:
 
                 g_eligible = (days_post_earnings >= 1 and days_post_earnings <= g_max_days)
 
-            # NEW: Detect VCP platform (Task 12a)
+            # VCP platform detection - use defaults if no valid pattern
             vcp_data = indicators.detect_vcp_platform(
                 lookback_range=(15, 60),
                 max_range_pct=0.12,
@@ -672,8 +706,47 @@ class PreMarketPrep:
             )
 
             vcp_detected = vcp_data is not None and vcp_data.get('is_valid', False)
-            vcp_tightness = vcp_data.get('platform_range_pct') if vcp_data else None
-            vcp_volume_ratio = vcp_data.get('volume_contraction_ratio') if vcp_data else None
+            # Use defaults: 12% range (max allowed), 1.0 volume ratio (no contraction) if no VCP
+            vcp_tightness = vcp_data.get('platform_range_pct') if vcp_data else 0.12
+            vcp_volume_ratio = vcp_data.get('volume_contraction_ratio') if vcp_data else 1.0
+
+            # Support/resistance levels (Strategies C, D)
+            from core.support_resistance import SupportResistanceCalculator
+            sr_calc = SupportResistanceCalculator(df)
+            sr_levels = sr_calc.calculate_all()
+            supports = sr_levels.get('support', [])
+            resistances = sr_levels.get('resistance', [])
+
+            # Nearest support/resistance distance (use large value if no level found)
+            nearest_support = max([s for s in supports if s < current_price], default=None)
+            nearest_resistance = min([r for r in resistances if r > current_price], default=None)
+            # Use 999% as "no level found" sentinel value
+            nearest_support_distance_pct = (current_price - nearest_support) / current_price if nearest_support else 999.0
+            nearest_resistance_distance_pct = (nearest_resistance - current_price) / current_price if nearest_resistance else 999.0
+
+            # Consecutive down-days (Strategy F)
+            consecutive_down_days = 0
+            for i in range(1, min(10, len(df))):
+                if df['close'].iloc[-i] < df['close'].iloc[-i-1]:
+                    consecutive_down_days += 1
+                else:
+                    break
+
+            # EMA21 slope normalized (Strategy B)
+            ema21_5d_ago = df['close'].ewm(span=21).mean().iloc[-6] if len(df) >= 6 else ema21 * 0.99
+            ema21_slope_norm = (ema21 - ema21_5d_ago) / atr if atr > 0 else 0
+
+            # Pullback from high (Strategy B)
+            high_20d = df['high'].tail(20).max()
+            pullback_from_high_pct = (high_20d - current_price) / high_20d if high_20d > 0 else 0
+
+            # Distance to EMA8 (Strategy B)
+            distance_to_ema8_pct = abs(current_price - ema8) / ema8 if ema8 > 0 else 0
+
+            # Sector info (multiple strategies)
+            stock_info = self.db.get_stock_info_full(symbol)
+            sector = stock_info.get('sector', '') if stock_info else ''
+            sector_etf_symbol = self._get_sector_etf_symbol(sector)
 
             return {
                 'cache_date': datetime.now().date().isoformat(),
@@ -714,6 +787,22 @@ class PreMarketPrep:
                 'vcp_detected': vcp_detected,
                 'vcp_tightness': vcp_tightness,
                 'vcp_volume_ratio': vcp_volume_ratio,
+                # v7.1: Support/Resistance levels (Strategies C, D)
+                'supports': supports[:5],  # Top 5 support levels
+                'resistances': resistances[:5],  # Top 5 resistance levels
+                'nearest_support_distance_pct': nearest_support_distance_pct,
+                'nearest_resistance_distance_pct': nearest_resistance_distance_pct,
+                # v7.1: Consecutive down-days (Strategy F)
+                'consecutive_down_days': consecutive_down_days,
+                # v7.1: EMA21 slope normalized (Strategy B)
+                'ema21_slope_norm': ema21_slope_norm,
+                # v7.1: Pullback from high (Strategy B)
+                'pullback_from_high_pct': pullback_from_high_pct,
+                # v7.1: Distance to EMA8 (Strategy B)
+                'distance_to_ema8_pct': distance_to_ema8_pct,
+                # v7.1: Sector info (multiple strategies)
+                'sector': sector,
+                'sector_etf_symbol': sector_etf_symbol,
             }
 
         except Exception as e:
@@ -741,6 +830,110 @@ class PreMarketPrep:
             DataFrame with market data or None
         """
         return self.db.get_tier3_cache(symbol)
+
+    def _get_sector_etf_symbol(self, sector: str) -> Optional[str]:
+        """Get sector ETF symbol for a given sector.
+
+        Args:
+            sector: Sector name (e.g., 'Technology', 'Financials')
+
+        Returns:
+            ETF symbol or None
+        """
+        SECTOR_ETFS = {
+            'Technology': 'XLK',
+            'Financials': 'XLF',
+            'Energy': 'XLE',
+            'Industrials': 'XLI',
+            'Consumer Staples': 'XLP',
+            'Consumer Discretionary': 'XLY',
+            'Materials': 'XLB',
+            'Utilities': 'XLU',
+            'Health Care': 'XLV',
+            'Biotechnology': 'XBI',
+            'Semiconductors': 'SMH',
+            'Software': 'IGV',
+            'Transportation': 'IYT',
+        }
+        return SECTOR_ETFS.get(sector)
+
+    def update_rs_percentiles(self) -> int:
+        """Calculate and update universe-wide RS percentile rankings.
+
+        Per Strategy Description v7.0:
+        RS_pct = percentile_rank(stock_63d_return / SPY_63d_return, universe)
+
+        This calculates RELATIVE strength (vs SPY), not just absolute returns.
+
+        Returns:
+            Number of symbols updated
+        """
+        logger.info("  Calculating universe-wide RS percentiles...")
+
+        # Fetch SPY 63-day return for normalization
+        spy_df = self.db.get_tier3_cache('SPY')
+        if spy_df is None or len(spy_df) < 63:
+            logger.warning("  SPY data unavailable for RS normalization, using absolute returns")
+            spy_ret_63d = 0.0  # Flat market assumption
+        else:
+            spy_ret_63d = (spy_df['close'].iloc[-1] / spy_df['close'].iloc[-63] - 1) * 100
+
+        logger.info(f"  SPY 63-day return: {spy_ret_63d:.2f}%")
+
+        # Get all rs_raw values from database
+        all_rs_data = self.db.get_all_rs_raw_values()
+
+        if not all_rs_data:
+            logger.warning("  No rs_raw values found for RS percentile calculation")
+            return 0
+
+        total_stocks = len(all_rs_data)
+        logger.info(f"  Calculating percentiles for {total_stocks} stocks...")
+
+        # Calculate SPY-relative return for each stock, then percentile rank
+        # Formula: relative_return = (1 + stock_ret_63d/100) / (1 + spy_ret_63d/100) - 1
+        # Then convert to percentage for ranking
+        stock_relative_returns = []
+        for data in all_rs_data:
+            symbol = data['symbol']
+            stock_ret_63d = data['rs_raw']  # Already in percentage form
+
+            # Handle edge case: SPY return near -100% (theoretical, practically 0)
+            if (1 + spy_ret_63d / 100) <= 0.01:
+                # SPY down >99%, use absolute return as fallback
+                relative_return_pct = stock_ret_63d
+            else:
+                # SPY-relative return formula
+                relative_return = (1 + stock_ret_63d / 100) / (1 + spy_ret_63d / 100) - 1
+                relative_return_pct = relative_return * 100
+
+            stock_relative_returns.append({
+                'symbol': symbol,
+                'relative_return': relative_return_pct
+            })
+
+        # Sort by relative return (highest first)
+        stock_relative_returns.sort(key=lambda x: x['relative_return'], reverse=True)
+
+        # Calculate percentile for each stock
+        # Percentile formula: (rank - 1) / (total - 1) * 100
+        # Rank 0 (highest relative_return) = 100th percentile
+        # Rank N-1 (lowest relative_return) = 0th percentile
+        rs_percentiles = {}
+        for rank, data in enumerate(stock_relative_returns):
+            symbol = data['symbol']
+            if total_stocks > 1:
+                percentile = (total_stocks - rank - 1) / (total_stocks - 1) * 100
+            else:
+                percentile = 50.0  # Single stock, use neutral
+
+            rs_percentiles[symbol] = round(percentile, 2)
+
+        # Bulk update database
+        self.db.bulk_update_rs_percentiles(rs_percentiles)
+
+        logger.info(f"  RS percentiles updated for {len(rs_percentiles)} stocks")
+        return len(rs_percentiles)
 
 
 def run_premarket_prep() -> Dict:

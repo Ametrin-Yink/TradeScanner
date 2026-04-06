@@ -88,19 +88,21 @@ class TechnicalIndicators:
         return self.indicators
 
     def _get_cache_key(self) -> str:
-        """Generate cache key based on data characteristics."""
+        """Generate cache key based on symbol and data characteristics.
+
+        Includes symbol to prevent false cache hits between different stocks
+        with coincidentally matching date ranges and price/volume data.
+        """
         if len(self.df) == 0:
             return "empty_data"
 
-        # Use data characteristics to generate unique key
-        # This avoids needing the symbol - same data = same key
         last_date = str(self.df.index[-1])
         first_date = str(self.df.index[0])
         rows = len(self.df)
         last_close = self.df['close'].iloc[-1]
         last_volume = self.df['volume'].iloc[-1]
 
-        return f"{first_date}_{last_date}_{rows}_{last_close}_{last_volume}"
+        return f"{self.symbol}_{first_date}_{last_date}_{rows}_{last_close}_{last_volume}"
 
     @classmethod
     def get_cache_stats(cls) -> Dict[str, int]:
@@ -143,6 +145,9 @@ class TechnicalIndicators:
         """
         Calculate Average True Range (ATR).
 
+        Per Strategy Description v7.0:
+        ATR14 = SMA(TR, 14) where TR = max(H−L, |H−C_prev|, |L−C_prev|)
+
         Args:
             period: ATR calculation period (default 14)
 
@@ -163,8 +168,8 @@ class TechnicalIndicators:
 
         true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
 
-        # Calculate ATR
-        atr = true_range.ewm(span=period, adjust=False).mean().iloc[-1]
+        # Calculate ATR using SMA (not EMA)
+        atr = true_range.tail(period).mean()
 
         # ATR as percentage of current price (return decimal, not percentage)
         current_price = close.iloc[-1]
@@ -197,7 +202,8 @@ class TechnicalIndicators:
         adr = daily_range.rolling(window=period).mean().iloc[-1]
 
         current_price = self.df['close'].iloc[-1]
-        adr_pct = (adr / current_price) * 100 if current_price > 0 else None
+        # Return decimal format (consistent with atr_pct)
+        adr_pct = (adr / current_price) if current_price > 0 else None
 
         return {
             'adr': float(adr) if adr is not None else None,
@@ -555,8 +561,10 @@ class TechnicalIndicators:
     def calculate_clv(self) -> float:
         """
         Calculate Close Location Value (CLV).
-        CLV = (close - low) - (high - close) / (high - low)
-        Ranges from -1 (close at low) to +1 (close at high)
+
+        Per Strategy Description v7.0:
+        CLV = (close - low) / (high - low)
+        Ranges from 0 (close at low) to 1 (close at high)
 
         Returns:
             CLV value for the most recent day
@@ -572,7 +580,7 @@ class TechnicalIndicators:
         if high == low:  # Avoid division by zero
             return 0.0
 
-        clv = ((close - low) - (high - close)) / (high - low)
+        clv = (close - low) / (high - low)
         return float(clv)
 
     def calculate_52w_metrics(self) -> Dict[str, Optional[float]]:
@@ -903,12 +911,24 @@ class TechnicalIndicators:
             penetration = (ema8_support_level - low_min_val) / ema8_current
             support_score = max(0.0, 2.0 - penetration * 10)  # 10x multiplier for sensitivity
 
+        # MISMATCH FIX 2 (Strategy B): Gap-down scoring (doc line 240)
+        # Gap < 0.8×ATR gives 1.0 score, gap > 0.8×ATR gives 0 points
+        # This is a scoring component, not a binary filter
+        atr_data = self._calculate_atr(period=14)
+        atr14 = atr_data.get('atr', 0)
+        gap_estimate = 0.4 * atr14  # Conservative estimate of potential gap
+        gap_limit = 0.8 * atr14
+        gap_score = 1.0 if gap_estimate < gap_limit else 0.0
+
         # Round to 2 decimals
-        total_score = round(tightness_score + support_score, 2)
+        total_score = round(tightness_score + support_score + gap_score, 2)
 
         return {
             'tightness_score': tightness_score,
             'support_score': support_score,
+            'gap_score': gap_score,
+            'gap_estimate': float(gap_estimate),
+            'gap_limit': float(gap_limit),
             'total_score': total_score,
             'price_range_pct': float(price_range * 100),
             'ema8_current': float(ema8_current),

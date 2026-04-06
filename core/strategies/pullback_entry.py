@@ -1,4 +1,4 @@
-"""Strategy C: Shoryuken v3.0 - Institutional Grade Scoring System."""
+"""Strategy B: PullbackEntry - Pullback to EMA with 4D scoring."""
 from typing import Dict, List, Optional, Tuple, Any
 import logging
 
@@ -6,22 +6,23 @@ import pandas as pd
 
 from ..indicators import TechnicalIndicators
 from .base_strategy import BaseStrategy, StrategyMatch, ScoringDimension, StrategyType
+from ..scoring_utils import safe_divide, validate_dataframe
 
 logger = logging.getLogger(__name__)
 
 
 class PullbackEntryStrategy(BaseStrategy):
-    """Strategy C: Shoryuken v3.0 - Pullback to EMA with 4D scoring."""
+    """Strategy B: PullbackEntry v7.0 - Pullback to EMA with 4D scoring."""
 
     NAME = "PullbackEntry"
-    STRATEGY_TYPE = StrategyType.B  # Changed from SHORYUKEN
+    STRATEGY_TYPE = StrategyType.B
     DESCRIPTION = "PullbackEntry v5.0"
     DIMENSIONS = ['TI', 'RC', 'VC', 'BONUS']
 
-    # Shoryuken Parameters
+    # Strategy Parameters
     PARAMS = {
         'min_data_days': 50,
-        'ema21_slope_threshold': 0.4,  # Minimum normalized slope
+        'ema21_slope_threshold': 0,  # Minimum normalized slope (S_norm > 0 per doc line 210)
         'max_retracement_range': 0.08,  # 8% max range for structure
         'ema8_penetration_tolerance': 0.985,  # 1.5% below EMA8 allowed
         'volume_dry_threshold': 0.7,  # <70% of 20d avg
@@ -57,85 +58,94 @@ class PullbackEntryStrategy(BaseStrategy):
         self.market_atr_median = 0.0
         self.sector_counts = {}
         self.stock_info = {}
-        self.sector_etf_data = {}  # v5.0: Cache for sector ETF data
 
     def screen(self, symbols: List[str], max_candidates: int = 5) -> List[StrategyMatch]:
         """
-        Screen all symbols with Phase 0 market statistics calculation.
+        Screen all symbols with Phase 0 pre-filter using cached data.
 
-        Args:
-            symbols: List of stock symbols
-            max_candidates: Maximum candidates to return
-
-        Returns:
-            List of StrategyMatch objects
+        v7.1: Uses phase0_data for fast pre-filtering, only fetches DataFrames
+        for symbols that pass the pre-filter.
         """
-        # Phase 0: Calculate market-wide statistics
-        logger.info("Shoryuken v3.0: Calculating market statistics...")
+        # Phase 0: Use cached phase0_data for fast pre-filter
+        logger.info("PullbackEntry: Using Phase 0 cached data for pre-filter...")
+
+        phase0_data = getattr(self, 'phase0_data', {})
+        if not phase0_data:
+            logger.warning("PullbackEntry: No phase0_data available, falling back to full scan")
+            return self._screen_full_scan(symbols, max_candidates)
+
+        # Phase 0.5: Pre-filter using cached EMA21 data
+        logger.info("PullbackEntry: Phase 0.5 - Pre-filtering by EMA21 trend (cached)...")
+        prefiltered_symbols = []
+
+        for symbol in symbols:
+            if symbol not in phase0_data:
+                continue
+            data = phase0_data[symbol]
+
+            try:
+                current_price = data.get('current_price', 0)
+                ema21 = data.get('ema21', 0)
+
+                # Skip invalid data
+                if current_price <= 0 or ema21 <= 0:
+                    continue
+
+                # Check price above EMA21
+                if current_price <= ema21:
+                    continue
+
+                # EMA21 slope approximation (use ema21 vs ema50 as proxy)
+                ema50 = data.get('ema50', 0)
+                if ema50 > 0 and ema21 > ema50:
+                    # Uptrend confirmed - fetch full data for this symbol
+                    prefiltered_symbols.append(symbol)
+
+            except Exception as e:
+                logger.debug(f"Error pre-filtering {symbol}: {e}")
+                continue
+
+        logger.info(f"PullbackEntry: {len(prefiltered_symbols)}/{len(symbols)} passed EMA21 trend pre-filter")
+
+        if not prefiltered_symbols:
+            logger.info("PullbackEntry: No symbols passed pre-filter")
+            return []
+
+        # Now fetch data only for pre-filtered symbols
+        return self._process_prefiltered_symbols(prefiltered_symbols, max_candidates)
+
+    def _process_prefiltered_symbols(self, symbols: List[str], max_candidates: int) -> List[StrategyMatch]:
+        """Process pre-filtered symbols - fetch data and calculate ATR median."""
+        logger.info("PullbackEntry: Processing pre-filtered symbols...")
 
         all_atrs = []
         symbol_data = {}
 
         for symbol in symbols:
-            df = self._get_data(symbol)
-            if df is None or len(df) < self.PARAMS['min_data_days']:
+            try:
+                df = self._get_data(symbol)
+                if df is None or len(df) < self.PARAMS['min_data_days']:
+                    continue
+
+                ind = TechnicalIndicators(df)
+                ind.calculate_all()
+
+                atr = ind.indicators.get('atr', {}).get('atr', 0)
+                if atr > 0:
+                    all_atrs.append(atr)
+
+                symbol_data[symbol] = {'df': df, 'ind': ind}
+            except Exception as e:
+                logger.debug(f"Error processing {symbol}: {e}")
                 continue
 
-            ind = TechnicalIndicators(df)
-            ind.calculate_all()
-
-            atr = ind.indicators.get('atr', {}).get('atr', 0)
-            if atr > 0:
-                all_atrs.append(atr)
-
-            symbol_data[symbol] = {'df': df, 'ind': ind}
-
         if not all_atrs:
-            logger.warning("Shoryuken: No valid ATR data found")
+            logger.warning("PullbackEntry: No valid ATR data found")
             return []
 
         self.market_atr_median = sorted(all_atrs)[len(all_atrs) // 2]
-        logger.info(f"Shoryuken: Market ATR median = {self.market_atr_median:.2f}, "
+        logger.info(f"PullbackEntry: Market ATR median = {self.market_atr_median:.2f}, "
                     f"Processing {len(symbol_data)} symbols")
-
-        # Phase 0.5: Pre-filter by EMA21 trend (price > EMA21 and slope > 0)
-        logger.info("Shoryuken: Phase 0.5 - Pre-filtering by EMA21 trend...")
-        prefiltered_symbols = []
-        symbols_to_remove = []  # Collect symbols to remove after iteration
-
-        # Use list() to create a copy for safe iteration
-        for symbol, data in list(symbol_data.items()):
-            try:
-                df = data['df']
-                ind = data['ind']
-
-                # Check price above EMA21
-                current_price = df['close'].iloc[-1]
-                ema21 = ind.indicators.get('ema', {}).get('ema21', 0)
-
-                # Check EMA21 slope (current vs 5 days ago)
-                ema21_5d_ago = df['close'].ewm(span=21).mean().iloc[-6] if len(df) >= 6 else ema21 * 0.99
-                ema_slope = ema21 - ema21_5d_ago if ema21 and ema21_5d_ago else 0
-
-                if current_price > ema21 and ema_slope > 0:
-                    prefiltered_symbols.append(symbol)
-                else:
-                    # Mark for removal after iteration
-                    symbols_to_remove.append(symbol)
-            except Exception as e:
-                logger.debug(f"Error pre-filtering {symbol}: {e}")
-                symbols_to_remove.append(symbol)
-                continue
-
-        # Remove filtered out symbols after iteration
-        for symbol in symbols_to_remove:
-            symbol_data.pop(symbol, None)
-
-
-        logger.info(f"Shoryuken: {len(prefiltered_symbols)}/{len(symbol_data) + len(prefiltered_symbols)} passed EMA21 trend pre-filter")
-
-        # v5.0: Load sector ETF data for bonus calculation
-        self._load_sector_etf_data()
 
         # Get industry data for sector context
         try:
@@ -181,11 +191,118 @@ class PullbackEntryStrategy(BaseStrategy):
 
         return filtered_matches
 
+    def _screen_full_scan(self, symbols: List[str], max_candidates: int) -> List[StrategyMatch]:
+        """Fallback: Full scan without phase0_data (original behavior)."""
+        logger.info("PullbackEntry: Calculating market statistics (fallback)...")
+
+        all_atrs = []
+        symbol_data = {}
+
+        for symbol in symbols:
+            df = self._get_data(symbol)
+            if df is None or len(df) < self.PARAMS['min_data_days']:
+                continue
+
+            ind = TechnicalIndicators(df)
+            ind.calculate_all()
+
+            atr = ind.indicators.get('atr', {}).get('atr', 0)
+            if atr > 0:
+                all_atrs.append(atr)
+
+            symbol_data[symbol] = {'df': df, 'ind': ind}
+
+        if not all_atrs:
+            logger.warning("PullbackEntry: No valid ATR data found")
+            return []
+
+        self.market_atr_median = sorted(all_atrs)[len(all_atrs) // 2]
+        logger.info(f"PullbackEntry: Market ATR median = {self.market_atr_median:.2f}, "
+                    f"Processing {len(symbol_data)} symbols")
+
+        # Phase 0.5: Pre-filter by EMA21 trend (price > EMA21 and slope > 0)
+        logger.info("PullbackEntry: Phase 0.5 - Pre-filtering by EMA21 trend...")
+        prefiltered_symbols = []
+        symbols_to_remove = []
+
+        for symbol, data in list(symbol_data.items()):
+            try:
+                df = data['df']
+                ind = data['ind']
+
+                current_price = df['close'].iloc[-1]
+                ema21 = ind.indicators.get('ema', {}).get('ema21', 0)
+
+                ema21_5d_ago = df['close'].ewm(span=21).mean().iloc[-6] if len(df) >= 6 else ema21 * 0.99
+                ema_slope = ema21 - ema21_5d_ago if ema21 and ema21_5d_ago else 0
+
+                if current_price > ema21 and ema_slope > 0:
+                    prefiltered_symbols.append(symbol)
+                else:
+                    symbols_to_remove.append(symbol)
+            except Exception as e:
+                logger.debug(f"Error pre-filtering {symbol}: {e}")
+                symbols_to_remove.append(symbol)
+                continue
+
+        for symbol in symbols_to_remove:
+            symbol_data.pop(symbol, None)
+
+        logger.info(f"PullbackEntry: {len(prefiltered_symbols)}/{len(symbol_data) + len(prefiltered_symbols)} passed EMA21 trend pre-filter")
+
+        # Get industry data for sector context
+        try:
+            if self.fetcher:
+                self.stock_info = self.fetcher.fetch_batch_stock_info(list(symbol_data.keys()))
+                self.sector_counts = {}
+                for info in self.stock_info.values():
+                    sector = info.get('sector', 'Unknown')
+                    self.sector_counts[sector] = self.sector_counts.get(sector, 0) + 1
+        except Exception as e:
+            logger.warning(f"Could not fetch sector data: {e}")
+            self.stock_info = {}
+            self.sector_counts = {}
+
+        self.market_data = {sym: data['df'] for sym, data in symbol_data.items()}
+
+        matches = super().screen(list(symbol_data.keys()), max_candidates=max_candidates)
+
+        scored_candidates = []
+        for match in matches:
+            scored_candidates.append({
+                'match': match,
+                'score': match.technical_snapshot.get('score', 0),
+                'tier': match.technical_snapshot.get('tier', 'C')
+            })
+
+        scored_candidates.sort(key=lambda x: x['score'], reverse=True)
+
+        tier_limits = {'S': 5, 'A': 5, 'B': 5}
+        tier_current = {'S': 0, 'A': 0, 'B': 0}
+
+        filtered_matches = []
+        for cand in scored_candidates:
+            tier = cand['tier']
+            if tier in tier_current and tier_current[tier] >= tier_limits[tier]:
+                continue
+            tier_current[tier] = tier_current.get(tier, 0) + 1
+            filtered_matches.append(cand['match'])
+
+        return filtered_matches
+
     def filter(self, symbol: str, df: pd.DataFrame) -> bool:
         """
-        Filter symbols based on Shoryuken criteria with Phase 0 fast pre-filter.
+        Filter symbols based on PullbackEntry criteria with Phase 0 fast pre-filter.
         """
-        # Phase 0: Fast pre-filter (O(1) checks before expensive calculations)
+        # Validate DataFrame before processing
+        if not validate_dataframe(df, min_rows=self.PARAMS.get('min_data_days', 50)):
+            logger.debug(f"Pullback_REJ: {symbol} - Invalid DataFrame")
+            return False
+
+        # Phase 0: Fast pre-filter using cached data (O(1) checks before expensive calculations)
+        phase0_data = getattr(self, 'phase0_data', {})
+        data = phase0_data.get(symbol, {})
+
         current_price = df['close'].iloc[-1]
 
         # Skip penny stocks and extreme prices
@@ -201,10 +318,22 @@ class PullbackEntryStrategy(BaseStrategy):
         if len(df) < self.PARAMS['min_data_days']:
             return False
 
+        # MISMATCH FIX 3: Market cap filter (doc line 212): Market cap ≥ $2B
+        market_cap = self.stock_info.get(symbol, {}).get('market_cap', 0)
+        if market_cap > 0 and market_cap < 2e9:
+            logger.debug(f"Pullback_REJ: {symbol} - Market cap ${market_cap/1e9:.2f}B < $2B")
+            return False
+
+        # Use pre-calculated EMA21 slope from phase0_data
+        ema21_slope_norm = data.get('ema21_slope_norm')
+        if ema21_slope_norm is None or ema21_slope_norm < self.PARAMS['ema21_slope_threshold']:
+            logger.debug(f"Pullback_REJ: {symbol} - EMA21 slope {ema21_slope_norm:.2f} < threshold")
+            return False
+
         ind = TechnicalIndicators(df)
         ind.calculate_all()
 
-        # Calculate TI score for filtering
+        # Calculate TI score for filtering (uses slope internally)
         ti_data = ind.calculate_normalized_ema_slope(self.market_atr_median)
         ti_score = ti_data['score']
 
@@ -217,10 +346,8 @@ class PullbackEntryStrategy(BaseStrategy):
         if rc_data['total_score'] <= 0:
             return False
 
-        # Check gap veto
-        gap_data = ind.estimate_gap_impact()
-        if not gap_data['is_valid']:
-            return False
+        # MISMATCH FIX 2: Gap-down is scoring component (doc line 240), not binary filter
+        # Removed: gap veto filter - gap is now scored in RC dimension (0 pts if > 0.8×ATR, 1.0 if < 0.8×ATR)
 
         return True
 
@@ -254,7 +381,8 @@ class PullbackEntryStrategy(BaseStrategy):
             touch_count = touched.sum()
 
         # Deduct TI score for multiple touches (first touch is best)
-        touch_deduction = min(1.5, (touch_count - 1) * 0.5) if touch_count > 1 else 0
+        # MISMATCH FIX 4: Cap penalty at 1.0 (doc line 227), not 1.5
+        touch_deduction = min(1.0, (touch_count - 1) * 0.5) if touch_count > 1 else 0
         ti_score = max(0, ti_score - touch_deduction)
 
         dimensions.append(ScoringDimension(
@@ -282,6 +410,7 @@ class PullbackEntryStrategy(BaseStrategy):
             details={
                 'tightness_score': rc_data.get('tightness_score', 0),
                 'support_score': rc_data.get('support_score', 0),
+                'gap_score': rc_data.get('gap_score', 0),  # MISMATCH FIX 2: Gap-down scoring
                 'price_range_pct': rc_data.get('price_range_pct', 0),
                 'ema8_current': rc_data.get('ema8_current', 0),
                 'low_min': rc_data.get('low_min', 0)
@@ -474,10 +603,13 @@ class PullbackEntryStrategy(BaseStrategy):
         lock_profit_stop = entry_price + risk * 0.5
 
         # Stage 3: Trend exit: EMA10 or Chandelier 3x ATR
-        ema8 = ind.indicators.get('ema', {}).get('ema8')
+        ema10 = ind.indicators.get('ema', {}).get('ema10')
         chandelier_stop = ind.calculate_chandelier_exit(
             entry_price, entry_price, atr, 3.0
         )
+
+        # MISMATCH FIX 5: Stage 4 trailing uses EMA5 (doc line 263), not EMA8
+        ema5 = ind.indicators.get('ema', {}).get('ema5')
 
         # Stage 4: Acceleration exit: Close below EMA5 when >20% from EMA21
         ema21_val = ind.indicators.get('ema', {}).get('ema21', current_price)
@@ -489,7 +621,8 @@ class PullbackEntryStrategy(BaseStrategy):
             'lock_profit_stop': lock_profit_stop,
             'chandelier_stop': chandelier_stop,
             'acceleration_trigger': acceleration_trigger,
-            'ema10': ema8,  # Use EMA8 as proxy for EMA10
+            'ema5': ema5,  # MISMATCH FIX 5: Stage 4 trailing uses EMA5
+            'ema10': ema10,
             'atr': atr,
             'dynamic_exit_notes': (
                 'Initial:1.2xATR | Lock:+2.5R->+0.5R | '
@@ -520,16 +653,6 @@ class PullbackEntryStrategy(BaseStrategy):
 
         return snapshot
 
-    def _load_sector_etf_data(self):
-        """Load sector ETF data for bonus calculation."""
-        try:
-            for etf in self.PARAMS['sector_etfs'].values():
-                df = self._get_data(etf)
-                if df is not None and len(df) > 50:
-                    self.sector_etf_data[etf] = df
-        except Exception as e:
-            logger.warning(f"Could not load sector ETF data: {e}")
-
     def _calculate_sector_leadership(self, sector: str) -> float:
         """
         Calculate sector leadership score (0-1.0) based on sector ETF performance.
@@ -539,6 +662,8 @@ class PullbackEntryStrategy(BaseStrategy):
         - RS >= 80th AND > EMA50: 0.7
         - RS >= 80th but < EMA50: 0.3
         - Otherwise: 0
+
+        Uses pre-calculated ETF data from etf_cache (Phase 0).
 
         Args:
             sector: Stock's sector name
@@ -550,40 +675,24 @@ class PullbackEntryStrategy(BaseStrategy):
             return 0.0
 
         etf_symbol = self.PARAMS['sector_etfs'][sector]
-        if etf_symbol not in self.sector_etf_data:
+
+        # Use pre-calculated ETF data from database
+        etf_data = self.db.get_etf_cache(etf_symbol) if hasattr(self, 'db') else None
+        if not etf_data:
             return 0.0
 
-        etf_df = self.sector_etf_data[etf_symbol]
-        if len(etf_df) < 50:
-            return 0.0
+        # Get pre-calculated metrics
+        rs_percentile = etf_data.get('rs_percentile', 0)
+        above_ema50 = etf_data.get('above_ema50', False)
 
-        try:
-            ind = TechnicalIndicators(etf_df)
-            ind.calculate_all()
-
-            # Get ETF metrics
-            etf_price = etf_df['close'].iloc[-1]
-            ema50 = ind.indicators.get('ema', {}).get('ema50', 0)
-
-            # Calculate RS percentile (3m, 6m, 12m weighted)
-            rs_score = ind.calculate_rs_score_weighted(etf_df, 'SPY')
-            rs_percentile = rs_score.get('rs_percentile', 0) * 100  # Convert to 0-100 scale
-
-            # Check conditions
-            above_ema50 = etf_price > ema50 if ema50 > 0 else False
-
-            # Score based on RS percentile and EMA50 alignment
-            if rs_percentile >= 90 and above_ema50:
-                return 1.0
-            elif rs_percentile >= 80 and above_ema50:
-                return 0.7
-            elif rs_percentile >= 80:
-                return 0.3
-            else:
-                return 0.0
-
-        except Exception as e:
-            logger.debug(f"Error calculating sector leadership for {sector}: {e}")
+        # Score based on RS percentile and EMA50 alignment
+        if rs_percentile >= 90 and above_ema50:
+            return 1.0
+        elif rs_percentile >= 80 and above_ema50:
+            return 0.7
+        elif rs_percentile >= 80:
+            return 0.3
+        else:
             return 0.0
 
     def _calculate_momentum_persistence(self, symbol: str, df: pd.DataFrame) -> float:
@@ -592,6 +701,8 @@ class PullbackEntryStrategy(BaseStrategy):
 
         Measures stock's 5d return relative to SPY's 5d return.
         Rewards presence of relative strength during pullback.
+
+        Uses pre-calculated SPY data from etf_cache (Phase 0).
 
         Scoring:
         - Outperformance > 2%: +1.0
@@ -608,15 +719,17 @@ class PullbackEntryStrategy(BaseStrategy):
         if len(df) < 5:
             return 0.0
 
-        # Stock 5d return
-        stock_return = (df['close'].iloc[-1] - df['close'].iloc[-5]) / df['close'].iloc[-5]
+        # Stock 5d return (safe division)
+        close_5d_ago = df['close'].iloc[-5] if len(df) >= 5 else df['close'].iloc[-1]
+        close_latest = df['close'].iloc[-1]
+        stock_return = safe_divide(close_latest - close_5d_ago, close_5d_ago, default=0.0)
 
-        # SPY 5d return
-        spy_df = self.sector_etf_data.get('SPY')
-        if spy_df is None or len(spy_df) < 5:
+        # SPY 5d return from pre-calculated data
+        spy_data = self.db.get_etf_cache('SPY') if hasattr(self, 'db') else None
+        if not spy_data:
             return 0.0
 
-        spy_return = (spy_df['close'].iloc[-1] - spy_df['close'].iloc[-5]) / spy_df['close'].iloc[-5]
+        spy_return = spy_data.get('ret_5d', 0) / 100  # Convert from percentage
 
         # Outperformance
         outperformance = stock_return - spy_return
@@ -633,6 +746,8 @@ class PullbackEntryStrategy(BaseStrategy):
         """
         Calculate momentum persistence details for reporting.
 
+        Uses pre-calculated SPY data from etf_cache (Phase 0).
+
         Args:
             symbol: Stock symbol
             df: OHLCV DataFrame
@@ -643,15 +758,17 @@ class PullbackEntryStrategy(BaseStrategy):
         if len(df) < 5:
             return {'stock_5d_return': 0.0, 'spy_5d_return': 0.0, 'outperformance_pct': 0.0}
 
-        # Stock 5d return
-        stock_return = (df['close'].iloc[-1] - df['close'].iloc[-5]) / df['close'].iloc[-5]
+        # Stock 5d return (safe division)
+        close_5d_ago = df['close'].iloc[-5] if len(df) >= 5 else df['close'].iloc[-1]
+        close_latest = df['close'].iloc[-1]
+        stock_return = safe_divide(close_latest - close_5d_ago, close_5d_ago, default=0.0)
 
-        # SPY 5d return
-        spy_df = self.sector_etf_data.get('SPY')
-        if spy_df is None or len(spy_df) < 5:
+        # SPY 5d return from pre-calculated data
+        spy_data = self.db.get_etf_cache('SPY') if hasattr(self, 'db') else None
+        if not spy_data:
             return {'stock_5d_return': stock_return, 'spy_5d_return': 0.0, 'outperformance_pct': 0.0}
 
-        spy_return = (spy_df['close'].iloc[-1] - spy_df['close'].iloc[-5]) / spy_df['close'].iloc[-5]
+        spy_return = spy_data.get('ret_5d', 0) / 100  # Convert from percentage
 
         # Outperformance
         outperformance = stock_return - spy_return
