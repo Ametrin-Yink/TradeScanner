@@ -168,7 +168,7 @@ class DistributionTopStrategy(BaseStrategy):
         peak_prices = highs[peaks]
 
         # Group peaks that are close in price (within 2.5 ATR)
-        atr = TechnicalIndicators(df).indicators.get('atr', {}).get('atr14', df['close'].iloc[-1] * 0.02)
+        atr = TechnicalIndicators(df).indicators.get('atr', {}).get('atr', df['close'].iloc[-1] * 0.02)
 
         level_high = np.max(peak_prices)
         level_low = np.min(peak_prices[peak_prices >= level_high - atr * 2.5])

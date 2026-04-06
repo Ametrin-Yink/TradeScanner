@@ -267,11 +267,11 @@ class RelativeStrengthLongStrategy(BaseStrategy):
         # 1. Volatility vs SPY (0-1.5 pts) per v5.0 spec
         spy_df = getattr(self, '_spy_df', None)
         if spy_df is not None and len(spy_df) >= 20:
-            stock_atr = ind.indicators.get('atr', {}).get('atr_14', 0)
+            stock_atr = ind.indicators.get('atr', {}).get('atr', 0)
             stock_atr_pct = stock_atr / current_price if current_price > 0 else 0
 
             spy_ind = TechnicalIndicators(spy_df)
-            spy_atr = spy_ind.indicators.get('atr', {}).get('atr_14', 0)
+            spy_atr = spy_ind.indicators.get('atr', {}).get('atr', 0)
             spy_price = spy_df['close'].iloc[-1]
             spy_atr_pct = spy_atr / spy_price if spy_price > 0 else 0
 
@@ -358,7 +358,7 @@ class RelativeStrengthLongStrategy(BaseStrategy):
 
         # Get indicators
         ema50 = ind.indicators.get('ema', {}).get('ema50', current_price)
-        atr = ind.indicators.get('atr', {}).get('atr_14', current_price * 0.02)
+        atr = ind.indicators.get('atr', {}).get('atr', current_price * 0.02)
 
         entry = round(current_price, 2)
 

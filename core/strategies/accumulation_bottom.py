@@ -225,7 +225,7 @@ class AccumulationBottomStrategy(BaseStrategy):
         trough_dates = [t[2] for t in troughs]
 
         # Group troughs that are close in price (within 2.5 ATR)
-        atr = TechnicalIndicators(df).indicators.get('atr', {}).get('atr14', df['close'].iloc[-1] * 0.02)
+        atr = TechnicalIndicators(df).indicators.get('atr', {}).get('atr', df['close'].iloc[-1] * 0.02)
 
         level_low = np.min(trough_prices)
         level_high = np.max(trough_prices[trough_prices <= level_low + atr * 2.5])
@@ -556,7 +556,7 @@ class AccumulationBottomStrategy(BaseStrategy):
         """
         current_price = df['close'].iloc[-1]
         ind = TechnicalIndicators(df)
-        atr = ind.indicators.get('atr', {}).get('atr14', current_price * 0.02)
+        atr = ind.indicators.get('atr', {}).get('atr', current_price * 0.02)
 
         level = self._detect_support_level(df)
         support_low = level['low'] if level else df['low'].tail(20).min()

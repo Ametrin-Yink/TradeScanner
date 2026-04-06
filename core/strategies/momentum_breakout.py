@@ -263,7 +263,7 @@ class MomentumBreakoutStrategy(BaseStrategy):
         slope_pct = slope / np.mean(y) if np.mean(y) > 0 else 0
 
         # Calculate ATR for slope comparison
-        atr = ind.indicators.get('atr', {}).get('atr_14', y.mean() * 0.02)
+        atr = ind.indicators.get('atr', {}).get('atr', y.mean() * 0.02)
         atr_5d = atr * 5  # Approximate 5-day ATR
 
         # Count higher lows for ascending pattern

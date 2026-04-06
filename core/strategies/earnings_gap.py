@@ -350,7 +350,7 @@ class EarningsGapStrategy(BaseStrategy):
 
         ind = TechnicalIndicators(df)
         ind.calculate_all()
-        atr = ind.indicators.get('atr', {}).get('atr14', current_price * 0.02)
+        atr = ind.indicators.get('atr', {}).get('atr', current_price * 0.02)
 
         # Calculate consolidation levels (excluding gap day)
         if len(df) > 1:
