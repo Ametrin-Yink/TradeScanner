@@ -437,3 +437,95 @@ def calculate_linear_interpolation(value: float, min_val: float, max_val: float,
         return max_score
 
     return min_score + (value - min_val) / (max_val - min_val) * (max_score - min_score)
+
+
+def safe_divide(numerator, denominator, default=0.0) -> float:
+    """Safely divide two numbers, returning default if division is unsafe.
+
+    Args:
+        numerator: The numerator value
+        denominator: The denominator value
+        default: Default value to return if division is unsafe (default 0.0)
+
+    Returns:
+        Result of division, or default if:
+        - denominator is 0
+        - denominator is None
+        - denominator is NaN
+        - numerator is None or NaN
+    """
+    if denominator is None or denominator == 0:
+        return default
+    if numerator is None:
+        return default
+
+    # Check for NaN values
+    try:
+        if np.isnan(denominator) or np.isnan(numerator):
+            return default
+    except (TypeError, ValueError):
+        # Not a numeric type, let division proceed (may fail)
+        pass
+
+    try:
+        result = numerator / denominator
+        return default if np.isnan(result) else result
+    except (ZeroDivisionError, TypeError, ValueError):
+        return default
+
+
+def validate_dataframe(df: pd.DataFrame, min_rows: int = 50, required_columns: list = None) -> bool:
+    """Validate a DataFrame has sufficient data for strategy calculations.
+
+    Args:
+        df: DataFrame to validate
+        min_rows: Minimum number of rows required (default 50)
+        required_columns: List of required column names (default ['close', 'volume'])
+
+    Returns:
+        True if DataFrame is valid, False otherwise
+    """
+    if df is None:
+        return False
+
+    if len(df) < min_rows:
+        return False
+
+    if required_columns is None:
+        required_columns = ['close', 'volume']
+
+    for col in required_columns:
+        if col not in df.columns:
+            return False
+        # Check for all-NaN columns
+        if df[col].isna().all():
+            return False
+
+    # Check for valid close prices (positive values)
+    if 'close' in df.columns:
+        valid_close = df['close'].dropna()
+        if len(valid_close) == 0 or (valid_close <= 0).all():
+            return False
+
+    return True
+
+
+def get_valid_close(df: pd.DataFrame, default: float = 0.0) -> float:
+    """Get the last valid close price from a DataFrame.
+
+    Args:
+        df: DataFrame with 'close' column
+        default: Default value if no valid close found
+
+    Returns:
+        Last valid close price or default
+    """
+    if df is None or 'close' not in df.columns:
+        return default
+
+    valid_close = df['close'].dropna()
+    if len(valid_close) == 0:
+        return default
+
+    close = valid_close.iloc[-1]
+    return close if close > 0 else default
