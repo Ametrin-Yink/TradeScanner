@@ -860,13 +860,25 @@ class PreMarketPrep:
     def update_rs_percentiles(self) -> int:
         """Calculate and update universe-wide RS percentile rankings.
 
-        RS percentile is calculated by ranking all stocks by their ret_3m (rs_raw)
-        and converting to percentile (0-100).
+        Per Strategy Description v7.0:
+        RS_pct = percentile_rank(stock_63d_return / SPY_63d_return, universe)
+
+        This calculates RELATIVE strength (vs SPY), not just absolute returns.
 
         Returns:
             Number of symbols updated
         """
         logger.info("  Calculating universe-wide RS percentiles...")
+
+        # Fetch SPY 63-day return for normalization
+        spy_df = self.db.get_tier3_cache('SPY')
+        if spy_df is None or len(spy_df) < 63:
+            logger.warning("  SPY data unavailable for RS normalization, using absolute returns")
+            spy_ret_63d = 0.0  # Flat market assumption
+        else:
+            spy_ret_63d = (spy_df['close'].iloc[-1] / spy_df['close'].iloc[-63] - 1) * 100
+
+        logger.info(f"  SPY 63-day return: {spy_ret_63d:.2f}%")
 
         # Get all rs_raw values from database
         all_rs_data = self.db.get_all_rs_raw_values()
@@ -878,12 +890,37 @@ class PreMarketPrep:
         total_stocks = len(all_rs_data)
         logger.info(f"  Calculating percentiles for {total_stocks} stocks...")
 
+        # Calculate SPY-relative return for each stock, then percentile rank
+        # Formula: relative_return = (1 + stock_ret_63d/100) / (1 + spy_ret_63d/100) - 1
+        # Then convert to percentage for ranking
+        stock_relative_returns = []
+        for data in all_rs_data:
+            symbol = data['symbol']
+            stock_ret_63d = data['rs_raw']  # Already in percentage form
+
+            # Handle edge case: SPY return near -100% (theoretical, practically 0)
+            if (1 + spy_ret_63d / 100) <= 0.01:
+                # SPY down >99%, use absolute return as fallback
+                relative_return_pct = stock_ret_63d
+            else:
+                # SPY-relative return formula
+                relative_return = (1 + stock_ret_63d / 100) / (1 + spy_ret_63d / 100) - 1
+                relative_return_pct = relative_return * 100
+
+            stock_relative_returns.append({
+                'symbol': symbol,
+                'relative_return': relative_return_pct
+            })
+
+        # Sort by relative return (highest first)
+        stock_relative_returns.sort(key=lambda x: x['relative_return'], reverse=True)
+
         # Calculate percentile for each stock
         # Percentile formula: (rank - 1) / (total - 1) * 100
-        # Rank 1 (highest rs_raw) = 100th percentile
-        # Rank N (lowest rs_raw) = 0th percentile
+        # Rank 0 (highest relative_return) = 100th percentile
+        # Rank N-1 (lowest relative_return) = 0th percentile
         rs_percentiles = {}
-        for rank, data in enumerate(all_rs_data):
+        for rank, data in enumerate(stock_relative_returns):
             symbol = data['symbol']
             if total_stocks > 1:
                 percentile = (total_stocks - rank - 1) / (total_stocks - 1) * 100
