@@ -1,4 +1,4 @@
-"""Strategy H: RelativeStrengthLong - RS divergence in bear markets (v5.0)."""
+"""Strategy H: RelativeStrengthLong - RS divergence in bear/neutral markets (v7.0)."""
 from typing import Dict, List, Tuple, Any
 import logging
 
@@ -13,9 +13,17 @@ logger = logging.getLogger(__name__)
 
 class RelativeStrengthLongStrategy(BaseStrategy):
     """
-    Strategy H: RelativeStrengthLong v5.0
+    Strategy H: RelativeStrengthLong v7.0
     RS divergence longs in bear/neutral markets.
     Exempt from extreme regime scalar.
+
+    Mismatches fixed (v7.0):
+    1. RD max score: 6.0 → 4.0
+    2. RD scoring: RS percentile + SPY divergence bonus (capped at 4.0)
+    3. SH dimension: Replaced EMA alignment + 52w high with SPY down-day evaluation
+    4. Regime exit: Added Stage 3 trailing stop when SPY crosses above EMA21
+    5. Stop loss: Changed to max(EMA50×0.99, entry×0.93)
+    6. Pre-filter: Removed accum_ratio hard gate (now only scored in VC)
     """
 
     NAME = "RelativeStrengthLong"
@@ -32,7 +40,7 @@ class RelativeStrengthLongStrategy(BaseStrategy):
         'min_market_cap': 3e9,
         'min_volume': 200000,
         'max_distance_from_52w_high': 0.15,
-        'min_accum_ratio': 1.1,
+        # Note: accum_ratio is scored in VC dimension, not a hard pre-filter
     }
 
     def filter(self, symbol: str, df: pd.DataFrame) -> bool:
@@ -71,17 +79,11 @@ class RelativeStrengthLongStrategy(BaseStrategy):
             logger.debug(f"RS_REJ: {symbol} - too far from 52w high: {distance_from_high:.2%}")
             return False
 
-        # Accumulation ratio
-        accum_ratio = data.get('accum_ratio_15d', 1.0)
-        if accum_ratio < self.PARAMS['min_accum_ratio']:
-            logger.debug(f"RS_REJ: {symbol} - accum_ratio {accum_ratio:.2f} < {self.PARAMS['min_accum_ratio']}")
-            return False
-
         logger.debug(f"RS_PASS: {symbol} - RS leader in {regime}")
         return True
 
     def calculate_dimensions(self, symbol: str, df: pd.DataFrame) -> List[ScoringDimension]:
-        """Calculate RD, SH, CQ, VC per v5.0 spec."""
+        """Calculate RD, SH, CQ, VC per v7.0 spec."""
         data = self.phase0_data.get(symbol, {}) if hasattr(self, 'phase0_data') else {}
 
         # RD: RS Divergence
@@ -97,7 +99,7 @@ class RelativeStrengthLongStrategy(BaseStrategy):
         vc_score = self._calculate_vc(df, data)
 
         return [
-            ScoringDimension(name='RD', score=rd_score, max_score=6.0, details={}),
+            ScoringDimension(name='RD', score=rd_score, max_score=4.0, details={}),
             ScoringDimension(name='SH', score=sh_score, max_score=4.0, details={}),
             ScoringDimension(name='CQ', score=cq_score, max_score=3.0, details={}),
             ScoringDimension(name='VC', score=vc_score, max_score=2.0, details={}),
@@ -105,156 +107,146 @@ class RelativeStrengthLongStrategy(BaseStrategy):
 
     def _calculate_rd(self, data: Dict, df: pd.DataFrame) -> float:
         """
-        RS Divergence - 3 components per v5.0 spec:
-        1. RS percentile (0-3.0) - current RS rank vs universe
-        2. Absolute divergence (0-2.0) - stock vs SPY 20d return
-        3. Consistency (0-1.0) - RS percentile stability over last 10 days
+        RS Divergence - per v7.0 spec (max 4.0, including bonus).
+
+        Documentation structure:
+        | RS_pct | Score | Stock 10d return − SPY 10d return | Bonus |
+        |--------|-------|-----------------------------------|-------|
+        | ≥95th | 4.0 | >+10% | +1.5 |
+        | 90-95th | 3.0-4.0 | +5-10% | +1.0-1.5 |
+        | 85-90th | 2.0-3.0 | +2-5% | +0.5-1.0 |
+        | 80-85th | 1.0-2.0 | <+2% | 0 |
+
+        Note: RD capped at 4.0 after bonus.
         """
         rs_pct = data.get('rs_percentile', 50)
-        score = 0.0
+        base_score = 0.0
 
-        # 1. RS percentile (0-3.0) per v5.0 spec
+        # RS percentile base score (0-3.0)
         if rs_pct >= 95:
-            score += 3.0
+            base_score = 3.0
         elif rs_pct >= 90:
-            score += 2.5 + (rs_pct - 90) * 0.1
+            base_score = 2.0 + (rs_pct - 90) * 0.2  # 2.0-3.0 for 90-95th
         elif rs_pct >= 85:
-            score += 2.0 + (rs_pct - 85) * 0.1
+            base_score = 1.0 + (rs_pct - 85) * 0.2  # 1.0-2.0 for 85-90th
         elif rs_pct >= 80:
-            score += 1.5 + (rs_pct - 80) * 0.1
-
-        # 2. Absolute divergence - stock vs SPY 20d return (0-2.0)
-        spy_df = getattr(self, '_spy_df', None)
-        if spy_df is not None and len(df) >= 20 and len(spy_df) >= 20:
-            stock_ret = (df['close'].iloc[-1] / df['close'].iloc[-20] - 1)
-            spy_ret = (spy_df['close'].iloc[-1] / spy_df['close'].iloc[-20] - 1)
-            divergence = stock_ret - spy_ret
-
-            if divergence >= 0.10 and spy_ret < 0:
-                score += 2.0
-            elif divergence >= 0.10:
-                score += min(1.5 + (divergence - 0.10) * 10, 2.0)
-            elif divergence >= 0.05:
-                score += 0.8 + (divergence - 0.05) * 14
-            elif divergence >= 0.02:
-                score += 0.3 + (divergence - 0.02) * 16.67
-
-        # 3. Consistency - RS percentile stability over last 10 days (0-1.0)
-        # Per v5.0 spec: "Score 1.0 if RS percentile has been >= 75th for all of last 10 trading days"
-        consistency_score = self._calculate_rs_consistency(df, spy_df)
-        score += consistency_score
-
-        return min(6.0, score)
-
-    def _calculate_rs_consistency(self, df: pd.DataFrame, spy_df: pd.DataFrame) -> float:
-        """
-        Calculate RS percentile stability over last 10 trading days.
-
-        Per v5.0 spec:
-        - Calculate 3m return for each of the last 10 days
-        - Rank each day's RS vs universe (approximated by checking if RS > 0)
-        - Score 1.0 if RS percentile >= 75th for all 10 days
-        - Otherwise score 0
-
-        Note: True RS percentile requires universe-wide data for each historical day.
-        Since we only have single-stock data here, we approximate by checking if the
-        stock's 3m return was positive (outperforming a flat market) for all 10 days.
-        This is a reasonable proxy since RS percentile >= 75th typically requires
-        sustained positive relative performance.
-        """
-        if len(df) < 73:  # Need 10 days + 63 days for 3m return
-            return 0.0
-
-        if spy_df is None or len(spy_df) < 73:
-            return 0.0
-
-        days_at_75th_or_higher = 0
-
-        for i in range(10):
-            # Get data as of i days ago
-            end_idx = -(i + 1)
-            start_idx = -(i + 64)  # 63 trading days before end_idx
-
-            if abs(start_idx) > len(df) or abs(start_idx) > len(spy_df):
-                continue
-
-            # Calculate 3m return as of i days ago
-            stock_ret_3m = (df['close'].iloc[end_idx] / df['close'].iloc[start_idx] - 1)
-            spy_ret_3m = (spy_df['close'].iloc[end_idx] / spy_df['close'].iloc[start_idx] - 1)
-
-            # RS raw = 3m return (simplified - full calc would need 6m/12m too)
-            rs_raw = stock_ret_3m
-
-            # Approximation: RS >= 75th percentile typically means:
-            # - Positive 3m return AND outperforming SPY
-            # This is a heuristic since we can't calculate true percentile without universe data
-            if rs_raw >= 0.05 and stock_ret_3m > spy_ret_3m:
-                days_at_75th_or_higher += 1
-
-        # Per spec: all 10 days must be >= 75th percentile for full score
-        if days_at_75th_or_higher >= 10:
-            return 1.0
-        elif days_at_75th_or_higher >= 7:
-            return 0.7
-        elif days_at_75th_or_higher >= 5:
-            return 0.5
+            base_score = 0.0 + (rs_pct - 80) * 0.2  # 0.0-1.0 for 80-85th
         else:
-            return 0.0
+            return 0.0  # Below 80th percentile
+
+        # SPY divergence bonus (0-1.5) based on 10d return differential
+        spy_df = getattr(self, '_spy_df', None)
+        bonus = 0.0
+        if spy_df is not None and len(df) >= 10 and len(spy_df) >= 10:
+            stock_ret_10d = (df['close'].iloc[-1] / df['close'].iloc[-10] - 1)
+            spy_ret_10d = (spy_df['close'].iloc[-1] / spy_df['close'].iloc[-10] - 1)
+            divergence = stock_ret_10d - spy_ret_10d
+
+            if divergence > 0.10:
+                bonus = 1.5
+            elif divergence >= 0.05:
+                bonus = 1.0 + (divergence - 0.05) * 10  # 1.0-1.5 for +5-10%
+            elif divergence >= 0.02:
+                bonus = 0.5 + (divergence - 0.02) * 16.67  # 0.5-1.0 for +2-5%
+            # else: <+2% = 0 bonus
+
+        # Cap at 4.0 after bonus
+        return min(4.0, base_score + bonus)
 
     def _calculate_sh(self, df: pd.DataFrame, data: Dict) -> float:
         """
-        Structure Health - per v5.0 spec (4.0 max).
+        Support Hold - per v7.0 spec (max 4.0).
 
-        Components:
-        1. EMA alignment (0-2.0 pts)
-        2. 52-week high proximity (0-1.5 pts)
-        3. Recent trend (0-0.5 pts)
+        Evaluated during SPY down-days in last 10d:
+        | Condition | Score |
+        |-----------|-------|
+        | Held above EMA8 during SPY weakness | 1.5 |
+        | Held above EMA21 | 1.0 |
+        | No SPY down-days in 10d (baseline) | 1.0 |
+        | Brief EMA21 break, reclaimed same day | 0.5 |
+        | Closed below EMA21 | 0 |
         """
         ind = TechnicalIndicators(df)
         ind.calculate_all()
 
         current_price = df['close'].iloc[-1]
-        score = 0.0
-
-        # 1. EMA alignment (0-2.0 pts) per v5.0 spec
         ema8 = ind.indicators.get('ema', {}).get('ema8', current_price)
         ema21 = ind.indicators.get('ema', {}).get('ema21', current_price)
-        ema50 = ind.indicators.get('ema', {}).get('ema50', current_price)
-        ema200 = ind.indicators.get('ema', {}).get('ema200', current_price)
 
-        # Check full stack alignment
-        full_stack = (current_price > ema21 > ema50 > ema200)
-        price_above_ema50 = current_price > ema50
-        ema50_above_ema200 = ema50 > ema200
-        price_above_ema200 = current_price > ema200
+        spy_df = getattr(self, '_spy_df', None)
+        if spy_df is None or len(spy_df) < 11 or len(df) < 11:
+            # Can't evaluate without sufficient data - return baseline
+            return 1.0
 
-        if full_stack:
-            score += 2.0
-        elif price_above_ema50 and ema50_above_ema200:
+        # Identify SPY down-days in last 10 days
+        spy_down_days = []
+        for i in range(1, 11):
+            idx = -i
+            prev_idx = -(i + 1)
+            if abs(idx) <= len(spy_df) and abs(prev_idx) <= len(spy_df):
+                spy_close = spy_df['close'].iloc[idx]
+                spy_prev_close = spy_df['close'].iloc[prev_idx]
+                if spy_close < spy_prev_close:
+                    spy_down_days.append(i - 1)  # 0-indexed days ago
+
+        # No SPY down-days in 10d = baseline score
+        if not spy_down_days:
+            return 1.0
+
+        # Evaluate stock behavior during SPY down-days
+        score = 0.0
+        held_above_ema8_count = 0
+        held_above_ema21_count = 0
+        broke_ema21_but_reclaimed = False
+
+        for days_ago in spy_down_days:
+            idx = -(days_ago + 1)
+            if abs(idx) > len(df):
+                continue
+
+            stock_low = df['low'].iloc[idx]
+            stock_close = df['close'].iloc[idx]
+            prev_close = df['close'].iloc[idx - 1] if idx > 0 else stock_close
+
+            # Check if held above EMA8 during SPY weakness
+            if stock_low >= ema8:
+                held_above_ema8_count += 1
+
+            # Check if held above EMA21
+            if stock_low >= ema21:
+                held_above_ema21_count += 1
+            elif stock_close >= ema21:
+                # Broke EMA21 intraday but reclaimed by close
+                broke_ema21_but_reclaimed = True
+
+        # Calculate score based on behavior
+        num_down_days = len(spy_down_days)
+
+        # Held above EMA8 during SPY weakness: 1.5 points
+        if held_above_ema8_count == num_down_days:
             score += 1.5
-        elif price_above_ema200:
-            score += 0.8
-        # else: 0 points (price < EMA200)
+        elif held_above_ema8_count > 0:
+            score += 1.5 * (held_above_ema8_count / num_down_days)
 
-        # 2. 52-week high proximity (0-1.5 pts) per v5.0 spec
-        high_52w = df['high'].tail(252).max() if len(df) >= 252 else df['high'].max()
-        distance_from_52w = (high_52w - current_price) / high_52w if high_52w > 0 else 1.0
+        # Held above EMA21: 1.0 points
+        if held_above_ema21_count == num_down_days:
+            score += 1.0
+        elif held_above_ema21_count > 0:
+            score += 1.0 * (held_above_ema21_count / num_down_days)
 
-        if distance_from_52w <= 0.05:
-            score += 1.5
-        elif distance_from_52w <= 0.10:
-            # Linear interpolation: 5-10% = 1.0-1.5
-            score += 1.0 + (0.10 - distance_from_52w) / 0.05 * 0.5
-        elif distance_from_52w <= 0.15:
-            # Linear interpolation: 10-15% = 0.5-1.0
-            score += 0.5 + (0.15 - distance_from_52w) / 0.05 * 0.5
-        # else: > 15% = 0 points
+        # Brief EMA21 break, reclaimed same day: 0.5 points
+        if broke_ema21_but_reclaimed and held_above_ema21_count < num_down_days:
+            score = max(score, 0.5)
 
-        # 3. Recent trend (0-0.5 pts)
-        if len(df) >= 5:
-            ret_5d = (df['close'].iloc[-1] / df['close'].iloc[-5] - 1)
-            if ret_5d > 0:
-                score += 0.5
+        # Closed below EMA21 on any down-day: 0 points for that day
+        closed_below_ema21 = any(
+            df['close'].iloc[-(d + 1)] < ema21
+            for d in spy_down_days
+            if abs(-(d + 1)) <= len(df)
+        )
+        if closed_below_ema21:
+            # Reduce score if closed below EMA21
+            score = min(score, 0.5)
 
         return min(4.0, score)
 
@@ -316,45 +308,85 @@ class RelativeStrengthLongStrategy(BaseStrategy):
         return min(3.0, score)
 
     def _calculate_vc(self, df: pd.DataFrame, data: Dict) -> float:
-        """Volume Confirmation - accumulation volume pattern."""
+        """
+        Volume Confirmation - per v7.0 spec (max 2.0).
+
+        accum_ratio = sum(vol, up-days, 15d) / sum(vol, down-days, 15d)
+
+        | accum_ratio | Score |
+        |-------------|-------|
+        | >2.0 | 2.0 |
+        | 1.5–2.0 | 1.5–2.0 |
+        | 1.2–1.5 | 0.8–1.5 |
+        | 1.0–1.2 | 0.3–0.8 |
+        | <1.0 | 0 |
+        """
         accum_ratio = data.get('accum_ratio_15d', 1.0)
 
         score = 0.0
 
-        # Accumulation ratio (0-2.0)
-        if accum_ratio >= 1.5:
-            score += 2.0
-        elif accum_ratio >= 1.3:
-            score += 1.5
-        elif accum_ratio >= 1.1:
-            score += 1.0
-
-        # Recent volume vs average
-        recent_volume = df['volume'].iloc[-1]
-        avg_volume = df['volume'].tail(20).mean()
-        if avg_volume > 0:
-            vol_ratio = recent_volume / avg_volume
-            if vol_ratio >= 1.5:
-                score += 1.0
-            elif vol_ratio >= 1.2:
-                score += 0.5
+        # Accumulation ratio scoring per v7.0 spec
+        if accum_ratio > 2.0:
+            score = 2.0
+        elif accum_ratio >= 1.5:
+            # 1.5-2.0 = 1.5-2.0
+            score = 1.5 + (accum_ratio - 1.5) * 0.5
+        elif accum_ratio >= 1.2:
+            # 1.2-1.5 = 0.8-1.5
+            score = 0.8 + (accum_ratio - 1.2) / 0.3 * 0.7
+        elif accum_ratio >= 1.0:
+            # 1.0-1.2 = 0.3-0.8
+            score = 0.3 + (accum_ratio - 1.0) / 0.2 * 0.5
+        # else: <1.0 = 0
 
         return min(2.0, score)
 
     def calculate_entry_exit(self, symbol: str, df: pd.DataFrame,
                             dimensions: List[ScoringDimension],
                             score: float, tier: str) -> Tuple[float, float, float]:
-        """Calculate entry, stop, target for long position."""
+        """
+        Calculate entry, stop, target for long position per v7.0 spec.
+
+        Entry: RS≥80th 5+ days, Price>EMA21 positive slope, Vol≥1.2×avg20d; prefer SPY down-day
+        Stop: max(EMA50×0.99, entry×0.93)
+        Target: entry + 3.0 × (entry − stop)
+        Regime exit: If SPY crosses above EMA21 (bear→neutral), move to Stage 3 trailing stop
+        """
         current_price = df['close'].iloc[-1]
         ind = TechnicalIndicators(df)
-        atr = ind.indicators.get('atr', {}).get('atr14', current_price * 0.02)
+        ind.calculate_all()
 
-        low_20d = df['low'].tail(20).min()
+        # Get indicators
+        ema50 = ind.indicators.get('ema', {}).get('ema50', current_price)
+        atr = ind.indicators.get('atr', {}).get('atr_14', current_price * 0.02)
 
         entry = round(current_price, 2)
-        stop = round(max(low_20d - 0.3 * atr, entry * 0.97), 2)
+
+        # Stop loss per v7.0: max(EMA50×0.99, entry×0.93)
+        ema50_stop = ema50 * 0.99
+        entry_stop = entry * 0.93
+        stop = round(max(ema50_stop, entry_stop), 2)
+
+        # Check regime exit condition (SPY above EMA21 = bear→neutral signal)
+        spy_df = getattr(self, '_spy_df', None)
+        regime_exit_active = False
+        if spy_df is not None and len(spy_df) >= 21:
+            spy_ema21 = spy_df['close'].ewm(span=21, adjust=False).mean().iloc[-1]
+            spy_close = spy_df['close'].iloc[-1]
+            if spy_close > spy_ema21:
+                # SPY above EMA21: regime transitioning from bear to neutral
+                # Move to Stage 3 trailing stop (tighter stop)
+                regime_exit_active = True
+                # Stage 3: Use tighter stop (EMA21 or recent low)
+                ema21 = ind.indicators.get('ema', {}).get('ema21', current_price)
+                low_10d = df['low'].tail(10).min()
+                stage3_stop = round(max(ema21 * 0.99, low_10d), 2)
+                # Use the tighter of original stop or Stage 3 stop
+                stop = min(stop, stage3_stop)
+
+        # Target per v7.0: 3.0× risk (not 2.5×)
         risk = entry - stop
-        target = round(entry + risk * 2.5, 2)
+        target = round(entry + risk * 3.0, 2)
 
         return entry, stop, target
 
