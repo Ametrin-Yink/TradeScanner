@@ -175,7 +175,6 @@ class RelativeStrengthLongStrategy(BaseStrategy):
 
         spy_df = getattr(self, '_spy_df', None)
         if spy_df is None or len(spy_df) < 11 or len(df) < 11:
-            # Can't evaluate without sufficient data - return baseline
             return 1.0
 
         # Identify SPY down-days in last 10 days
@@ -184,12 +183,9 @@ class RelativeStrengthLongStrategy(BaseStrategy):
             idx = -i
             prev_idx = -(i + 1)
             if abs(idx) <= len(spy_df) and abs(prev_idx) <= len(spy_df):
-                spy_close = spy_df['close'].iloc[idx]
-                spy_prev_close = spy_df['close'].iloc[prev_idx]
-                if spy_close < spy_prev_close:
-                    spy_down_days.append(i - 1)  # 0-indexed days ago
+                if spy_df['close'].iloc[idx] < spy_df['close'].iloc[prev_idx]:
+                    spy_down_days.append(i - 1)
 
-        # No SPY down-days in 10d = baseline score
         if not spy_down_days:
             return 1.0
 
@@ -206,20 +202,15 @@ class RelativeStrengthLongStrategy(BaseStrategy):
 
             stock_low = df['low'].iloc[idx]
             stock_close = df['close'].iloc[idx]
-            prev_close = df['close'].iloc[idx - 1] if idx > 0 else stock_close
 
-            # Check if held above EMA8 during SPY weakness
             if stock_low >= ema8:
                 held_above_ema8_count += 1
 
-            # Check if held above EMA21
             if stock_low >= ema21:
                 held_above_ema21_count += 1
             elif stock_close >= ema21:
-                # Broke EMA21 intraday but reclaimed by close
                 broke_ema21_but_reclaimed = True
 
-        # Calculate score based on behavior
         num_down_days = len(spy_down_days)
 
         # Held above EMA8 during SPY weakness: 1.5 points
@@ -237,16 +228,6 @@ class RelativeStrengthLongStrategy(BaseStrategy):
         # Brief EMA21 break, reclaimed same day: 0.5 points
         if broke_ema21_but_reclaimed and held_above_ema21_count < num_down_days:
             score = max(score, 0.5)
-
-        # Closed below EMA21 on any down-day: 0 points for that day
-        closed_below_ema21 = any(
-            df['close'].iloc[-(d + 1)] < ema21
-            for d in spy_down_days
-            if abs(-(d + 1)) <= len(df)
-        )
-        if closed_below_ema21:
-            # Reduce score if closed below EMA21
-            score = min(score, 0.5)
 
         return min(4.0, score)
 

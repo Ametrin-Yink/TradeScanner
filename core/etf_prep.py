@@ -148,7 +148,7 @@ class ETFPreCalculator:
         ema200 = ind.indicators.get('ema', {}).get('ema200', 0)
 
         # ATR
-        atr = ind.indicators.get('atr', {}).get('atr14', current_price * 0.02)
+        atr = ind.indicators.get('atr', {}).get('atr', current_price * 0.02)
 
         # RSI
         rsi = ind.indicators.get('rsi', {}).get('rsi14', 50)
@@ -210,7 +210,7 @@ class ETFPreCalculator:
         ema200 = ind.indicators.get('ema', {}).get('ema200', 0)
 
         # ATR
-        atr = ind.indicators.get('atr', {}).get('atr14', current_price * 0.02)
+        atr = ind.indicators.get('atr', {}).get('atr', current_price * 0.02)
 
         # RSI
         rsi = ind.indicators.get('rsi', {}).get('rsi14', 50)
