@@ -38,8 +38,8 @@ class TestMomentumBreakoutV7:
         # clv 0.65 = 0 points (at boundary)
         score = strategy._calculate_vc(platform, volume_ratio=1.0, clv=0.65)
 
-        # Should get exactly 0.1 base points for vol_contract > 1.0
-        assert score == 0.1, f"Expected 0.1 base points for vol_contract > 1.0, got {score}"
+        # Should get exactly 0.2 base points for vol_contract > 1.0 (v7.0 Fix I-01)
+        assert score == 0.2, f"Expected 0.2 base points for vol_contract > 1.0, got {score}"
 
     def test_vc_still_rewards_low_volume_contraction(self):
         """VC should still reward proper volume dry-up (vol_contract < 0.5)."""
