@@ -20,7 +20,7 @@ class MomentumBreakoutStrategy(BaseStrategy):
     """
 
     NAME = "MomentumBreakout"
-    STRATEGY_TYPE = StrategyType.A1  # A1: Confirmed breakout
+    STRATEGY_TYPE = StrategyType.A1
     DESCRIPTION = "MomentumBreakout v5.0 - confirmed breakout"
     DIMENSIONS = ['TC', 'CQ', 'BS', 'VC']
 
@@ -41,15 +41,14 @@ class MomentumBreakoutStrategy(BaseStrategy):
         'max_distance_from_52w_high': 0.10,    # Within 10% of 52-week high
         'energy_ratio_cap': 3.0,               # Cap energy ratio at 3.0
         'rs_percentile_min': 80,               # RS > 80 percentile (kept intentionally different from Momentum)
-        # v5.0: TC promoted to primary gate
-        'min_rs_percentile': 50,               # NEW: TC is now primary gate
-        'max_raw_score': 20.0,                  # NEW: Allow raw scores up to 20
-        'bonus_max': 1.5,                       # A1: Bonus pool max (reduced from 3.0, VCP structure moved to A2)
+        'min_rs_percentile': 50,               # TC is primary gate
+        'max_raw_score': 20.0,
+        'bonus_max': 1.5,
     }
 
     def filter(self, symbol: str, df: pd.DataFrame) -> bool:
         """5-layer filtering system with diagnostic logging + TC primary gate."""
-        # NEW: TC hard gate - RS >= 50th percentile (must be done first)
+        # TC hard gate - RS >= 50th percentile (must be done first)
         data = getattr(self, 'phase0_data', {}).get(symbol, {})
         rs_pct = data.get('rs_percentile', 0)
 
@@ -544,9 +543,8 @@ class MomentumBreakoutStrategy(BaseStrategy):
         elif vol_contract < 1.00:
             vc_score += 0.2 + (1.00 - vol_contract) / 0.20 * 0.6  # 0.2-0.8
         else:
-            # A1 FIX: Don't penalize >1.0, just don't reward it
             # Stocks active during base can still break out successfully
-            vc_score += 0.1  # Minimal points, no penalty
+            vc_score += 0.1
 
         # 2. Breakout volume - breakout day / avg20d (0-1.5 pts)
         if volume_ratio >= 3.0:
@@ -991,16 +989,16 @@ class PreBreakoutCompressionStrategy(MomentumBreakoutStrategy):
         Components:
         1. Volume contraction: last 5d avg < 60% of 20d avg -> +1.5; 60-70% -> +0.8
         2. Range contraction: last 5d range < 50% of 20d ATR -> +1.5; 50-70% -> +0.8
-        3. Wave count: >=3 contraction waves -> +1.0
+        3. Wave count: >=2 contraction waves -> +1.0
         4. Proximity to pivot: within 1.5% -> full score; 1.5-3% -> interpolate
         """
         cp_score = 0.0
 
-        # Component 1: Volume contraction
-        vol_5d = df['volume'].tail(5).mean()
-        vol_20d = df['volume'].tail(20).mean()
-        vol_contract = vol_5d / vol_20d if vol_20d > 0 else 1.0
+        # Reuse platform metrics from detect_vcp_platform() - no recalculation needed
+        vol_contract = platform.get('volume_contraction_ratio', 1.0)
+        range_contract = platform.get('platform_range_pct', 1.0)
 
+        # Component 1: Volume contraction scoring
         if vol_contract < 0.50:
             cp_score += 1.5
         elif vol_contract < 0.60:
@@ -1008,49 +1006,26 @@ class PreBreakoutCompressionStrategy(MomentumBreakoutStrategy):
         elif vol_contract < 0.70:
             cp_score += 0.8
 
-        # Component 2: Range contraction
-        range_5d = (df['high'].tail(5).max() - df['low'].tail(5).min())
-        atr_20d = df['high'].tail(20).mean() - df['low'].tail(20).mean()
-        range_contract = range_5d / atr_20d if atr_20d > 0 else 1.0
-
+        # Component 2: Range contraction scoring
         if range_contract < 0.50:
             cp_score += 1.5
         elif range_contract < 0.70:
             cp_score += 0.8
 
-        # Component 3: Wave count (simplified)
-        # Count how many times range contracted in last 15 days
-        # FIX: Use proper negative indexing for rolling windows
-        wave_count = 0
-        prev_range = None
-        for i in range(3):
-            # Get 5-day periods: days -5 to 0, -10 to -5, -15 to -10
-            start_idx = -(i + 1) * 5
-            end_idx = start_idx + 5
-            if end_idx >= 0:
-                period_data = df.iloc[start_idx:end_idx]
-            else:
-                period_data = df.iloc[start_idx:]
-
-            if len(period_data) >= 3:
-                period_range = period_data['high'].max() - period_data['low'].min()
-                if prev_range is not None and period_range < prev_range:
-                    wave_count += 1
-                prev_range = period_range
-
-        if wave_count >= 2:  # FIX: 2+ waves shows contraction pattern
+        # Component 3: Wave count - use platform's contraction_quality as proxy
+        contraction_quality = platform.get('contraction_quality', 0.5)
+        if contraction_quality >= 0.7:
             cp_score += 1.0
 
         # Component 4: Proximity to pivot (platform high)
-        if platform:
-            platform_high = platform['platform_high']
-            current_price = df['close'].iloc[-1]
-            distance = abs(current_price - platform_high) / platform_high
+        platform_high = platform['platform_high']
+        current_price = df['close'].iloc[-1]
+        distance = abs(current_price - platform_high) / platform_high
 
-            if distance < 0.015:  # Within 1.5%
-                cp_score += 1.0
-            elif distance < 0.03:  # Within 3%
-                cp_score += 0.5 + (0.03 - distance) / 0.015 * 0.5
+        if distance < 0.015:  # Within 1.5%
+            cp_score += 1.0
+        elif distance < 0.03:  # Within 3%
+            cp_score += 0.5 + (0.03 - distance) / 0.015 * 0.5
 
         return min(4.0, cp_score)
 
@@ -1161,8 +1136,7 @@ class PreBreakoutCompressionStrategy(MomentumBreakoutStrategy):
 
                     current_price = df['close'].iloc[-1]
 
-                    # FIX: Match premarket_prep.py RS calculation (3m return only)
-                    # rs_raw = ret_3m if ret_3m is not None else 0
+                    # Match premarket_prep.py RS calculation (3m return only)
                     if len(df) >= 63:
                         price_3m = df['close'].iloc[-63]
                         rs_raw = (current_price / price_3m - 1) * 100
