@@ -58,6 +58,7 @@ class MomentumBreakoutStrategy(BaseStrategy):
         - Price > EMA200
         - 3-month return >= -20%
         - Avg 20d volume >= 100K
+        - Market cap >= $2B
         """
         # Validate DataFrame before processing
         if not validate_dataframe(df, min_rows=self.PARAMS.get('min_listing_days', 60)):
@@ -82,6 +83,14 @@ class MomentumBreakoutStrategy(BaseStrategy):
         current_price = df['close'].iloc[-1]
 
         # Layer 0: Tier 1 Pre-Filters (from documentation)
+        # Market cap >= $2B
+        stock_info = self.db.get_stock_info_full(symbol) if self.db else None
+        if stock_info:
+            market_cap = stock_info.get('market_cap', 0)
+            if market_cap < 2e9:
+                logger.debug(f"MB_REJ: {symbol} - Market cap {market_cap:.0f} < $2B")
+                return False
+
         # Price > EMA200
         ema200 = ind.indicators.get('ema', {}).get('ema200')
         if ema200 is None or current_price <= ema200:
@@ -189,14 +198,15 @@ class MomentumBreakoutStrategy(BaseStrategy):
         ))
 
         # Dimension 3: Breakout Strength (BS)
-        bs_score = self._calculate_bs(breakout_pct, platform_range_pct)
+        # v7.0 Fix: Pass volume_ratio for direct volume scoring
+        bs_score = self._calculate_bs(breakout_pct, platform_range_pct, volume_ratio)
         dimensions.append(ScoringDimension(
             name='BS',
             score=bs_score,
             max_score=4.0,
             details={
                 'breakout_pct': breakout_pct,
-                'energy_ratio': breakout_pct / platform_range_pct if platform_range_pct > 0 else 1.0
+                'volume_ratio': volume_ratio
             }
         ))
 
@@ -219,6 +229,13 @@ class MomentumBreakoutStrategy(BaseStrategy):
         """
         Multi-pattern CQ detection: VCP, HTF, flat base, ascending base, loose base.
         Returns (pattern_type, score) tuple.
+
+        v7.0 Fix: Aligned with documentation requirements.
+        - VCP: 15-60d, range<12%, >50% days ±2.5%, vol<70%, ≥2 waves
+        - High tight flag: +30% in ≤8w, pullback 8-30%, flag 2-6w
+        - Flat base: Range<15%, EMA21 slope<0.3×ATR/5d, 3-15w
+        - Ascending: ≥3 higher lows, range 10-25%, 4-12w
+        - Loose: Range<20%, ≥10d
         """
         if not platform or not platform.get('is_valid'):
             return 'none', 0.0
@@ -226,12 +243,13 @@ class MomentumBreakoutStrategy(BaseStrategy):
         platform_range_pct = platform['platform_range_pct']
         concentration_ratio = platform['concentration_ratio']
         contraction_quality = platform.get('contraction_quality', 0.5)
+        volume_contraction = platform.get('volume_contraction_ratio', 1.0)
         platform_days = platform['platform_days']
 
         # Calculate trend within platform (for ascending/flat detection)
-        platform_start = -platform_days - 5  # Slight offset
-        platform_end = -5
-        if len(df) < abs(platform_start) + 5:
+        platform_start = -platform_days
+        platform_end = 0
+        if len(df) < platform_days:
             return 'loose', max(0.0, min(2.5, concentration_ratio * 3.0))
 
         platform_data = df.iloc[platform_start:platform_end]
@@ -244,59 +262,172 @@ class MomentumBreakoutStrategy(BaseStrategy):
         slope = np.polyfit(x, y, 1)[0] if len(x) > 1 else 0
         slope_pct = slope / np.mean(y) if np.mean(y) > 0 else 0
 
-        # Pattern Detection Logic
+        # Calculate ATR for slope comparison
+        atr = ind.indicators.get('atr', {}).get('atr_14', y.mean() * 0.02)
+        atr_5d = atr * 5  # Approximate 5-day ATR
+
+        # Count higher lows for ascending pattern
+        higher_lows = 0
+        for i in range(5, len(platform_data)):
+            if platform_data['low'].iloc[i] > platform_data['low'].iloc[i-5]:
+                higher_lows += 1
+
+        # Count waves for VCP (using the method from PreBreakoutCompressionStrategy)
+        wave_count = self._count_contraction_waves(df, platform)
+
+        # Pattern Detection Logic (first match wins)
         pattern_type = 'loose'
         base_score = 2.5
 
-        # VCP: Tight range + high concentration + good contraction
-        if (platform_range_pct < 0.08 and
-            concentration_ratio > 0.60 and
-            contraction_quality > 0.70):
+        # VCP: 15-60d, range<12%, >50% days ±2.5%, vol<70%, ≥2 waves
+        if (15 <= platform_days <= 60 and
+            platform_range_pct < 0.12 and
+            concentration_ratio > 0.50 and
+            volume_contraction < 0.70 and
+            wave_count >= 2):
             pattern_type = 'VCP'
-            base_score = 4.0
-        # HTF: Very tight, short duration
-        elif (platform_range_pct < 0.05 and
-              platform_days <= 20 and
-              concentration_ratio > 0.70):
-            pattern_type = 'HTF'
-            base_score = 4.5
-        # Flat Base: Low slope + tight range
-        elif (abs(slope_pct) < 0.0005 and
-              platform_range_pct < 0.10 and
-              concentration_ratio > 0.55):
-            pattern_type = 'flat'
-            base_score = 3.5
-        # Ascending Base: Positive slope + tight range
-        elif (slope_pct > 0.0005 and
-              platform_range_pct < 0.10 and
-              concentration_ratio > 0.50):
+            base_score = 3.0  # Base score, can reach 4.0 with bonuses
+
+        # High Tight Flag: Prior +30% in ≤8w, pullback 8-30%, flag 2-6w
+        elif self._is_high_tight_flag(df, platform_data, platform_days):
+            pattern_type = 'high_tight_flag'
+            base_score = 2.2  # 0.61-0.72 × 3.0 ≈ 1.8-2.2
+
+        # Flat Base: Range<15%, EMA21 slope<0.3×ATR/5d, 3-15w (21-105d)
+        elif (21 <= platform_days <= 105 and
+              platform_range_pct < 0.15 and
+              abs(slope_pct) < (0.3 * atr_5d / y.mean()) if y.mean() > 0 else abs(slope_pct) < 0.001):
+            pattern_type = 'flat_base'
+            base_score = 2.0  # 0.55-0.75 × 3.0 ≈ 1.65-2.25
+
+        # Ascending: ≥3 higher lows, range 10-25%, 4-12w (28-84d)
+        elif (28 <= platform_days <= 84 and
+              higher_lows >= 3 and
+              0.10 <= platform_range_pct <= 0.25):
             pattern_type = 'ascending'
-            base_score = 3.0
-        # Loose Base: Wide range or poor concentration
-        else:
+            base_score = 2.2  # 0.62 × 3.0 ≈ 1.86
+
+        # Loose: Range<20%, ≥10d
+        elif platform_range_pct < 0.20 and platform_days >= 10:
             pattern_type = 'loose'
-            base_score = max(0.5, min(2.0, concentration_ratio * 3.0))
+            base_score = 0.45  # 0.15-0.40 × 3.0 ≈ 0.45-1.2
 
-        # Apply bonus/penalty based on pattern quality
-        final_score = base_score
+        # Apply duration bonus per documentation
+        # 3-10w = 1.0, 2-3w = 0.4-1.0, 10-15w = 0.5-1.0, <2w = 0.2, >15w = 0.3
+        duration_bonus = 0.0
+        platform_weeks = platform_days / 7
+        if 3 <= platform_weeks <= 10:
+            duration_bonus = 1.0
+        elif 2 <= platform_weeks < 3:
+            duration_bonus = 0.4 + (platform_weeks - 2) * 0.6  # 0.4-1.0
+        elif 10 < platform_weeks <= 15:
+            duration_bonus = 1.0 - (platform_weeks - 10) * 0.1  # 1.0-0.5
+        elif platform_weeks < 2:
+            duration_bonus = 0.2
+        elif platform_weeks > 15:
+            duration_bonus = 0.3
 
+        # Calculate CQ score: cq_base = pattern_score × 3.0, then add duration_bonus
+        cq_base = base_score
+        final_score = cq_base + duration_bonus
+
+        # Additional quality bonuses
         # Tightness bonus
-        if platform_range_pct < 0.04:
+        if platform_range_pct < 0.08:
             final_score += 0.5
-        elif platform_range_pct > 0.10:
-            final_score -= 0.5
+        elif platform_range_pct < 0.04:
+            final_score += 0.8
 
         # Concentration bonus
         if concentration_ratio > 0.70:
             final_score += 0.3
-        elif concentration_ratio < 0.40:
-            final_score -= 0.3
-
-        # Contraction quality bonus
-        if contraction_quality > 0.80:
+        elif concentration_ratio > 0.60:
             final_score += 0.2
 
-        return pattern_type, round(min(5.0, final_score), 2)
+        # Wave count bonus for VCP
+        if pattern_type == 'VCP' and wave_count >= 3:
+            final_score += 0.5
+
+        return pattern_type, round(min(4.0, final_score), 2)
+
+    def _is_high_tight_flag(self, df: pd.DataFrame, platform_data: pd.DataFrame, platform_days: int) -> bool:
+        """
+        Check if pattern is a high tight flag.
+
+        Requirements:
+        - Prior advance: +30% in ≤8 weeks (56 days)
+        - Pullback: 8-30% from high
+        - Flag duration: 2-6 weeks (14-42 days)
+        """
+        if len(df) < 100:
+            return False
+
+        # Find the high before the flag
+        flag_high = platform_data['high'].max()
+        flag_low = platform_data['low'].min()
+
+        # Calculate pullback from high
+        pullback = (flag_high - flag_low) / flag_high
+
+        # Check pullback range (8-30%)
+        if not (0.08 <= pullback <= 0.30):
+            return False
+
+        # Check flag duration (2-6 weeks = 14-42 days)
+        if not (14 <= platform_days <= 42):
+            return False
+
+        # Check prior advance (+30% in ≤8 weeks before flag)
+        pre_flag_start = -platform_days - 56
+        pre_flag_end = -platform_days
+        if len(df) < abs(pre_flag_start):
+            return False
+
+        pre_flag_data = df.iloc[pre_flag_start:pre_flag_end]
+        if len(pre_flag_data) < 10:
+            return False
+
+        # Calculate advance from start of period to flag start
+        advance_start = pre_flag_data['close'].iloc[0]
+        advance_end = pre_flag_data['close'].iloc[-1]
+        advance_pct = (advance_end - advance_start) / advance_start if advance_start > 0 else 0
+
+        return advance_pct >= 0.30
+
+    def _count_contraction_waves(self, df: pd.DataFrame, platform: Dict) -> int:
+        """
+        Count contraction waves in platform period.
+
+        A wave = local peak (swing high) where subsequent peak < prior peak.
+        Ideal VCP shows 3+ progressively smaller waves.
+
+        Args:
+            df: DataFrame with OHLCV data
+            platform: Platform detection result dict
+
+        Returns:
+            Number of contraction waves detected (0-5 typical)
+        """
+        platform_days = platform.get('platform_days', 30)
+        if len(df) < platform_days:
+            return 0
+
+        platform_df = df.tail(platform_days).reset_index(drop=True)
+
+        # Find local peaks (swing highs) using 5-day window
+        peaks = []
+        for i in range(5, len(platform_df) - 5):
+            window_highs = platform_df['high'].iloc[i-5:i+6]
+            if platform_df['high'].iloc[i] == window_highs.max():
+                peaks.append(platform_df['high'].iloc[i])
+
+        # Count waves: each successive lower high = 1 contraction wave
+        waves = 0
+        for i in range(1, len(peaks)):
+            if peaks[i] < peaks[i-1]:
+                waves += 1
+
+        return waves
 
     # Sector ETF mapping for sector leadership bonus
     SECTOR_ETFS = {
@@ -484,11 +615,28 @@ class MomentumBreakoutStrategy(BaseStrategy):
 
         return final_score, tier
 
-    def _calculate_bs(self, breakout_pct: float, platform_range_pct: float) -> float:
-        """Breakout Strength dimension (0-4.0)."""
+    def _calculate_bs(self, breakout_pct: float, platform_range_pct: float, volume_ratio: float = None) -> float:
+        """
+        Breakout Strength dimension (0-4.0).
+
+        v7.0 Fix: Use direct volume ratio scoring instead of energy_ratio.
+
+        Components:
+        1. Breakout % above pivot (0-2.5 pts)
+        2. Volume / avg20d (0-1.5 pts) - direct volume ratio, not energy_ratio
+
+        Documentation table:
+        | Breakout % | Score | Vol/avg20d | Score |
+        |-----------|-------|------------|-------|
+        | ≥5%       | 2.5   | ≥3.0×      | 1.5   |
+        | 3-5%      | 2.0-2.5 | 2-3×    | 1.0-1.5 |
+        | 2-3%      | 1.5-2.0 | 1.5-2×  | 0.5-1.0 |
+        | 1-2%      | 0.5-1.5 | 1-1.5×  | 0-0.5 |
+        | <1%       | 0-0.5 | <1×       | 0     |
+        """
         bs_score = 0.0
 
-        # Breakout % above pivot (0-2.5 pts)
+        # Component 1: Breakout % above pivot (0-2.5 pts)
         if breakout_pct >= 0.05:
             bs_score += 2.5
         elif breakout_pct >= 0.03:
@@ -504,24 +652,22 @@ class MomentumBreakoutStrategy(BaseStrategy):
             # < 1%: 0–0.5 (interpolate)
             bs_score += breakout_pct / 0.01 * 0.5
 
-        # Energy ratio — today vol / avg20d vol (0-1.5 pts)
-        # Energy ratio is actually volume_ratio passed from caller
-        # For now calculate from platform_range_pct as before, but cap scoring differently
-        raw_energy = breakout_pct / platform_range_pct if platform_range_pct > 0 else 1.0
-        energy_ratio = min(raw_energy, self.PARAMS['energy_ratio_cap'])
+        # Component 2: Volume ratio scoring (0-1.5 pts)
+        # v7.0 Fix: Use direct volume ratio instead of energy_ratio
+        vol_ratio = volume_ratio if volume_ratio is not None else 1.0
 
-        if energy_ratio >= 3.0:
+        if vol_ratio >= 3.0:
             bs_score += 1.5
-        elif energy_ratio >= 2.0:
-            # 2.0–3.0×: 1.0–1.5 (interpolate)
-            bs_score += 1.0 + (energy_ratio - 2.0) / 1.0 * 0.5
-        elif energy_ratio >= 1.5:
-            # 1.5–2.0×: 0.5–1.0 (interpolate)
-            bs_score += 0.5 + (energy_ratio - 1.5) / 0.5 * 0.5
-        elif energy_ratio >= 1.0:
-            # 1.0–1.5×: 0–0.5 (interpolate)
-            bs_score += (energy_ratio - 1.0) / 0.5 * 0.5
-        # < 1.0×: 0 points
+        elif vol_ratio >= 2.0:
+            # 2-3x: 1.0-1.5 (interpolate)
+            bs_score += 1.0 + (vol_ratio - 2.0) * 0.5
+        elif vol_ratio >= 1.5:
+            # 1.5-2x: 0.5-1.0 (interpolate)
+            bs_score += 0.5 + (vol_ratio - 1.5) * 1.0
+        elif vol_ratio >= 1.0:
+            # 1-1.5x: 0-0.5 (interpolate)
+            bs_score += (vol_ratio - 1.0) * 1.0
+        # <1x: 0 points
 
         return round(min(4.0, bs_score), 2)
 
@@ -619,7 +765,14 @@ class MomentumBreakoutStrategy(BaseStrategy):
         score: float,
         tier: str
     ) -> Tuple[float, float, float]:
-        """Calculate entry, stop, and target prices."""
+        """
+        Calculate entry, stop, and target prices.
+
+        v7.0 Fix: Validate A1 entry conditions:
+        - Price > pivot × 1.01
+        - Volume > 1.5× avg20d
+        - CLV ≥ 0.65
+        """
         ind = TechnicalIndicators(df)
         platform = ind.detect_vcp_platform(
             lookback_range=self.PARAMS['platform_lookback'],
@@ -630,17 +783,50 @@ class MomentumBreakoutStrategy(BaseStrategy):
         current_price = df['close'].iloc[-1]
         platform_low = platform['platform_low'] if platform else df['low'].tail(20).min()
         platform_high = platform['platform_high'] if platform else df['high'].tail(20).max()
+        pivot = platform_high
 
         # Get pattern type from CQ dimension
         cq_dim = next((d for d in dimensions if d.name == 'CQ'), None)
         pattern_type = cq_dim.details.get('pattern_type', 'vcp') if cq_dim else 'vcp'
 
+        # Get volume and CLV from VC dimension
+        vc_dim = next((d for d in dimensions if d.name == 'VC'), None)
+        volume_ratio = vc_dim.details.get('volume_ratio', 0) if vc_dim else 0
+        clv = vc_dim.details.get('clv', 0) if vc_dim else 0
+
+        # v7.0 Fix: Validate entry conditions
+        # Entry (A1): Price>pivot×1.01, Vol>1.5×, CLV≥0.65
+        entry_conditions_met = True
+
+        # Check price > pivot × 1.01
+        if current_price < pivot * 1.01:
+            entry_conditions_met = False
+            logger.debug(f"MB_ENTRY_REJ: {symbol} - Price {current_price:.2f} < pivot×1.01 {pivot*1.01:.2f}")
+
+        # Check volume > 1.5× avg20d
+        if volume_ratio < 1.5:
+            entry_conditions_met = False
+            logger.debug(f"MB_ENTRY_REJ: {symbol} - Volume ratio {volume_ratio:.2f} < 1.5×")
+
+        # Check CLV ≥ 0.65
+        if clv < 0.65:
+            entry_conditions_met = False
+            logger.debug(f"MB_ENTRY_REJ: {symbol} - CLV {clv:.2f} < 0.65")
+
+        # If entry conditions not met, return invalid entry
+        if not entry_conditions_met:
+            # Return current price as entry but with stop at entry (no trade)
+            entry = round(current_price, 2)
+            stop = entry  # No valid stop, indicates invalid setup
+            target = entry  # No valid target
+            return entry, stop, target
+
         entry = round(current_price, 2)
 
         # Pattern-specific stop loss calculation
-        if pattern_type in ('vcp', 'flat', 'ascending'):
+        if pattern_type in ('vcp', 'flat_base', 'ascending'):
             stop = platform_low * 0.98
-        elif pattern_type == 'HTF':
+        elif pattern_type == 'high_tight_flag':
             # High tight flag: use flag low (platform low) with 1.5% buffer
             stop = platform_low * 0.985
         else:  # loose base or unknown

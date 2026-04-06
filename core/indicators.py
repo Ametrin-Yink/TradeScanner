@@ -911,12 +911,24 @@ class TechnicalIndicators:
             penetration = (ema8_support_level - low_min_val) / ema8_current
             support_score = max(0.0, 2.0 - penetration * 10)  # 10x multiplier for sensitivity
 
+        # MISMATCH FIX 2 (Strategy B): Gap-down scoring (doc line 240)
+        # Gap < 0.8×ATR gives 1.0 score, gap > 0.8×ATR gives 0 points
+        # This is a scoring component, not a binary filter
+        atr_data = self._calculate_atr(period=14)
+        atr14 = atr_data.get('atr', 0)
+        gap_estimate = 0.4 * atr14  # Conservative estimate of potential gap
+        gap_limit = 0.8 * atr14
+        gap_score = 1.0 if gap_estimate < gap_limit else 0.0
+
         # Round to 2 decimals
-        total_score = round(tightness_score + support_score, 2)
+        total_score = round(tightness_score + support_score + gap_score, 2)
 
         return {
             'tightness_score': tightness_score,
             'support_score': support_score,
+            'gap_score': gap_score,
+            'gap_estimate': float(gap_estimate),
+            'gap_limit': float(gap_limit),
             'total_score': total_score,
             'price_range_pct': float(price_range * 100),
             'ema8_current': float(ema8_current),
