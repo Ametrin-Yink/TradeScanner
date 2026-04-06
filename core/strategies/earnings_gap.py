@@ -1,4 +1,4 @@
-"""Strategy G: EarningsGap - Post-earnings gap continuation (v5.0)."""
+"""Strategy G: EarningsGap - Post-earnings gap continuation (v7.0)."""
 from typing import Dict, List, Tuple, Any, Optional
 import logging
 
@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 class EarningsGapStrategy(BaseStrategy):
     """
-    Strategy G: EarningsGap v5.0
+    Strategy G: EarningsGap v7.0
     Post-earnings gap continuation (long or short).
     """
 
@@ -89,7 +89,7 @@ class EarningsGapStrategy(BaseStrategy):
         return True
 
     def calculate_dimensions(self, symbol: str, df: pd.DataFrame) -> List[ScoringDimension]:
-        """Calculate GS, QC, TC, VC per v5.0 spec."""
+        """Calculate GS, QC, TC, VC per v7.0 spec."""
         phase0_data = getattr(self, 'phase0_data', {})
         data = phase0_data.get(symbol, {})
 
@@ -114,193 +114,140 @@ class EarningsGapStrategy(BaseStrategy):
 
     def _calculate_gs(self, data: Dict, df: pd.DataFrame) -> float:
         """
-        Gap Strength (GS) - 0-5.0 max per v5.0 spec.
+        Gap Strength (GS) - 0-5.0 max per v7.0 spec.
 
         Components:
-        1. Gap Size (0-2.5 pts)
-        2. Gap Type (0-1.5 pts) - detected from price action context
-        3. Initial Bar Quality (0-1.0 pts) - CLV-based
+        1. Base Gap % score (1.0-3.0 pts)
+        2. Gap type bonus (0-2.0 pts):
+           - Beat/miss vs est: +1.0
+           - Guidance change: +1.0
+           - One-time event: +0.5
         """
         gap_pct = data.get('gap_1d_pct', 0)
         gap_direction = data.get('gap_direction', 'none')
 
-        # Component 1: Gap Size (0-2.5 pts)
+        # Component 1: Base Gap % score per v7.0 spec
+        # | Gap % | Long | Short |
+        # |-------|------|-------|
+        # | ≥10%  | 3.0  | 2.5   |
+        # | 7-10% | 2.0-3.0 | 2.0-2.5 |
+        # | 5-7%  | 1.0-2.0 | 1.5-2.0 |
         abs_gap_pct = abs(gap_pct)
-        if abs_gap_pct >= 0.15:
-            size_score = 2.5
-        elif abs_gap_pct >= 0.10:
-            # 10-15%: 2.0-2.5 (interpolate)
-            size_score = 2.0 + (abs_gap_pct - 0.10) / 0.05 * 0.5
-        elif abs_gap_pct >= 0.07:
-            # 7-10%: 1.5-2.0 (interpolate)
-            size_score = 1.5 + (abs_gap_pct - 0.07) / 0.03 * 0.5
-        elif abs_gap_pct >= 0.05:
-            # 5-7%: 0.5-1.5 (interpolate)
-            size_score = 0.5 + (abs_gap_pct - 0.05) / 0.02 * 1.0
-        else:
-            size_score = 0.0
 
-        # Component 2: Gap Type (0-1.5 pts)
-        # Detect from gap direction + magnitude relationship (price action context)
-        type_score = self._calculate_gap_type_score(gap_pct, gap_direction, df)
+        if gap_direction == 'up':  # Long
+            if abs_gap_pct >= 0.10:
+                base_score = 3.0
+            elif abs_gap_pct >= 0.07:
+                # 7-10%: 2.0-3.0 (interpolate)
+                base_score = 2.0 + (abs_gap_pct - 0.07) / 0.03 * 1.0
+            elif abs_gap_pct >= 0.05:
+                # 5-7%: 1.0-2.0 (interpolate)
+                base_score = 1.0 + (abs_gap_pct - 0.05) / 0.02 * 1.0
+            else:
+                base_score = 0.0
+        else:  # Short (gap down)
+            if abs_gap_pct >= 0.10:
+                base_score = 2.5
+            elif abs_gap_pct >= 0.07:
+                # 7-10%: 2.0-2.5 (interpolate)
+                base_score = 2.0 + (abs_gap_pct - 0.07) / 0.03 * 0.5
+            elif abs_gap_pct >= 0.05:
+                # 5-7%: 1.5-2.0 (interpolate)
+                base_score = 1.5 + (abs_gap_pct - 0.05) / 0.02 * 0.5
+            else:
+                base_score = 0.0
 
-        # Component 3: Initial Bar Quality (0-1.0 pts) - CLV based
-        clv_score = self._calculate_gap_clv_score(df, gap_pct)
+        # Component 2: Earnings-specific bonuses (max 2.5 pts)
+        # - Beat/miss vs est: +1.0
+        # - Guidance change: +1.0
+        # - One-time event: +0.5
+        bonus_score = 0.0
 
-        total = size_score + type_score + clv_score
+        if data.get('earnings_beat', False):
+            bonus_score += 1.0
+
+        if data.get('guidance_change', False):
+            bonus_score += 1.0
+
+        if data.get('one_time_event', False):
+            bonus_score += 0.5
+
+        total = base_score + bonus_score
         return min(5.0, total)
 
-    def _calculate_gap_type_score(self, gap_pct: float, gap_direction: str, df: pd.DataFrame) -> float:
-        """
-        Detect gap type from price action context (0-1.5 pts).
-
-        For long setups (gap up):
-        - Clear beat: Large gap up with strong close = 1.5
-        - Moderate beat: Medium gap up = 0.8
-        - Relief rally: Small gap up after decline = 0.3-0.5
-
-        For short setups (gap down):
-        - Clear miss: Large gap down with weak close = 1.5
-        - Moderate miss: Medium gap down = 0.8
-        - Relief selloff: Small gap down after rally = 0.3-0.5
-        """
-        if len(df) < 5:
-            return 0.5  # Neutral/ambiguous
-
-        abs_gap = abs(gap_pct)
-
-        # Get gap day OHLC (most recent day)
-        gap_day = df.iloc[-1]
-        gap_open = gap_day['open']
-        gap_close = gap_day['close']
-        gap_high = gap_day['high']
-        gap_low = gap_day['low']
-
-        # Get previous day close (pre-gap)
-        prev_close = df['close'].iloc[-2] if len(df) >= 2 else gap_open / (1 + gap_pct)
-
-        if gap_pct > 0:  # Gap up
-            # Calculate gap day performance (close relative to gap range)
-            if gap_high > gap_low:
-                gap_day_performance = (gap_close - gap_low) / (gap_high - gap_low)
-            else:
-                gap_day_performance = 0.5
-
-            # Clear beat: large gap with strong intraday hold
-            if abs_gap >= 0.10 and gap_day_performance >= 0.6:
-                return 1.5
-            # Beat with moderate follow-through
-            elif abs_gap >= 0.07 and gap_day_performance >= 0.5:
-                return 0.8
-            # Small gap or weak hold = ambiguous/relief
-            elif abs_gap >= 0.05:
-                return 0.5
-            else:
-                return 0.3
-
-        elif gap_pct < 0:  # Gap down
-            # Calculate gap day performance (close relative to gap range, inverted)
-            if gap_high > gap_low:
-                gap_day_performance = (gap_high - gap_close) / (gap_high - gap_low)
-            else:
-                gap_day_performance = 0.5
-
-            # Clear miss: large gap down with weak intraday
-            if abs_gap >= 0.10 and gap_day_performance >= 0.6:
-                return 1.5
-            # Miss with moderate follow-through
-            elif abs_gap >= 0.07 and gap_day_performance >= 0.5:
-                return 0.8
-            # Small gap or recovery = ambiguous
-            elif abs_gap >= 0.05:
-                return 0.5
-            else:
-                return 0.3
-
-        return 0.5  # Neutral
-
-    def _calculate_gap_clv_score(self, df: pd.DataFrame, gap_pct: float) -> float:
-        """
-        Calculate CLV-based score for gap day (0-1.0 pts).
-
-        For long setups (gap up): CLV >= 0.75 = 1.0
-        For short setups (gap down): CLV <= 0.25 = 1.0
-        """
-        if len(df) < 1:
-            return 0.0
-
-        ind = TechnicalIndicators(df)
-        clv = ind.calculate_clv()
-
-        if gap_pct > 0:  # Long setup - want high CLV
-            if clv >= 0.75:
-                return 1.0
-            elif clv >= 0.65:
-                # 0.65-0.75: 0-0.5 (interpolate)
-                return (clv - 0.65) / 0.10 * 0.5
-            else:
-                return 0.0
-        elif gap_pct < 0:  # Short setup - want low CLV
-            if clv <= 0.25:
-                return 1.0
-            elif clv <= 0.35:
-                # 0.25-0.35: 0-0.5 (interpolate, inverted)
-                return (0.35 - clv) / 0.10 * 0.5
-            else:
-                return 0.0
-
-        return 0.0
-
     def _calculate_qc(self, df: pd.DataFrame, data: Dict) -> float:
-        """Quality of Continuation - holding gap, low consolidation."""
-        current_price = df['close'].iloc[-1]
+        """
+        Quality of Consolidation (QC) - 0-4.0 max per v7.0 spec.
+
+        Components:
+        1. Days since gap score (0-2.0 pts)
+        2. Consolidation range score (0-1.5 pts)
+
+        | Days since gap | Score |
+        |----------------|-------|
+        | 1-2 | 2.0 |
+        | 3-4 | 1.5 |
+        | 5+ | 0.5 |
+
+        | Consolidation range | Score |
+        |---------------------|-------|
+        | <3% | 1.5 |
+        | 3-5% | 1.0 |
+        | 5-8% | 0.5 |
+        | >8% | 0 |
+        """
+        # Component 1: Days since gap score
+        days_post_earnings = data.get('days_post_earnings', 1)
+
+        if days_post_earnings <= 2:
+            days_score = 2.0
+        elif days_post_earnings <= 4:
+            days_score = 1.5
+        else:
+            days_score = 0.5
+
+        # Component 2: Consolidation range score
+        # Calculate the consolidation range (high - low) as % of gap open
         gap_pct = data.get('gap_1d_pct', 0)
+        current_price = df['close'].iloc[-1]
 
-        if gap_pct == 0:
-            return 0.0
+        # Get consolidation high and low (excluding gap day)
+        if len(df) > 1:
+            consolidation_df = df.iloc[:-1]  # Exclude gap day
+            consolidation_high = consolidation_df['high'].max()
+            consolidation_low = consolidation_df['low'].min()
+        else:
+            consolidation_high = df['high'].iloc[-1]
+            consolidation_low = df['low'].iloc[-1]
 
-        # Determine gap zone
-        prev_close = current_price / (1 + gap_pct)
-        gap_open = current_price  # Approximation
+        # Calculate consolidation range as percentage
+        gap_open = df['open'].iloc[-1]
+        consolidation_range_pct = (consolidation_high - consolidation_low) / gap_open
 
-        # For up gaps: holding above gap
-        # For down gaps: holding below gap
-        if gap_pct > 0:  # Up gap
-            # Calculate gap fill percentage
-            gap_low = prev_close
-            gap_high = gap_open
-            gap_range = gap_high - gap_low
+        if consolidation_range_pct < 0.03:
+            range_score = 1.5
+        elif consolidation_range_pct < 0.05:
+            range_score = 1.0
+        elif consolidation_range_pct < 0.08:
+            range_score = 0.5
+        else:
+            range_score = 0.0
 
-            if gap_range > 0:
-                fill_pct = (gap_high - current_price) / gap_range
-                if fill_pct <= 0.25:
-                    return 4.0
-                elif fill_pct <= 0.50:
-                    return 3.0
-                elif fill_pct <= 0.75:
-                    return 2.0
-                else:
-                    return 1.0
-        else:  # Down gap
-            gap_high = prev_close
-            gap_low = gap_open
-            gap_range = gap_high - gap_low
-
-            if gap_range > 0:
-                fill_pct = (current_price - gap_low) / gap_range
-                if fill_pct <= 0.25:
-                    return 4.0
-                elif fill_pct <= 0.50:
-                    return 3.0
-                elif fill_pct <= 0.75:
-                    return 2.0
-                else:
-                    return 1.0
-
-        return 0.0
+        total = days_score + range_score
+        return min(4.0, total)
 
     def _calculate_tc(self, df: pd.DataFrame, data: Dict) -> float:
-        """Trend Confirmation - EMA alignment in gap direction."""
+        """
+        Trend Context (TC) - 0-3.0 max per v7.0 spec.
+
+        | Pre-earnings trend | Score |
+        |--------------------|-------|
+        | Aligned with gap direction | 2.0 |
+        | Neutral | 1.0 |
+        | Counter-trend | 0.5 |
+
+        Sector alignment bonus: +1.0 if sector ETF confirms gap direction
+        """
         gap_pct = data.get('gap_1d_pct', 0)
 
         ind = TechnicalIndicators(df)
@@ -311,71 +258,91 @@ class EarningsGapStrategy(BaseStrategy):
         ema21 = ind.indicators.get('ema', {}).get('ema21', current_price)
         ema50 = ind.indicators.get('ema', {}).get('ema50', current_price)
 
-        score = 0.0
-
         if gap_pct > 0:  # Up gap - want bullish alignment
             if current_price > ema8 > ema21:
-                score += 2.5
+                base_score = 2.0  # Aligned
             elif current_price > ema21:
-                score += 1.5
+                base_score = 1.5  # Partially aligned
             elif current_price > ema50:
-                score += 0.5
-
-            # RS percentile bonus
-            rs_pct = data.get('rs_percentile', 50)
-            if rs_pct >= 80:
-                score += 1.5
-            elif rs_pct >= 60:
-                score += 1.0
+                base_score = 1.0  # Neutral
+            else:
+                base_score = 0.5  # Counter-trend
         else:  # Down gap - want bearish alignment
             if current_price < ema8 < ema21:
-                score += 2.5
+                base_score = 2.0  # Aligned
             elif current_price < ema21:
-                score += 1.5
+                base_score = 1.5  # Partially aligned
             elif current_price < ema50:
-                score += 0.5
+                base_score = 1.0  # Neutral
+            else:
+                base_score = 0.5  # Counter-trend
 
-            # RS percentile (inverse - weak RS for shorts)
-            rs_pct = data.get('rs_percentile', 50)
-            if rs_pct <= 30:
-                score += 1.5
-            elif rs_pct <= 40:
-                score += 1.0
+        # Sector alignment bonus: +1.0 if sector ETF confirms gap direction
+        sector_bonus = 0.0
+        if data.get('sector_aligned', False):
+            sector_bonus = 1.0
 
-        return min(3.0, score)
+        total = base_score + sector_bonus
+        return min(3.0, total)
 
     def _calculate_vc(self, df: pd.DataFrame, data: Dict) -> float:
-        """Volume Confirmation - elevated volume on gap day."""
-        # Volume on gap day
+        """
+        Volume Confirmation (VC) - 0-3.0 max per v7.0 spec.
+
+        | Gap day vol / avg20d | Score | Consolidation vol | Score |
+        |----------------------|-------|-------------------|-------|
+        | >5× | 2.0 | Below average | 1.0 |
+        | 3-5× | 1.5 | Average | 0.5 |
+        | 2-3× | 1.0 | Above average | 0 |
+        | <2× | 0 | | |
+        """
+        # Gap day volume ratio - main component (max 2.0)
         gap_volume_ratio = data.get('gap_volume_ratio', 1.0)
 
-        score = 0.0
-
-        if gap_volume_ratio >= 3.0:
-            score += 2.0
+        if gap_volume_ratio > 5.0:
+            volume_score = 2.0
+        elif gap_volume_ratio >= 3.0:
+            volume_score = 1.5
         elif gap_volume_ratio >= 2.0:
-            score += 1.5
-        elif gap_volume_ratio >= 1.5:
-            score += 1.0
-        elif gap_volume_ratio >= 1.2:
-            score += 0.5
+            volume_score = 1.0
+        else:
+            volume_score = 0.0
 
-        # Current volume vs average
-        recent_volume = df['volume'].iloc[-1]
-        avg_volume = df['volume'].tail(20).mean()
-        if avg_volume > 0:
-            current_ratio = recent_volume / avg_volume
-            if current_ratio >= 1.5:
-                score += 1.0
-            elif current_ratio >= 1.0:
-                score += 0.5
+        # Consolidation volume score (max 1.0)
+        # Compare consolidation volume to average
+        if len(df) > 1:
+            consolidation_volume = df['volume'].iloc[:-1].mean()
+            avg_volume = df['volume'].tail(20).mean()
 
-        return min(3.0, score)
+            if avg_volume > 0:
+                consolidation_vol_ratio = consolidation_volume / avg_volume
+
+                if consolidation_vol_ratio < 0.8:  # Below average
+                    consolidation_vol_score = 1.0
+                elif consolidation_vol_ratio <= 1.2:  # Average
+                    consolidation_vol_score = 0.5
+                else:  # Above average
+                    consolidation_vol_score = 0.0
+            else:
+                consolidation_vol_score = 0.5  # Default if can't calculate
+        else:
+            consolidation_vol_score = 0.5  # Default
+
+        total = volume_score + consolidation_vol_score
+        return min(3.0, total)
 
     def calculate_entry_exit(self, symbol: str, df: pd.DataFrame,
                             dimensions: List[ScoringDimension],
                             score: float, tier: str) -> Tuple[float, float, float]:
-        """Calculate entry, stop, target based on gap direction."""
+        """
+        Calculate entry, stop, target based on gap direction per v7.0 spec.
+
+        **Entry (Long)**: Break of consolidation high; Vol≥1.5×avg20d
+        **Entry (Short)**: Break of consolidation low; Vol≥1.5×avg20d
+        **Stop (Long)**: max(consolidation_low−0.5×ATR, gap_open×0.95)
+        **Stop (Short)**: min(consolidation_high+0.5×ATR, gap_open×1.05)
+        **Target**: entry ± 2.5 × (entry − stop)
+        """
         current_price = df['close'].iloc[-1]
         phase0_data = getattr(self, 'phase0_data', {})
         data = phase0_data.get(symbol, {})
@@ -385,20 +352,41 @@ class EarningsGapStrategy(BaseStrategy):
         ind.calculate_all()
         atr = ind.indicators.get('atr', {}).get('atr14', current_price * 0.02)
 
-        entry = round(current_price, 2)
+        # Calculate consolidation levels (excluding gap day)
+        if len(df) > 1:
+            consolidation_df = df.iloc[:-1]  # Exclude gap day
+            consolidation_high = consolidation_df['high'].max()
+            consolidation_low = consolidation_df['low'].min()
+        else:
+            consolidation_high = df['high'].iloc[-1]
+            consolidation_low = df['low'].iloc[-1]
 
-        if gap_pct > 0:  # Long continuation
-            # Stop below gap zone
-            prev_close = entry / (1 + gap_pct)
-            stop = round(prev_close - 0.3 * atr, 2)
+        gap_open = df['open'].iloc[-1]
+
+        if gap_pct > 0:  # Long setup
+            # Entry: break of consolidation high
+            entry = round(consolidation_high, 2)
+
+            # Stop: max(consolidation_low−0.5×ATR, gap_open×0.95)
+            stop_consolidation = consolidation_low - 0.5 * atr
+            stop_gap_buffer = gap_open * 0.95
+            stop = round(max(stop_consolidation, stop_gap_buffer), 2)
+
+            # Target: entry + 2.5 × (entry - stop)
             risk = entry - stop
-            target = round(entry + risk * 2.0, 2)
-        else:  # Short continuation
-            # Stop above gap zone
-            prev_close = entry / (1 + gap_pct)
-            stop = round(prev_close + 0.3 * atr, 2)
+            target = round(entry + risk * 2.5, 2)
+        else:  # Short setup
+            # Entry: break of consolidation low
+            entry = round(consolidation_low, 2)
+
+            # Stop: min(consolidation_high+0.5×ATR, gap_open×1.05)
+            stop_consolidation = consolidation_high + 0.5 * atr
+            stop_gap_buffer = gap_open * 1.05
+            stop = round(min(stop_consolidation, stop_gap_buffer), 2)
+
+            # Target: entry - 2.5 × (stop - entry)
             risk = stop - entry
-            target = round(entry - risk * 2.0, 2)
+            target = round(entry - risk * 2.5, 2)
 
         return entry, stop, target
 

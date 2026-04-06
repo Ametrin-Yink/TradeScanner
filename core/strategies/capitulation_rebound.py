@@ -65,7 +65,10 @@ class CapitulationReboundStrategy(BaseStrategy):
 
     def screen(self, symbols: List[str], max_candidates: int = 5) -> List[StrategyMatch]:
         """
-        Screen symbols for capitulation bottom setups.
+        Screen symbols for capitulation bottom setups with Phase 0 pre-filter.
+
+        v7.1: Uses phase0_data for fast RSI pre-filter, only fetches DataFrames
+        for symbols that pass the pre-filter.
         """
         # Phase 0: Check VIX filter (ONCE)
         logger.info("CapitulationRebound: Phase 0 - Checking VIX filter...")
@@ -78,12 +81,25 @@ class CapitulationReboundStrategy(BaseStrategy):
 
         logger.info(f"CapitulationRebound: VIX status = {self._vix_status}")
 
-        # Phase 0.5: Pre-filter by extreme conditions
+        # Phase 0.5: Pre-filter using cached data
         prefiltered = []
         logger.info("CapitulationRebound: Phase 0.5 - Pre-filtering for capitulation bottom setups...")
 
+        phase0_data = getattr(self, 'phase0_data', {})
+
         for symbol in symbols:
             try:
+                # Use phase0_data for fast RSI pre-filter
+                if phase0_data and symbol in phase0_data:
+                    data = phase0_data[symbol]
+                    rsi = data.get('rsi_14', 50)
+
+                    # Pre-filter: RSI must be oversold (< 35)
+                    if rsi >= 35:
+                        logger.debug(f"CapitRebound_REJ: {symbol} - RSI {rsi:.1f} not oversold")
+                        continue
+
+                # Fetch full data for detailed pre-filter
                 df = self._get_data(symbol)
                 if df is None or len(df) < self.PARAMS['min_listing_days']:
                     continue
@@ -167,16 +183,13 @@ class CapitulationReboundStrategy(BaseStrategy):
             return False
 
         if current_price >= ema50 - self.PARAMS['ema_atr_multiplier'] * atr:
-            logger.debug(f"CAP_REJ: {symbol} - Price {current_price:.2f} not below EMA50-{self.PARAMS['ema_atr_multiplier']}×ATR {ema50 - self.PARAMS['ema_atr_multiplier'] * atr:.2f}")
+            logger.debug(f"CAP_REJ: {symbol} - Price not below EMA50-{self.PARAMS['ema_atr_multiplier']}×ATR")
             return False
 
-        # v7.0: Count consecutive down-days for alternative exhaustion signal
-        consecutive_down = 0
-        for i in range(1, min(6, len(df))):
-            if df['close'].iloc[-i] < df['close'].iloc[-i-1]:
-                consecutive_down += 1
-            else:
-                break
+        # v7.0: Use pre-calculated consecutive down-days from phase0_data
+        phase0_data = getattr(self, 'phase0_data', {})
+        data = phase0_data.get(symbol, {})
+        consecutive_down = data.get('consecutive_down_days', 0)
 
         # v7.0: Accept >=2 gap-downs OR >=5 consecutive down-days
         if gaps < self.PARAMS['min_gaps'] and consecutive_down < 5:
@@ -231,8 +244,8 @@ class CapitulationReboundStrategy(BaseStrategy):
             details=mo_details
         ))
 
-        # Dimension 2: EX - Extension Level
-        ex_score, ex_details = self._calculate_ex(distance_from_ema, gaps, df)
+        # Dimension 2: EX - Extension Level (uses ATR ratio per doc)
+        ex_score, ex_details = self._calculate_ex(atr_multiple, gaps, df, symbol)
         dimensions.append(ScoringDimension(
             name='EX',
             score=ex_score,
@@ -276,15 +289,15 @@ class CapitulationReboundStrategy(BaseStrategy):
 
         mo_score = 0.0
 
-        # RSI oversold (capitulation detection) - matches doc thresholds
+        # RSI oversold (capitulation detection) - matches doc thresholds (18-25 range)
         if rsi < 12:
             mo_score += 3.0
         elif rsi < 15:
             mo_score += 2.5 + (15 - rsi) / 3.0 * 0.5
         elif rsi < 18:
             mo_score += 2.0 + (18 - rsi) / 3.0 * 0.5
-        elif rsi < 22:
-            mo_score += 1.0 + (22 - rsi) / 4.0 * 1.0
+        elif rsi < 25:
+            mo_score += 0.5 + (25 - rsi) / 7.0 * 1.5
         else:
             mo_score += 0
 
@@ -350,24 +363,34 @@ class CapitulationReboundStrategy(BaseStrategy):
 
         return False
 
-    def _calculate_ex(self, distance_pct: float, gaps: int, df: pd.DataFrame = None) -> Tuple[float, Dict]:
-        """Extension Level dimension (0-6)."""
+    def _calculate_ex(self, atr_ratio: float, gaps: int, df: pd.DataFrame = None, symbol: str = None) -> Tuple[float, Dict]:
+        """
+        Extension Level dimension (0-6) using ATR ratio.
+
+        Documentation (lines 484-489):
+        | (EMA50 − price) / ATR | Score |
+        |-----------------------|-------|
+        | >8× | 3.0 |
+        | 6-8× | 2.0-3.0 |
+        | 4-6× | 1.0-2.0 |
+        | <4× | 0-1.0 |
+        """
         details = {
-            'distance_from_ema_pct': distance_pct,
+            'atr_ratio': atr_ratio,
             'gaps_5d': gaps
         }
 
         ex_score = 0.0
 
-        # Distance from EMA
-        if distance_pct > 0.20:
+        # Distance from EMA in ATR ratio terms (per doc)
+        if atr_ratio > 8:
             ex_score += 3.0
-        elif distance_pct > 0.15:
-            ex_score += 2.0 + (distance_pct - 0.15) / 0.05
-        elif distance_pct > 0.10:
-            ex_score += 1.0 + (distance_pct - 0.10) / 0.05
+        elif atr_ratio > 6:
+            ex_score += 2.0 + (atr_ratio - 6) / 2.0
+        elif atr_ratio > 4:
+            ex_score += 1.0 + (atr_ratio - 4) / 2.0
         else:
-            ex_score += max(0, distance_pct / 0.10)
+            ex_score += max(0, atr_ratio / 4.0)
 
         # Gaps
         if gaps >= 4:
@@ -377,28 +400,35 @@ class CapitulationReboundStrategy(BaseStrategy):
         elif gaps >= 2:
             ex_score += 1.0
 
-        # Consecutive down-day streak bonus (0-1.0 pts)
-        if df is not None and len(df) >= 10:
-            consecutive_down = 0
-            for i in range(1, min(10, len(df))):
-                if df['close'].iloc[-i] < df['close'].iloc[-i-1]:
-                    consecutive_down += 1
-                else:
-                    break
+        # Consecutive down-day streak bonus (0-1.0 pts) - use phase0_data
+        phase0_data = getattr(self, 'phase0_data', {})
+        data = phase0_data.get(symbol, {}) if symbol else {}
+        consecutive_down = data.get('consecutive_down_days', 0)
 
-            if consecutive_down >= 5:
-                ex_score += 1.0
-                details['consecutive_down_days'] = consecutive_down
-            elif consecutive_down >= 3:
-                ex_score += 0.5
-                details['consecutive_down_days'] = consecutive_down
+        if consecutive_down >= 5:
+            ex_score += 1.0
+            details['consecutive_down_days'] = consecutive_down
+        elif consecutive_down >= 3:
+            ex_score += 0.5
+            details['consecutive_down_days'] = consecutive_down
 
         return round(min(6.0, ex_score), 2), details
 
     def _calculate_vc(self, ind: TechnicalIndicators, df: pd.DataFrame) -> Tuple[float, Dict]:
         """
-        Volume Confirmation dimension (0-4) with Volume Climax (Expert suggestion A).
-        Long mode only: Capitulation bottom detection.
+        Volume Confirmation dimension (0-4) per documentation.
+
+        Documentation (lines 493-500):
+        | Vol / avg20d | Score |
+        |--------------|-------|
+        | >5× | 3.0 |
+        | 4-5× | 2.5-3.0 |
+        | 3-4× | 2.0-2.5 |
+        | 2-3× | 1.0-2.0 |
+        | 1.5-2× | 0.3-1.0 |
+        | <1.5× | 0 |
+
+        Bonus (line 502): +1.0 if CLV>0.65 AND vol>1.5×avg20d
         """
         volume_data = ind.indicators.get('volume', {})
         volume_ratio = volume_data.get('volume_ratio', 1.0)
@@ -415,22 +445,23 @@ class CapitulationReboundStrategy(BaseStrategy):
 
         vc_score = 0.0
 
-        # Expert suggestion A: Volume Climax
-        if volume_ratio > self.PARAMS['volume_climax_threshold']:  # > 4xMA20
-            vc_score += 2.0  # Maximum reward for panic exhaustion
-            details['volume_climax'] = True
-        elif volume_ratio > self.PARAMS['volume_high_threshold']:  # > 3xMA20
-            vc_score += 1.5
-        elif volume_ratio > self.PARAMS['volume_medium_threshold']:  # > 2xMA20
-            vc_score += 1.0
+        # Documentation thresholds (lines 493-500)
+        if volume_ratio > 5:
+            vc_score += 3.0
+        elif volume_ratio > 4:
+            vc_score += 2.5 + (volume_ratio - 4) * 0.5
+        elif volume_ratio > 3:
+            vc_score += 2.0 + (volume_ratio - 3) * 0.5
+        elif volume_ratio > 2:
+            vc_score += 1.0 + (volume_ratio - 2) * 1.0
         elif volume_ratio > 1.5:
-            vc_score += 0.5
+            vc_score += 0.3 + (volume_ratio - 1.5) * 1.4
+        # else: <1.5x = 0
 
-        # Capitulation with long lower shadow
-        if clv > 0.7 and volume_ratio > 1.5:
-            vc_score += 2.0
-
-        # OBV divergence would be checked here if available
+        # Capitulation candle bonus (line 502): +1.0 if CLV>0.65 AND vol>1.5x
+        if clv > 0.65 and volume_ratio > 1.5:
+            vc_score += 1.0
+            details['capitulation_candle'] = True
 
         return round(min(4.0, vc_score), 2), details
 
