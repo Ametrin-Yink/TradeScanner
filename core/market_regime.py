@@ -86,7 +86,7 @@ REGIME_SCALARS = {
 }
 
 # Strategies exempt from extreme regime scalar reduction
-EXTREME_EXEMPT_STRATEGIES = ['CapitulationRebound', 'RelativeStrengthLong', 'EarningsGap', 'SupportBounce', 'PreBreakoutCompression']
+EXTREME_EXEMPT_STRATEGIES = ['CapitulationRebound', 'RelativeStrengthLong']
 
 
 class MarketRegimeDetector:
