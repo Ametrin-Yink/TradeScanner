@@ -50,6 +50,58 @@ class Database:
             logger.info("Migrating stocks table: adding earnings_fetched_at column")
             conn.execute("ALTER TABLE stocks ADD COLUMN earnings_fetched_at TEXT")
 
+        # Migrate tier1_cache table for v5.0/v7.0 columns
+        self._migrate_tier1_cache(conn)
+
+    def _migrate_tier1_cache(self, conn: sqlite3.Connection):
+        """Add v5.0/v7.0/v7.1 columns to tier1_cache table."""
+        cursor = conn.cursor()
+
+        # Check if columns exist
+        cursor.execute("PRAGMA table_info(tier1_cache)")
+        existing_columns = {row[1] for row in cursor.fetchall()}
+
+        new_columns = {
+            # v5.0 universal metrics
+            'accum_ratio_15d': 'REAL',
+            'days_to_earnings': 'INTEGER',
+            'earnings_date': 'TEXT',
+            'gap_1d_pct': 'REAL',
+            'gap_direction': 'TEXT',
+            'spy_regime': 'TEXT',
+            # v7.0 Strategy G eligibility pre-calculation
+            'g_max_days': 'INTEGER',
+            'days_post_earnings': 'INTEGER',
+            'g_eligible': 'INTEGER',
+            # v7.0 Task 12a: VCP pre-calculation
+            'vcp_detected': 'BOOLEAN',
+            'vcp_tightness': 'REAL',
+            'vcp_volume_ratio': 'REAL',
+            # v7.1: Support/Resistance (Strategies C, D)
+            'supports': 'TEXT',  # JSON array of top 5 support levels
+            'resistances': 'TEXT',  # JSON array of top 5 resistance levels
+            'nearest_support_distance_pct': 'REAL',
+            'nearest_resistance_distance_pct': 'REAL',
+            # v7.1: Consecutive down-days (Strategy F)
+            'consecutive_down_days': 'INTEGER',
+            # v7.1: EMA21 slope normalized (Strategy B)
+            'ema21_slope_norm': 'REAL',
+            # v7.1: Pullback from high (Strategy B)
+            'pullback_from_high_pct': 'REAL',
+            # v7.1: Distance to EMA8 (Strategy B)
+            'distance_to_ema8_pct': 'REAL',
+            # v7.1: Sector info (multiple strategies)
+            'sector': 'TEXT',
+            'sector_etf_symbol': 'TEXT',
+        }
+
+        for column, dtype in new_columns.items():
+            if column not in existing_columns:
+                cursor.execute(f"ALTER TABLE tier1_cache ADD COLUMN {column} {dtype}")
+                logger.info(f"Added column {column} to tier1_cache")
+
+        conn.commit()
+
     def migrate_tier1_cache_v5(self):
         """Add v5.0 columns to tier1_cache table."""
         conn = self.get_connection()
@@ -169,7 +221,19 @@ class Database:
             # v7.0 Strategy G eligibility
             'g_max_days', 'days_post_earnings', 'g_eligible',
             # v7.0 Task 12a: VCP pre-calculation
-            'vcp_detected', 'vcp_tightness', 'vcp_volume_ratio'
+            'vcp_detected', 'vcp_tightness', 'vcp_volume_ratio',
+            # v7.1: Support/Resistance
+            'supports', 'resistances', 'nearest_support_distance_pct', 'nearest_resistance_distance_pct',
+            # v7.1: Consecutive down-days
+            'consecutive_down_days',
+            # v7.1: EMA21 slope normalized
+            'ema21_slope_norm',
+            # v7.1: Pullback from high
+            'pullback_from_high_pct',
+            # v7.1: Distance to EMA8
+            'distance_to_ema8_pct',
+            # v7.1: Sector info
+            'sector', 'sector_etf_symbol',
         ]
 
         values = []
@@ -177,18 +241,27 @@ class Database:
             if col == 'symbol':
                 values.append(symbol)
             else:
-                values.append(data.get(col, None))
+                val = data.get(col, None)
+                # Convert lists to JSON for TEXT columns
+                if col in ('supports', 'resistances') and isinstance(val, list):
+                    import json
+                    val = json.dumps(val)
+                values.append(val)
 
-        with self.get_connection() as conn:
-            placeholders = ', '.join(['?' for _ in columns])
-            update_clause = ', '.join([f"{col}=excluded.{col}" for col in columns if col != 'symbol'])
+        try:
+            with self.get_connection() as conn:
+                placeholders = ', '.join(['?' for _ in columns])
+                update_clause = ', '.join([f"{col}=excluded.{col}" for col in columns if col != 'symbol'])
 
-            conn.execute(f"""
-                INSERT INTO tier1_cache ({', '.join(columns)})
-                VALUES ({placeholders})
-                ON CONFLICT(symbol) DO UPDATE SET
-                    {update_clause}
-            """, values)
+                conn.execute(f"""
+                    INSERT INTO tier1_cache ({', '.join(columns)})
+                    VALUES ({placeholders})
+                    ON CONFLICT(symbol) DO UPDATE SET
+                        {update_clause}
+                """, values)
+        except sqlite3.Error as e:
+            logger.error(f"Database error saving tier1_cache for {symbol}: {e}")
+            raise
 
     def get_tier1_cache(self, symbol: str) -> Optional[Dict[str, Any]]:
         """Retrieve Tier 1 cache metrics for a symbol.
@@ -211,6 +284,22 @@ class Database:
                 return None
 
             return dict(row)
+
+    def get_all_tier1_cache(self) -> Dict[str, Dict[str, Any]]:
+        """Retrieve all Tier 1 cache metrics.
+
+        Returns:
+            Dict mapping symbol to metrics
+        """
+        with self.get_connection() as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute("SELECT * FROM tier1_cache")
+
+            result = {}
+            for row in cursor.fetchall():
+                result[row['symbol']] = dict(row)
+
+            return result
 
     def save_tier3_cache(self, symbol: str, df: pd.DataFrame):
         """Save market data as pickled blob (Tier 3 cache).
@@ -250,6 +339,115 @@ class Database:
                 return None
 
             return pickle.loads(row[0])
+
+    def get_market_data_df(self, symbol: str) -> Optional[pd.DataFrame]:
+        """Retrieve market data for a symbol from market_data table.
+
+        Args:
+            symbol: Stock symbol
+
+        Returns:
+            DataFrame with OHLCV data or None
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.execute(
+                    "SELECT date, open, high, low, close, volume FROM market_data WHERE symbol = ? ORDER BY date",
+                    (symbol,)
+                )
+                rows = cursor.fetchall()
+
+            if not rows:
+                return None
+
+            df = pd.DataFrame(rows, columns=['date', 'open', 'high', 'low', 'close', 'volume'])
+            df['date'] = pd.to_datetime(df['date'])
+            df.set_index('date', inplace=True)
+            return df
+
+        except Exception as e:
+            logger.debug(f"Failed to get market data for {symbol}: {e}")
+            return None
+
+    def save_etf_cache(self, symbol: str, etf_data: Dict[str, Any]):
+        """Save pre-calculated ETF data.
+
+        Args:
+            symbol: ETF symbol (e.g., SPY, XLK, VIX)
+            etf_data: Dictionary with pre-calculated metrics
+        """
+        cache_date = datetime.now().date().isoformat()
+
+        with self.get_connection() as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO etf_cache
+                (symbol, cache_date, current_price, ema50, ema200, atr, rsi_14,
+                 ret_5d, ret_3m, ret_6m, ret_12m, rs_percentile, above_ema50,
+                 volume_ratio, sector_name, price_vs_ema50_pct,
+                 vix_current, vix_5d_slope, vix_status,
+                 spy_regime, spy_price_vs_ema50_pct, qqq_price_vs_ema50_pct, market_trend)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (symbol, cache_date,
+                 etf_data.get('current_price'),
+                 etf_data.get('ema50'),
+                 etf_data.get('ema200'),
+                 etf_data.get('atr'),
+                 etf_data.get('rsi_14'),
+                 etf_data.get('ret_5d'),
+                 etf_data.get('ret_3m'),
+                 etf_data.get('ret_6m'),
+                 etf_data.get('ret_12m'),
+                 etf_data.get('rs_percentile'),
+                 etf_data.get('above_ema50'),
+                 etf_data.get('volume_ratio'),
+                 etf_data.get('sector_name'),
+                 etf_data.get('price_vs_ema50_pct'),
+                 etf_data.get('vix_current'),
+                 etf_data.get('vix_5d_slope'),
+                 etf_data.get('vix_status'),
+                 etf_data.get('spy_regime'),
+                 etf_data.get('spy_price_vs_ema50_pct'),
+                 etf_data.get('qqq_price_vs_ema50_pct'),
+                 etf_data.get('market_trend'))
+            )
+
+    def get_etf_cache(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """Retrieve pre-calculated ETF data.
+
+        Args:
+            symbol: ETF symbol
+
+        Returns:
+            Dict with ETF metrics or None if not found
+        """
+        with self.get_connection() as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute(
+                "SELECT * FROM etf_cache WHERE symbol = ?",
+                (symbol,)
+            )
+            row = cursor.fetchone()
+
+            if row is None:
+                return None
+
+            return dict(row)
+
+    def get_all_etf_cache(self) -> Dict[str, Dict[str, Any]]:
+        """Retrieve all pre-calculated ETF data.
+
+        Returns:
+            Dict mapping symbol to ETF metrics
+        """
+        with self.get_connection() as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute("SELECT * FROM etf_cache")
+
+            result = {}
+            for row in cursor.fetchall():
+                result[row['symbol']] = dict(row)
+
+            return result
 
     def save_universe_sync(self, sync_data: Dict[str, Any]):
         """Record universe sync history.
@@ -580,6 +778,44 @@ class Database:
         cursor = conn.execute(query, params)
         return [dict(row) for row in cursor.fetchall()]
 
+    def get_all_rs_raw_values(self) -> List[Dict[str, Any]]:
+        """Get all rs_raw values from tier1_cache for universe-wide RS percentile calculation.
+
+        Returns:
+            List of dicts with 'symbol' and 'rs_raw' keys
+        """
+        with self.get_connection() as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute(
+                "SELECT symbol, rs_raw FROM tier1_cache WHERE rs_raw IS NOT NULL ORDER BY rs_raw DESC"
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
+    def update_rs_percentile(self, symbol: str, rs_percentile: float):
+        """Update rs_percentile for a symbol.
+
+        Args:
+            symbol: Stock symbol
+            rs_percentile: Calculated percentile rank (0-100)
+        """
+        with self.get_connection() as conn:
+            conn.execute(
+                "UPDATE tier1_cache SET rs_percentile = ? WHERE symbol = ?",
+                (rs_percentile, symbol)
+            )
+
+    def bulk_update_rs_percentiles(self, rs_percentiles: Dict[str, float]):
+        """Bulk update rs_percentile for multiple symbols.
+
+        Args:
+            rs_percentiles: Dict mapping symbol to percentile rank
+        """
+        with self.get_connection() as conn:
+            conn.executemany(
+                "UPDATE tier1_cache SET rs_percentile = ? WHERE symbol = ?",
+                [(pct, sym) for sym, pct in rs_percentiles.items()]
+            )
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS stocks (
@@ -677,6 +913,36 @@ CREATE TABLE IF NOT EXISTS tier3_cache (
     symbol TEXT PRIMARY KEY,
     cache_date TEXT,
     market_data BLOB
+);
+
+-- ETF cache (pre-calculated market/sector ETF data)
+CREATE TABLE IF NOT EXISTS etf_cache (
+    symbol TEXT PRIMARY KEY,
+    cache_date TEXT,
+    current_price REAL,
+    ema50 REAL,
+    ema200 REAL,
+    atr REAL,
+    rsi_14 REAL,
+    ret_5d REAL,
+    ret_3m REAL,
+    ret_6m REAL,
+    ret_12m REAL,
+    rs_percentile REAL,
+    above_ema50 BOOLEAN,
+    volume_ratio REAL,
+    -- Sector ETF specific
+    sector_name TEXT,
+    price_vs_ema50_pct REAL,
+    -- VIX specific
+    vix_current REAL,
+    vix_5d_slope REAL,
+    vix_status TEXT,
+    -- SPY/QQQ specific (market regime)
+    spy_regime TEXT,
+    spy_price_vs_ema50_pct REAL,
+    qqq_price_vs_ema50_pct REAL,
+    market_trend TEXT
 );
 
 -- Workflow status
