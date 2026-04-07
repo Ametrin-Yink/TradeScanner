@@ -953,7 +953,8 @@ class PreMarketPrep:
         for symbol, percentile in rs_percentiles.items():
             # Get previous consecutive days count
             prev_tier1 = self.db.get_tier1_cache(symbol)
-            prev_consecutive = prev_tier1.get('rs_consecutive_days_80', 0) if prev_tier1 else 0
+            prev_consecutive = prev_tier1.get('rs_consecutive_days_80') if prev_tier1 else 0
+            prev_consecutive = prev_consecutive or 0  # Handle None values from DB
 
             # Update based on current RS percentile
             if percentile >= 80:
