@@ -184,14 +184,57 @@ Return ONLY JSON:
             data = response.json()
             content = data['choices'][0]['message']['content']
 
-            # Extract JSON - look for content between single braces
+            # Extract JSON - try multiple strategies for robustness
             import re
-            json_match = re.search(r'\{.*\}', content, re.DOTALL)
+            result = None
+
+            # Strategy 1: Look for JSON between braces (non-greedy, handle nested braces)
+            # Match { followed by any content (non-greedy) followed by }
+            json_match = re.search(r'\{(?:[^{}]|(?:\{[^{}]*\}))*\}', content, re.DOTALL)
             if json_match:
-                result = json.loads(json_match.group())
-            else:
-                # Try to parse the entire content as JSON
-                result = json.loads(content)
+                try:
+                    result = json.loads(json_match.group())
+                except json.JSONDecodeError:
+                    pass
+
+            # Strategy 2: If strategy 1 failed, try to find JSON with balanced braces
+            if result is None:
+                # Find all potential JSON objects by counting braces
+                start_idx = content.find('{')
+                if start_idx >= 0:
+                    brace_count = 0
+                    for i, char in enumerate(content[start_idx:], start_idx):
+                        if char == '{':
+                            brace_count += 1
+                        elif char == '}':
+                            brace_count -= 1
+                            if brace_count == 0:
+                                try:
+                                    result = json.loads(content[start_idx:i+1])
+                                    break
+                                except json.JSONDecodeError:
+                                    pass
+
+            # Strategy 3: Try to parse entire content as JSON
+            if result is None:
+                try:
+                    result = json.loads(content.strip())
+                except json.JSONDecodeError:
+                    pass
+
+            # Strategy 4: Extract JSON from code blocks
+            if result is None:
+                code_block_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', content, re.DOTALL)
+                if code_block_match:
+                    try:
+                        result = json.loads(code_block_match.group(1))
+                    except json.JSONDecodeError:
+                        pass
+
+            # Fallback: return default regime
+            if result is None:
+                logger.warning(f"Failed to extract JSON from AI response: {content[:200]}...")
+                return {'regime': 'neutral', 'confidence': 50, 'reasoning': 'Failed to parse AI response'}
 
             # Validate regime
             valid = ['bull_strong', 'bull_moderate', 'neutral',

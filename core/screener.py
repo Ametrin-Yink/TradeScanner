@@ -316,13 +316,26 @@ class StrategyScreener:
             Dict mapping symbol to cached Tier 1 data
         """
         cached = {}
-        today = datetime.now().date().isoformat()
+        today = datetime.now().date()
+        max_age_days = 2  # Accept cache up to 2 days old
 
         for symbol in symbols:
             try:
                 data = self.db.get_tier1_cache(symbol)
-                if data and data.get('cache_date') == today:
-                    cached[symbol] = data
+                if data:
+                    cache_date_str = data.get('cache_date')
+                    if cache_date_str:
+                        try:
+                            cache_date = datetime.fromisoformat(cache_date_str).date()
+                            days_old = (today - cache_date).days
+                            if 0 <= days_old <= max_age_days:
+                                cached[symbol] = data
+                                continue
+                        except (ValueError, TypeError):
+                            pass
+                    # Also accept if cache_date matches today's ISO format (backward compat)
+                    if data.get('cache_date') == today.isoformat():
+                        cached[symbol] = data
             except Exception as e:
                 logger.debug(f"Failed to load Tier 1 cache for {symbol}: {e}")
 
@@ -490,15 +503,55 @@ class StrategyScreener:
             if letter:
                 by_strategy[letter].append(c)
 
-        # Select top N per strategy
+        # Select top N per strategy and track unused slots
         selected_by_letter = {}
+        unused_slots = 0  # Track slots not filled by strategies
+
         for letter, slots in allocation.items():
             if slots == 0:
                 continue
 
             strategy_cands = by_strategy.get(letter, [])
             strategy_cands.sort(key=lambda x: x.technical_snapshot.get('score', 0), reverse=True)
-            selected_by_letter[letter] = strategy_cands[:slots]
+            actual_cands = strategy_cands[:slots]
+            selected_by_letter[letter] = actual_cands
+
+            # Track unused slots for redistribution
+            if len(strategy_cands) < slots:
+                unused_slots += slots - len(strategy_cands)
+                logger.debug(f"Strategy {letter}: {len(strategy_cands)}/{slots} slots filled ({slots - len(strategy_cands)} unused)")
+
+        logger.info(f"Slot allocation: {sum(len(v) for v in selected_by_letter.values())} candidates selected, {unused_slots} unused slots available for redistribution")
+
+        # Redistribute unused slots to strategies with extra candidates
+        if unused_slots > 0:
+            logger.info(f"Redistributing {unused_slots} unused slots to strategies with extra candidates")
+
+            # Find strategies with candidates beyond their allocated slots
+            extra_candidates = []
+            for letter, slots in allocation.items():
+                if slots == 0:
+                    continue
+                strategy_cands = by_strategy.get(letter, [])
+                if len(strategy_cands) > slots:
+                    # Add candidates beyond allocated slots
+                    for c in strategy_cands[slots:]:
+                        extra_candidates.append((c, letter))
+
+            # Sort extra candidates by score
+            extra_candidates.sort(key=lambda x: x[0].technical_snapshot.get('score', 0), reverse=True)
+
+            # Add top extra candidates up to unused slots
+            added = 0
+            for candidate, letter in extra_candidates:
+                if added >= unused_slots:
+                    break
+                if letter not in selected_by_letter:
+                    selected_by_letter[letter] = []
+                selected_by_letter[letter].append(candidate)
+                added += 1
+
+            logger.info(f"Redistributed {added} extra candidates from strategies with surplus")
 
         # Flatten and handle duplicates with sector cap
         SECTOR_MAX = 4  # Soft cap per sector

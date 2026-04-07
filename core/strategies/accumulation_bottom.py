@@ -31,7 +31,6 @@ class AccumulationBottomStrategy(BaseStrategy):
     PARAMS = {
         'min_market_cap': 2_500_000_000,
         'min_volume': 150_000,
-        'min_dollar_volume': 50_000_000,
         'min_atr_pct': 0.015,
         'min_listing_days': 180,
         'max_distance_from_60d_low': 0.10,
@@ -104,12 +103,6 @@ class AccumulationBottomStrategy(BaseStrategy):
         ind.calculate_all()
 
         current_price = df['close'].iloc[-1]
-
-        # Check dollar volume
-        dollar_volume = current_price * df['volume'].iloc[-1]
-        if dollar_volume < self.PARAMS['min_dollar_volume']:
-            logger.debug(f"ACC_REJ: {symbol} - Dollar volume ${dollar_volume:,.0f} < ${self.PARAMS['min_dollar_volume']:,.0f}")
-            return False
 
         # Check ADR
         adr_pct = ind.indicators.get('adr', {}).get('adr_pct', 0)

@@ -625,9 +625,9 @@ class PreMarketPrep:
             ema200 = ema_data.get('ema200', df['close'].ewm(span=200).mean().iloc[-1])
 
             # ATR/ADR (decimal format, not percentage)
-            atr = ind.get('atr', {}).get('atr14', df['high'].tail(14).mean() - df['low'].tail(14).mean())
+            atr = ind.get('atr', {}).get('atr', df['high'].tail(14).mean() - df['low'].tail(14).mean())
             atr_pct = (atr / current_price) if current_price > 0 else 0
-            adr = ind.get('adr', {}).get('adr20', df['high'].tail(20).mean() - df['low'].tail(20).mean())
+            adr = ind.get('adr', {}).get('adr', df['high'].tail(20).mean() - df['low'].tail(20).mean())
             adr_pct = (adr / current_price) if current_price > 0 else 0
 
             # Returns (3m, 6m, 12m, 5d) - use 0 for insufficient data
@@ -654,7 +654,7 @@ class PreMarketPrep:
             gaps_5d = (gaps.tail(5) > 0.02).sum()
 
             # RSI
-            rsi = ind.get('rsi', {}).get('rsi14', 50)
+            rsi = ind.get('rsi', {}).get('rsi', 50)
 
             # Accumulation ratio (Strategy H)
             accum_ratio = self._calculate_accum_ratio(df, days=15)

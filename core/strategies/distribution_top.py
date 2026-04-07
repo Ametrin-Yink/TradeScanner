@@ -30,6 +30,7 @@ class DistributionTopStrategy(BaseStrategy):
     DIRECTION = 'short'
 
     PARAMS = {
+        'min_market_cap': 2_000_000_000,  # v7.0: $2B per docs (line 346)
         'min_dollar_volume': 30_000_000,  # v7.0: $30M avg20d per docs (line 348)
         'min_dollar_volume_short': 30_000_000,  # v7.0: liquidity guard for short strategies
         'min_atr_pct': 0.015,
@@ -46,6 +47,16 @@ class DistributionTopStrategy(BaseStrategy):
     def filter(self, symbol: str, df: pd.DataFrame) -> bool:
         """Filter for distribution top candidates per v7.0 spec."""
         if len(df) < self.PARAMS['min_listing_days']:
+            return False
+
+        # Get pre-calculated data from phase0 if available
+        phase0_data = getattr(self, 'phase0_data', {})
+        data = phase0_data.get(symbol, {})
+
+        # v7.0: Market cap ≥ $2B (doc line 346)
+        market_cap = data.get('market_cap', 0)
+        if market_cap < self.PARAMS['min_market_cap']:
+            logger.debug(f"DIST_REJ: {symbol} - Market cap ${market_cap:,.0f} < ${self.PARAMS['min_market_cap']:,.0f}")
             return False
 
         ind = TechnicalIndicators(df)

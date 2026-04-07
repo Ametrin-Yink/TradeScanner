@@ -24,6 +24,7 @@ class EarningsGapStrategy(BaseStrategy):
     DIRECTION = 'both'
 
     PARAMS = {
+        'min_market_cap': 2_000_000_000,  # v7.0: $2B per docs (line 524)
         'min_gap_pct': 0.05,
         'max_days_post_earnings': 5,
         'min_dollar_volume_gap_day': 100e6,
@@ -36,6 +37,12 @@ class EarningsGapStrategy(BaseStrategy):
         """Filter for earnings gap candidates."""
         phase0_data = getattr(self, 'phase0_data', {})
         data = phase0_data.get(symbol, {})
+
+        # v7.0: Market cap ≥ $2B (doc line 524)
+        market_cap = data.get('market_cap', 0)
+        if market_cap < self.PARAMS['min_market_cap']:
+            logger.debug(f"EG_REJ: {symbol} - Market cap ${market_cap:,.0f} < ${self.PARAMS['min_market_cap']:,.0f}")
+            return False
 
         # Check earnings timing with gap-size-dependent window
         days_to_earnings = data.get('days_to_earnings')
