@@ -22,8 +22,8 @@ class DataFetcher:
     def __init__(
         self,
         db: Optional[Database] = None,
-        max_workers: int = 4,  # Increased from 2 for better parallelism
-        request_delay: float = 0.1,  # Reduced from 0.5s - yfinance can handle faster
+        max_workers: int = 2,  # Reduced to 2 for rate limiting
+        request_delay: float = 0.5,  # Increased to 0.5s for rate limiting
         max_retries: int = 3,
         max_history_days: int = 252
     ):

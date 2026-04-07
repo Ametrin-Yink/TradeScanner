@@ -53,8 +53,14 @@ class DistributionTopStrategy(BaseStrategy):
 
         current_price = df['close'].iloc[-1]
 
+        # v7.0: Avg vol 20d ≥ 100K (doc line 347)
+        avg_volume = df['volume'].tail(20).mean()
+        if avg_volume < 100_000:
+            logger.debug(f"DIST_REJ: {symbol} - Avg volume {avg_volume:,.0f} < 100K")
+            return False
+
         # v7.0: Check dollar volume > $30M avg20d (line 348)
-        avg_dollar_volume = current_price * df['volume'].tail(20).mean()
+        avg_dollar_volume = current_price * avg_volume
         if avg_dollar_volume < self.PARAMS['min_dollar_volume']:
             logger.debug(f"DIST_REJ: {symbol} - Dollar volume ${avg_dollar_volume:,.0f} < ${self.PARAMS['min_dollar_volume']:,.0f}")
             return False
@@ -421,7 +427,18 @@ class DistributionTopStrategy(BaseStrategy):
         return signals
 
     def _calculate_vc(self, df: pd.DataFrame) -> float:
-        """Volume Confirmation - breakdown surge and follow-through."""
+        """Volume Confirmation - breakdown surge and follow-through per v7.0 spec.
+
+        Doc (lines 380-385):
+        | Breakdown vol / avg20d | Score | Follow-through |
+        |------------------------|-------|----------------|
+        | ≥2.5× | 2.0 | +1.0 if 2nd down-day within 2 sessions |
+        | 1.8–2.5× | 1.3–2.0 | |
+        | 1.2–1.8× | 0.5–1.3 | |
+        | <1.2× | 0 | |
+
+        Returns max 3.0 (2.0 base + 1.0 follow-through).
+        """
         recent_volume = df['volume'].iloc[-1]
         avg_volume = df['volume'].tail(20).mean()
 
@@ -430,13 +447,37 @@ class DistributionTopStrategy(BaseStrategy):
 
         volume_ratio = recent_volume / avg_volume
 
+        # Base volume score (0-2.0)
         if volume_ratio >= 2.5:
-            return 2.0
+            base_score = 2.0
         elif volume_ratio >= 1.8:
-            return 1.3 + (volume_ratio - 1.8) / 0.7 * 0.7
+            base_score = 1.3 + (volume_ratio - 1.8) / 0.7 * 0.7
         elif volume_ratio >= 1.2:
-            return 0.5 + (volume_ratio - 1.2) / 0.6 * 0.8
-        return 0.0
+            base_score = 0.5 + (volume_ratio - 1.2) / 0.6 * 0.8
+        else:
+            base_score = 0.0
+
+        # Follow-through score (+1.0 if 2nd down-day within 2 sessions)
+        follow_through_score = 0.0
+        if len(df) >= 3:
+            # Check if today and prior day are both down-days
+            today_close = df['close'].iloc[-1]
+            today_open = df['open'].iloc[-1]
+
+            # Count down-days in last 2 sessions (excluding today for breakdown day)
+            down_days_count = 0
+            for i in range(1, min(3, len(df))):
+                idx = -i
+                prev_close = df['close'].iloc[idx]
+                prev_open = df['open'].iloc[idx] if idx < -1 else df['open'].iloc[-2]
+                if prev_close < prev_open:
+                    down_days_count += 1
+
+            # +1.0 if 2nd down-day within 2 sessions of breakdown
+            if down_days_count >= 2:
+                follow_through_score = 1.0
+
+        return min(3.0, base_score + follow_through_score)
 
     def calculate_entry_exit(self, symbol: str, df: pd.DataFrame,
                             dimensions: List[ScoringDimension],

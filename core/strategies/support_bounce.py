@@ -38,7 +38,6 @@ class SupportBounceStrategy(BaseStrategy):
         'support_tolerance_atr': 0.5,  # Support level ± 0.5 ATR
         'time_stop_days': 5,
         'time_stop_clv_min': 0.4,
-        'range_existence_bonus': 0.5,
         'max_reclaim_days': 5,
         'sector_etfs': {  # Sector ETF mapping
             'Technology': 'XLK',
@@ -164,6 +163,13 @@ class SupportBounceStrategy(BaseStrategy):
 
         current_price = df['close'].iloc[-1]
 
+        # v7.0: Price vs EMA50 within ±15% (doc line 275)
+        ema50 = ind.indicators.get('ema', {}).get('ema50', current_price)
+        ema50_distance = abs(current_price - ema50) / ema50 if ema50 > 0 else 1.0
+        if ema50_distance > 0.15:
+            logger.debug(f"SupportBounce_REJ: {symbol} - Price {ema50_distance:.1%} from EMA50 > 15%")
+            return False
+
         # Calculate S/R
         calc = SupportResistanceCalculator(df)
         sr_levels = calc.calculate_all()
@@ -239,8 +245,8 @@ class SupportBounceStrategy(BaseStrategy):
 
         dimensions = []
 
-        # Dimension 1: Support Quality (SQ) - 6 points max with range bonus
-        sq_score, sq_details = self._calculate_sq_with_range_bonus(df, ind)
+        # Dimension 1: Support Quality (SQ) - 4 points max (v7.0 spec)
+        sq_score, sq_details = self._calculate_sq(df, ind)
         # Add sector alpha bonus if present
         if sector_alpha > 0:
             sq_score += sector_alpha
@@ -346,9 +352,9 @@ class SupportBounceStrategy(BaseStrategy):
 
         return max(supports_below)
 
-    def _calculate_sq_with_range_bonus(self, df: pd.DataFrame, ind: TechnicalIndicators) -> Tuple[float, Dict]:
+    def _calculate_sq(self, df: pd.DataFrame, ind: TechnicalIndicators) -> Tuple[float, Dict]:
         """
-        Calculate SQ dimension with range existence bonus.
+        Calculate SQ dimension (no range bonus - v7.0 spec).
         """
         # Base SQ calculation
         current_price = df['close'].iloc[-1]
@@ -366,23 +372,12 @@ class SupportBounceStrategy(BaseStrategy):
         support_touches = self._calculate_support_touches(df, nearest_support, atr)
         recency_weight = self._calculate_recency_weight(support_touches['last_touch_days'])
 
-        sq_score, sq_details = self._calculate_sq(
+        sq_score, sq_details = self._calculate_sq_base(
             distance_pct, support_touches, recency_weight,
             0.0, atr, ind, df
         )
 
-        # Check if clear resistance level exists (range)
-        resistance = self._detect_resistance_level(df)
-        if resistance is not None:
-            support = self._detect_support_level(df)
-            if support is not None:
-                range_width = (resistance - support) / support
-                if 0.05 < range_width < 0.20:  # Reasonable range
-                    sq_score += self.PARAMS['range_existence_bonus']
-                    sq_details['range_bonus'] = self.PARAMS['range_existence_bonus']
-                    sq_details['range_width'] = range_width
-
-        return min(6.0, sq_score), sq_details
+        return min(4.0, sq_score), sq_details
 
     def _calculate_support_touches(self, df: pd.DataFrame, support_level: float, atr: float) -> Dict:
         """
@@ -484,7 +479,7 @@ class SupportBounceStrategy(BaseStrategy):
 
         return 0.0
 
-    def _calculate_sq(
+    def _calculate_sq_base(
         self,
         distance_pct: float,
         support_touches: Dict,
@@ -495,7 +490,7 @@ class SupportBounceStrategy(BaseStrategy):
         df: pd.DataFrame
     ) -> Tuple[float, Dict]:
         """
-        Support Quality (SQ) - 6 points max.
+        Support Quality (SQ) - 4 points max (v7.0 spec).
         Touch frequency + Recency + Bounce strength + Distance + Sector Alpha.
         """
         details = {
@@ -544,7 +539,7 @@ class SupportBounceStrategy(BaseStrategy):
         # 5. Sector Alpha bonus (0-1 pt)
         sq_score += sector_alpha
 
-        return round(min(6.0, sq_score), 2), details
+        return round(min(4.0, sq_score), 2), details
 
     def _calculate_vd(self, volume_ratio: float, df: pd.DataFrame) -> Tuple[float, Dict]:
         """

@@ -336,11 +336,10 @@ class PreMarketPrep:
         }
 
     def _update_earnings_dates(self, symbols: List[str]):
-        """Update earnings dates only for stocks with expired/missing cache.
+        """Update earnings dates for stocks with expired/missing cache.
 
-        Optimized to use ticker.calendar (4 quarters only) instead of
+        Uses ticker.calendar (4 quarters only) instead of
         ticker.earnings_dates (full history) to reduce memory usage.
-        Smaller batch sizes with aggressive cleanup between batches.
 
         Args:
             symbols: List of stock symbols
@@ -369,7 +368,6 @@ class PreMarketPrep:
         logger.info(f"  Fetching earnings for {len(needs_update)}/{len(symbols)} stocks")
 
         # Fetch in small batches with aggressive memory cleanup
-        # Reduced from 50 to 20 to prevent yfinance memory buildup
         batch_size = 20
         updated = 0
         total_batches = (len(needs_update) + batch_size - 1) // batch_size
@@ -380,35 +378,31 @@ class PreMarketPrep:
 
             for symbol in batch:
                 try:
-                    # Use ticker.calendar instead of earnings_dates
-                    # calendar returns dict with 'Earnings Date' as a list
-                    # earnings_dates returns full history DataFrame (memory-heavy)
                     ticker = yf.Ticker(symbol)
                     calendar = ticker.calendar
 
-                    # calendar is a dict with keys like 'Earnings Date', 'Dividend Date', etc.
+                    earnings_date = None
                     if calendar and 'Earnings Date' in calendar:
                         earnings_dates = calendar['Earnings Date']
                         if earnings_dates and isinstance(earnings_dates, list):
-                            # Get the first (nearest) future earnings date
                             for date_val in earnings_dates:
                                 if date_val:
                                     try:
-                                        # Handle both date objects and ISO strings
                                         if isinstance(date_val, str):
                                             date = datetime.fromisoformat(date_val).date()
                                         elif hasattr(date_val, 'date'):
                                             date = date_val.date()
                                         else:
-                                            date = date_val  # Already a date object
+                                            date = date_val
                                         if date >= today:
-                                            self.db.update_stock_earnings_date(symbol, date.isoformat())
+                                            earnings_date = date.isoformat()
+                                            self.db.update_stock_earnings_date(symbol, earnings_date)
                                             updated += 1
                                             break
                                     except:
                                         continue
 
-                    # Explicit cleanup - delete in reverse order of creation
+                    # Explicit cleanup
                     if 'calendar' in locals():
                         del calendar
                     if 'ticker' in locals():
@@ -419,8 +413,6 @@ class PreMarketPrep:
 
             # Aggressive GC after each batch
             gc.collect()
-            import time
-            # Increased sleep time to allow memory release
             time.sleep(0.5)
 
         logger.info(f"  Updated earnings dates for {updated} stocks")
@@ -674,6 +666,10 @@ class PreMarketPrep:
             # Earnings date from DB cache
             earnings_date = self.db.get_stock_earnings_date(symbol)
             days_to_earnings = None
+            earnings_beat = False
+            guidance_change = False
+            one_time_event = False
+
             if earnings_date:
                 try:
                     today = datetime.now().date()
@@ -681,6 +677,13 @@ class PreMarketPrep:
                     days_to_earnings = (ed - today).days
                 except:
                     pass
+
+            # Fetch earnings surprise data from DB (Strategy G)
+            earnings_data = self.db.get_stock_earnings_data(symbol)
+            if earnings_data:
+                earnings_beat = earnings_data.get('earnings_beat', False)
+                guidance_change = earnings_data.get('guidance_change', False)
+                one_time_event = earnings_data.get('one_time_event', False)
 
             # G-eligibility by gap size
             days_post_earnings = -days_to_earnings if days_to_earnings and days_to_earnings < 0 else None
@@ -732,6 +735,13 @@ class PreMarketPrep:
                 else:
                     break
 
+            # RS consecutive days ≥80th percentile (Strategy H)
+            # Get previous value from cache and update based on current RS
+            prev_tier1 = self.db.get_tier1_cache(symbol)
+            prev_rs_consecutive = prev_tier1.get('rs_consecutive_days_80', 0) if prev_tier1 else 0
+            # Will be updated after RS percentile is calculated across universe
+            rs_consecutive_days_80 = prev_rs_consecutive  # Placeholder, updated in update_rs_percentiles()
+
             # EMA21 slope normalized (Strategy B)
             ema21_5d_ago = df['close'].ewm(span=21).mean().iloc[-6] if len(df) >= 6 else ema21 * 0.99
             ema21_slope_norm = (ema21 - ema21_5d_ago) / atr if atr > 0 else 0
@@ -777,6 +787,9 @@ class PreMarketPrep:
                 'accum_ratio_15d': accum_ratio,
                 'days_to_earnings': days_to_earnings,
                 'earnings_date': earnings_date,
+                'earnings_beat': earnings_beat,
+                'guidance_change': guidance_change,
+                'one_time_event': one_time_event,
                 'gap_1d_pct': gap_1d_pct,
                 'gap_direction': gap_direction,
                 # v7.0 Strategy G eligibility
@@ -794,6 +807,8 @@ class PreMarketPrep:
                 'nearest_resistance_distance_pct': nearest_resistance_distance_pct,
                 # v7.1: Consecutive down-days (Strategy F)
                 'consecutive_down_days': consecutive_down_days,
+                # v7.1: RS consecutive days ≥80th percentile (Strategy H)
+                'rs_consecutive_days_80': rs_consecutive_days_80,
                 # v7.1: EMA21 slope normalized (Strategy B)
                 'ema21_slope_norm': ema21_slope_norm,
                 # v7.1: Pullback from high (Strategy B)
@@ -931,6 +946,23 @@ class PreMarketPrep:
 
         # Bulk update database
         self.db.bulk_update_rs_percentiles(rs_percentiles)
+
+        # Update RS consecutive days ≥80th percentile (Strategy H)
+        logger.info("  Updating RS consecutive days ≥80th percentile...")
+        rs_consecutive_updates = {}
+        for symbol, percentile in rs_percentiles.items():
+            # Get previous consecutive days count
+            prev_tier1 = self.db.get_tier1_cache(symbol)
+            prev_consecutive = prev_tier1.get('rs_consecutive_days_80', 0) if prev_tier1 else 0
+
+            # Update based on current RS percentile
+            if percentile >= 80:
+                rs_consecutive_updates[symbol] = prev_consecutive + 1
+            else:
+                rs_consecutive_updates[symbol] = 0  # Reset if below 80th percentile
+
+        # Bulk update consecutive days
+        self.db.bulk_update_rs_consecutive_days(rs_consecutive_updates)
 
         logger.info(f"  RS percentiles updated for {len(rs_percentiles)} stocks")
         return len(rs_percentiles)

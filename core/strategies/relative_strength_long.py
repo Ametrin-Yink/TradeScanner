@@ -58,6 +58,12 @@ class RelativeStrengthLongStrategy(BaseStrategy):
             logger.debug(f"RS_REJ: {symbol} - RS percentile {rs_pct:.1f} < {self.PARAMS['min_rs_percentile']}")
             return False
 
+        # v7.0: Check consecutive days ≥80th percentile (≥5 days required)
+        rs_consecutive_days = data.get('rs_consecutive_days_80', 0)
+        if rs_consecutive_days < 5:
+            logger.debug(f"RS_REJ: {symbol} - RS ≥80th for only {rs_consecutive_days} days (need ≥5)")
+            return False
+
         # Market cap (v7.0: ≥$3B)
         market_cap = data.get('market_cap', 0)
         if market_cap < self.PARAMS['min_market_cap']:

@@ -164,6 +164,18 @@ class StrategyScreener:
                         'high_50d': cache_entry.get('high_60d', 0),
                         'volume_sma20': cache_entry.get('volume_sma', 0),
                         'data_days': cache_entry.get('data_days', len(df)),
+                        # v7.0 Strategy G earnings data
+                        'earnings_beat': cache_entry.get('earnings_beat', False),
+                        'guidance_change': cache_entry.get('guidance_change', False),
+                        'one_time_event': cache_entry.get('one_time_event', False),
+                        'days_to_earnings': cache_entry.get('days_to_earnings'),
+                        'earnings_date': cache_entry.get('earnings_date'),
+                        'gap_1d_pct': cache_entry.get('gap_1d_pct', 0),
+                        'gap_direction': cache_entry.get('gap_direction', 'none'),
+                        # v7.0 Strategy G eligibility
+                        'g_max_days': cache_entry.get('g_max_days'),
+                        'days_post_earnings': cache_entry.get('days_post_earnings'),
+                        'g_eligible': cache_entry.get('g_eligible', False),
                     }
 
                     # Delete temporary objects immediately
@@ -233,6 +245,10 @@ class StrategyScreener:
                 # Phase 0.4: 52-week metrics
                 metrics_52w = ind.calculate_52w_metrics()
 
+                # Fetch earnings data from Tier 1 cache (calculated in Phase 0)
+                tier1_cache = self._load_tier1_cache([symbol])
+                cache_entry = tier1_cache.get(symbol, {})
+
                 # Store pre-calculated data - ONLY scalars, NO DataFrames/objects
                 phase0_data[symbol] = {
                     # Scalar metrics only
@@ -252,6 +268,18 @@ class StrategyScreener:
                     'high_50d': float(df['high'].tail(50).max()),
                     'volume_sma20': float(df['volume'].tail(20).mean()),
                     'data_days': len(df),
+                    # v7.0 Strategy G earnings data (from Tier 1 cache)
+                    'earnings_beat': cache_entry.get('earnings_beat', False),
+                    'guidance_change': cache_entry.get('guidance_change', False),
+                    'one_time_event': cache_entry.get('one_time_event', False),
+                    'days_to_earnings': cache_entry.get('days_to_earnings'),
+                    'earnings_date': cache_entry.get('earnings_date'),
+                    'gap_1d_pct': cache_entry.get('gap_1d_pct', 0),
+                    'gap_direction': cache_entry.get('gap_direction', 'none'),
+                    # v7.0 Strategy G eligibility
+                    'g_max_days': cache_entry.get('g_max_days'),
+                    'days_post_earnings': cache_entry.get('days_post_earnings'),
+                    'g_eligible': cache_entry.get('g_eligible', False),
                 }
 
                 # Delete temporary objects immediately to free memory
@@ -530,12 +558,27 @@ class StrategyScreener:
     def _get_data(self, symbol: str, period: str = "1y") -> Optional[pd.DataFrame]:
         """Get cached or fetch data for symbol.
 
-        Uses 1 year (1y) by default to ensure sufficient data for all strategies,
-        including Momentum which requires 200 days for EMA200 calculation.
+        Priority:
+        1. In-memory cache (self.market_data) - fastest
+        2. Database cache (market_data table) - fast, no network
+        3. yfinance fetch - slow, rate-limited (fallback only)
         """
+        # 1. Check in-memory cache first
         if symbol in self.market_data:
             return self.market_data[symbol]
-        return self.fetcher.fetch_stock_data(symbol, period=period, interval="1d")
+
+        # 2. Check database cache (Phase 0 should have populated this)
+        df = self.db.get_market_data_df(symbol)
+        if df is not None and len(df) >= 200:
+            self.market_data[symbol] = df  # Cache for subsequent calls
+            return df
+
+        # 3. Fallback to yfinance (should not happen if Phase 0 completed)
+        logger.warning(f"No cached data for {symbol}, fetching from yfinance...")
+        df = self.fetcher.fetch_stock_data(symbol, period=period, interval="1d")
+        if df is not None:
+            self.market_data[symbol] = df
+        return df
 
     def _check_basic_requirements(self, df: pd.DataFrame, ind) -> bool:
         """
@@ -584,6 +627,7 @@ class StrategyScreener:
         self.market_data = market_data or {}
 
         # Run Phase 0 pre-calculation
+        # Note: _get_data() will load from database cache, no yfinance calls needed
         phase0_data = self._run_phase0_precalculation(symbols, self.market_data)
 
         all_matches = []
@@ -648,6 +692,7 @@ class StrategyScreener:
                 logger.info(f"  {strategy.NAME} ({letter}): SKIPPED (0 slots)")
 
         # Run Phase 0 pre-calculation
+        # Note: _get_data() will load from database cache, no yfinance calls needed
         self._phase0_data = self._run_phase0_precalculation(symbols, self.market_data)
 
         # Share data with active strategies

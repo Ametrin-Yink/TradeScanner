@@ -331,6 +331,12 @@ class PullbackEntryStrategy(BaseStrategy):
             logger.debug(f"Pullback_REJ: {symbol} - EMA21 slope {ema21_slope_norm:.2f} < threshold")
             return False
 
+        # v7.0: Price > EMA21 (doc line 211)
+        ema21 = data.get('ema21', 0)
+        if ema21 <= 0 or current_price <= ema21:
+            logger.debug(f"Pullback_REJ: {symbol} - Price {current_price:.2f} <= EMA21 {ema21:.2f}")
+            return False
+
         ind = TechnicalIndicators(df)
         ind.calculate_all()
 

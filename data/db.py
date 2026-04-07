@@ -73,6 +73,10 @@ class Database:
             'g_max_days': 'INTEGER',
             'days_post_earnings': 'INTEGER',
             'g_eligible': 'INTEGER',
+            # v7.0 Strategy G earnings data
+            'earnings_beat': 'BOOLEAN',
+            'guidance_change': 'BOOLEAN',
+            'one_time_event': 'BOOLEAN',
             # v7.0 Task 12a: VCP pre-calculation
             'vcp_detected': 'BOOLEAN',
             'vcp_tightness': 'REAL',
@@ -84,6 +88,8 @@ class Database:
             'nearest_resistance_distance_pct': 'REAL',
             # v7.1: Consecutive down-days (Strategy F)
             'consecutive_down_days': 'INTEGER',
+            # v7.1: RS consecutive days ≥80th percentile (Strategy H)
+            'rs_consecutive_days_80': 'INTEGER',
             # v7.1: EMA21 slope normalized (Strategy B)
             'ema21_slope_norm': 'REAL',
             # v7.1: Pullback from high (Strategy B)
@@ -220,12 +226,16 @@ class Database:
             'gap_direction', 'spy_regime',
             # v7.0 Strategy G eligibility
             'g_max_days', 'days_post_earnings', 'g_eligible',
+            # v7.0 Strategy G earnings data
+            'earnings_beat', 'guidance_change', 'one_time_event',
             # v7.0 Task 12a: VCP pre-calculation
             'vcp_detected', 'vcp_tightness', 'vcp_volume_ratio',
             # v7.1: Support/Resistance
             'supports', 'resistances', 'nearest_support_distance_pct', 'nearest_resistance_distance_pct',
             # v7.1: Consecutive down-days
             'consecutive_down_days',
+            # v7.1: RS consecutive days ≥80th percentile
+            'rs_consecutive_days_80',
             # v7.1: EMA21 slope normalized
             'ema21_slope_norm',
             # v7.1: Pullback from high
@@ -606,6 +616,30 @@ class Database:
                 (earnings_date, today, symbol)
             )
 
+    def get_stock_earnings_data(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """Get earnings surprise data for a stock from tier1_cache.
+
+        Args:
+            symbol: Stock symbol
+
+        Returns:
+            Dict with earnings_beat, guidance_change, one_time_event or None
+        """
+        with self.get_connection() as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute(
+                "SELECT earnings_beat, guidance_change, one_time_event FROM tier1_cache WHERE symbol = ?",
+                (symbol,)
+            )
+            row = cursor.fetchone()
+            if row:
+                return {
+                    'earnings_beat': bool(row['earnings_beat']) if row['earnings_beat'] else False,
+                    'guidance_change': bool(row['guidance_change']) if row['guidance_change'] else False,
+                    'one_time_event': bool(row['one_time_event']) if row['one_time_event'] else False,
+                }
+            return None
+
     def get_stocks_by_category(self, category: str) -> List[str]:
         """Get symbols by category.
 
@@ -814,6 +848,18 @@ class Database:
             conn.executemany(
                 "UPDATE tier1_cache SET rs_percentile = ? WHERE symbol = ?",
                 [(pct, sym) for sym, pct in rs_percentiles.items()]
+            )
+
+    def bulk_update_rs_consecutive_days(self, rs_consecutive_days: Dict[str, int]):
+        """Bulk update rs_consecutive_days_80 for multiple symbols.
+
+        Args:
+            rs_consecutive_days: Dict mapping symbol to consecutive days count
+        """
+        with self.get_connection() as conn:
+            conn.executemany(
+                "UPDATE tier1_cache SET rs_consecutive_days_80 = ? WHERE symbol = ?",
+                [(days, sym) for sym, days in rs_consecutive_days.items()]
             )
 
 

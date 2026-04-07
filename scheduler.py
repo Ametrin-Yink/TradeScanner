@@ -3,6 +3,8 @@ import argparse
 import logging
 import sys
 import gc
+import subprocess
+import json
 from datetime import datetime
 from typing import Optional, List, Dict
 
@@ -258,6 +260,9 @@ class CompleteScanner:
     def _phase0_data_prep(self, symbols: Optional[List[str]]) -> Dict:
         """Phase 0: Data Preparation.
 
+        For full workflow (symbols=None): runs as separate process for memory isolation.
+        For test mode (symbols provided): runs in-process for simplicity.
+
         Args:
             symbols: Optional pre-defined symbols list
 
@@ -270,9 +275,9 @@ class CompleteScanner:
 
         phase_start = datetime.now()
 
-        # If symbols provided (test mode), skip universe sync
+        # If symbols provided (test mode), run in-process
         if symbols is not None:
-            logger.info(f"Using provided symbols: {len(symbols)}")
+            logger.info(f"Using provided symbols: {len(symbols)} (test mode, in-process)")
             # Still fetch Tier 3 data
             tier3_data = self.prep._fetch_tier3_data()
             logger.info(f"Tier 3 data fetched: {len(tier3_data)} symbols")
@@ -289,14 +294,121 @@ class CompleteScanner:
                 'duration': int(duration)
             }
 
-        # Full Phase 0 with universe sync
-        result = self.prep.run_phase0()
-        duration = (datetime.now() - phase_start).total_seconds()
-        self._phase_times['phase0'] = int(duration)
+        # FIX 7: Full Phase 0 runs as separate process for memory isolation
+        # This is critical for 2GB RAM servers - process boundary ensures
+        # all Phase 0 memory is reclaimed before Phase 1-6 begin
+        logger.info("Running Phase 0 as separate process (memory isolation)")
 
-        logger.info(f"Phase 0 complete in {duration:.1f}s")
+        try:
+            # Run Phase 0 runner as subprocess with real-time output streaming
+            proc = subprocess.Popen(
+                [sys.executable, '-m', 'core.phase0_runner'],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1
+            )
 
-        return result
+            # Stream output to main log in real-time using iter with timeout
+            output_lines = []
+            logger.info("[Phase0] Subprocess started, streaming output...")
+
+            import threading
+            timeout_event = threading.Event()
+
+            def read_output():
+                for line in iter(proc.stdout.readline, ''):
+                    if timeout_event.is_set():
+                        break
+                    logger.info(f"[Phase0] {line.strip()}")
+                    output_lines.append(line)
+
+            # Start reading in a thread
+            reader_thread = threading.Thread(target=read_output)
+            reader_thread.daemon = True
+            reader_thread.start()
+
+            # Wait for process with timeout (60 minutes)
+            proc.wait(timeout=3600)
+
+            # Wait for reader thread to finish
+            reader_thread.join(timeout=5)
+
+            # Signal timeout if still running
+            timeout_event.set()
+
+            # Build output string for result parsing
+            output = ''.join(output_lines)
+            result = type('CompletedProcess', (), {'returncode': proc.returncode, 'stdout': output, 'stderr': ''})()
+
+            # Parse JSON result from stdout
+            output = result.stdout
+            json_start = output.find('=== PHASE0_RESULT_START ===')
+            json_end = output.find('=== PHASE0_RESULT_END ===')
+
+            if json_start != -1 and json_end != -1:
+                json_str = output[json_start + 28:json_end].strip()
+                phase0_result = json.loads(json_str)
+            else:
+                # Fallback: try to parse any JSON in output
+                logger.warning("Could not find result markers, parsing output directly")
+                for line in output.split('\n'):
+                    if line.strip().startswith('{'):
+                        phase0_result = json.loads(line)
+                        break
+
+            duration = (datetime.now() - phase_start).total_seconds()
+            self._phase_times['phase0'] = int(duration)
+
+            if result.returncode == 0 and phase0_result.get('success'):
+                logger.info(f"Phase 0 subprocess completed successfully in {duration:.1f}s")
+                logger.info(f"  Symbols for screening: {phase0_result['symbols_count']}")
+                logger.info(f"  Tier 1 cache entries: {phase0_result['tier1_count']}")
+
+                # Load symbols list from result for Phase 2
+                # Note: We need the actual symbol list, not just count
+                # The subprocess should have saved this info or we query from DB
+                symbols_list = phase0_result.get('symbols', [])
+
+                # If symbols not in result, query from DB using existing method
+                if not symbols_list:
+                    logger.info("Loading symbols from database (market cap >= $2B)...")
+                    symbols_list = self.db.get_active_stocks_min_market_cap(min_market_cap=2e9)
+                    logger.info(f"Loaded {len(symbols_list)} symbols from DB")
+
+                return {
+                    'success': True,
+                    'symbols': symbols_list,
+                    'symbols_count': phase0_result['symbols_count'],
+                    'tier1_count': phase0_result['tier1_count'],
+                    'duration': int(duration)
+                }
+            else:
+                error_msg = phase0_result.get('error', 'Unknown error') or f"Subprocess exit code: {result.returncode}"
+                logger.error(f"Phase 0 subprocess failed: {error_msg}")
+                if result.stderr:
+                    logger.error(f"Phase 0 stderr: {result.stderr[-500:]}")  # Last 500 chars
+                return {
+                    'success': False,
+                    'symbols': [],
+                    'error': error_msg
+                }
+
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            logger.error("Phase 0 subprocess timed out after 60 minutes")
+            return {
+                'success': False,
+                'symbols': [],
+                'error': 'Phase 0 timeout after 60 minutes'
+            }
+        except Exception as e:
+            logger.exception(f"Phase 0 subprocess failed: {e}")
+            return {
+                'success': False,
+                'symbols': [],
+                'error': str(e)
+            }
 
     def _phase1_market_analysis(self) -> Dict:
         """

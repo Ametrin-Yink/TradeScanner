@@ -200,7 +200,7 @@ class CapitulationReboundStrategy(BaseStrategy):
         return True
 
     def filter(self, symbol: str, df: pd.DataFrame) -> bool:
-        """Filter with additional checks."""
+        """Filter with additional checks per v7.0 spec."""
         if len(df) < self.PARAMS['min_listing_days']:
             return False
 
@@ -208,6 +208,14 @@ class CapitulationReboundStrategy(BaseStrategy):
         ind.calculate_all()
 
         if not self._check_basic_requirements(df):
+            return False
+
+        current_price = df['close'].iloc[-1]
+
+        # v7.0: Dollar volume > $50M avg20d (doc line 468)
+        avg_dollar_volume = current_price * df['volume'].tail(20).mean()
+        if avg_dollar_volume < 50_000_000:
+            logger.debug(f"CAP_REJ: {symbol} - Dollar volume ${avg_dollar_volume:,.0f} < $50M")
             return False
 
         return True

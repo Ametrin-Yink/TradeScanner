@@ -308,10 +308,29 @@ class BaseStrategy(ABC):
         return sorted(matches, key=lambda x: x.confidence, reverse=True)[:max_candidates]
 
     def _get_data(self, symbol: str) -> Optional[pd.DataFrame]:
-        """Get cached or fetch data for symbol."""
+        """Get cached or fetch data for symbol.
+
+        Priority:
+        1. In-memory cache (self.market_data) - fastest
+        2. Database cache (market_data table) - fast, no network
+        3. yfinance fetch - slow, rate-limited (fallback only)
+        """
+        # 1. Check in-memory cache first
         if symbol in self.market_data:
             return self.market_data[symbol]
-        return self.fetcher.fetch_stock_data(symbol, period="13mo", interval="1d")
+
+        # 2. Check database cache (Phase 0 should have populated this)
+        df = self.db.get_market_data_df(symbol)
+        if df is not None and len(df) >= 200:
+            self.market_data[symbol] = df  # Cache for subsequent calls
+            return df
+
+        # 3. Fallback to yfinance (should not happen if Phase 0 completed)
+        logger.warning(f"No cached data for {symbol}, fetching from yfinance...")
+        df = self.fetcher.fetch_stock_data(symbol, period="13mo", interval="1d")
+        if df is not None:
+            self.market_data[symbol] = df
+        return df
 
     def build_snapshot(
         self,
