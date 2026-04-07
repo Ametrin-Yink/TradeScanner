@@ -36,7 +36,6 @@ class AccumulationBottomStrategy(BaseStrategy):
         'min_listing_days': 180,
         'max_distance_from_60d_low': 0.10,
         'min_touches': 2,
-        'rsi_max': 40,
     }
 
     # Regime filtering per documentation:
@@ -121,12 +120,6 @@ class AccumulationBottomStrategy(BaseStrategy):
         # EMA checks - not in strong downtrend
         ema8 = ind.indicators.get('ema', {}).get('ema8', current_price)
         ema21 = ind.indicators.get('ema', {}).get('ema21', current_price)
-
-        # Check RSI not too high (oversold/accumulation zone)
-        rsi = ind.indicators.get('rsi', {}).get('rsi14', 50)
-        if rsi > self.PARAMS['rsi_max']:
-            logger.debug(f"ACC_REJ: {symbol} - RSI {rsi:.1f} > {self.PARAMS['rsi_max']}")
-            return False
 
         # Near 60d low - use pre-calculated data from phase0
         low_60d = data.get('low_60d')

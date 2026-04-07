@@ -30,7 +30,7 @@ class DistributionTopStrategy(BaseStrategy):
     DIRECTION = 'short'
 
     PARAMS = {
-        'min_dollar_volume': 30_000_000,  # v7.0: $30M avg20d per docs (was $50M)
+        'min_dollar_volume': 30_000_000,  # v7.0: $30M avg20d per docs (line 348)
         'min_dollar_volume_short': 30_000_000,  # v7.0: liquidity guard for short strategies
         'min_atr_pct': 0.015,
         'min_listing_days': 60,
@@ -44,7 +44,7 @@ class DistributionTopStrategy(BaseStrategy):
     }
 
     def filter(self, symbol: str, df: pd.DataFrame) -> bool:
-        """Filter for distribution top candidates."""
+        """Filter for distribution top candidates per v7.0 spec."""
         if len(df) < self.PARAMS['min_listing_days']:
             return False
 
@@ -53,9 +53,10 @@ class DistributionTopStrategy(BaseStrategy):
 
         current_price = df['close'].iloc[-1]
 
-        # Check dollar volume
-        dollar_volume = current_price * df['volume'].iloc[-1]
-        if dollar_volume < self.PARAMS['min_dollar_volume']:
+        # v7.0: Check dollar volume > $30M avg20d (line 348)
+        avg_dollar_volume = current_price * df['volume'].tail(20).mean()
+        if avg_dollar_volume < self.PARAMS['min_dollar_volume']:
+            logger.debug(f"DIST_REJ: {symbol} - Dollar volume ${avg_dollar_volume:,.0f} < ${self.PARAMS['min_dollar_volume']:,.0f}")
             return False
 
         # Check ADR

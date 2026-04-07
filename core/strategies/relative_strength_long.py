@@ -39,12 +39,11 @@ class RelativeStrengthLongStrategy(BaseStrategy):
         'min_rs_percentile': 80,
         'min_market_cap': 3e9,
         'min_volume': 200000,
-        'max_distance_from_52w_high': 0.15,
         # Note: accum_ratio is scored in VC dimension, not a hard pre-filter
     }
 
     def filter(self, symbol: str, df: pd.DataFrame) -> bool:
-        """Hard gate: Only in bear/neutral regimes. RS >= 80th."""
+        """Hard gate: Only in bear/neutral regimes. RS >= 80th per v7.0."""
         # Get regime from screener context
         regime = getattr(self, '_current_regime', 'neutral')
         if regime not in ['bear_moderate', 'bear_strong', 'extreme_vix', 'neutral']:
@@ -53,31 +52,25 @@ class RelativeStrengthLongStrategy(BaseStrategy):
 
         data = self.phase0_data.get(symbol, {}) if hasattr(self, 'phase0_data') else {}
 
-        # RS percentile gate
+        # RS percentile gate (v7.0: ≥80th for 5+ consecutive days)
         rs_pct = data.get('rs_percentile', 0)
         if rs_pct < self.PARAMS['min_rs_percentile']:
             logger.debug(f"RS_REJ: {symbol} - RS percentile {rs_pct:.1f} < {self.PARAMS['min_rs_percentile']}")
             return False
 
-        # Market cap
+        # Market cap (v7.0: ≥$3B)
         market_cap = data.get('market_cap', 0)
         if market_cap < self.PARAMS['min_market_cap']:
             logger.debug(f"RS_REJ: {symbol} - market cap too low")
             return False
 
-        # Volume
+        # Volume (v7.0: ≥200K avg 20d)
         avg_volume = df['volume'].tail(20).mean()
         if avg_volume < self.PARAMS['min_volume']:
             logger.debug(f"RS_REJ: {symbol} - volume too low")
             return False
 
-        # Distance from 52w high
-        high_52w = df['high'].tail(252).max() if len(df) >= 252 else df['high'].max()
-        current_price = df['close'].iloc[-1]
-        distance_from_high = (high_52w - current_price) / high_52w
-        if distance_from_high > self.PARAMS['max_distance_from_52w_high']:
-            logger.debug(f"RS_REJ: {symbol} - too far from 52w high: {distance_from_high:.2%}")
-            return False
+        # v7.0: Price > EMA21 (checked in _check_basic_requirements)
 
         logger.debug(f"RS_PASS: {symbol} - RS leader in {regime}")
         return True

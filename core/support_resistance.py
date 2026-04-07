@@ -267,6 +267,33 @@ class SupportResistanceCalculator:
             ]
         }
 
+    def count_touches(self, level_price: float, lookback: int = 60, tolerance_pct: float = 0.02) -> int:
+        """
+        Count number of times price touched a specific level within lookback period.
+
+        Args:
+            level_price: The price level to check
+            lookback: Number of days to look back
+            tolerance_pct: Tolerance percentage for touch detection (default 2%)
+
+        Returns:
+            Number of touches detected
+        """
+        if len(self.df) < lookback:
+            df = self.df
+        else:
+            df = self.df.tail(lookback)
+
+        tolerance = level_price * tolerance_pct
+        touches = 0
+
+        for _, row in df.iterrows():
+            # Check if low or high crossed the level
+            if row['low'] <= level_price + tolerance and row['high'] >= level_price - tolerance:
+                touches += 1
+
+        return touches
+
     def get_nearest_levels(self, n: int = 3) -> Tuple[List[float], List[float]]:
         """
         Get n nearest support and resistance levels to current price.

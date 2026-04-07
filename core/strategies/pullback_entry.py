@@ -91,13 +91,14 @@ class PullbackEntryStrategy(BaseStrategy):
                 if current_price <= 0 or ema21 <= 0:
                     continue
 
-                # Check price above EMA21
+                # v7.0: Check price above EMA21 (line 211)
                 if current_price <= ema21:
                     continue
 
-                # EMA21 slope approximation (use ema21 vs ema50 as proxy)
-                ema50 = data.get('ema50', 0)
-                if ema50 > 0 and ema21 > ema50:
+                # v7.0: Check S_norm > 0 (line 210, 225)
+                # S_norm = (EMA21_today − EMA21_5d) / ATR14
+                ema21_slope_norm = data.get('ema21_slope_norm', 0)
+                if ema21_slope_norm > 0:
                     # Uptrend confirmed - fetch full data for this symbol
                     prefiltered_symbols.append(symbol)
 

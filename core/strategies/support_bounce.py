@@ -31,16 +31,15 @@ class SupportBounceStrategy(BaseStrategy):
         'min_dollar_volume': 50_000_000,
         'min_atr_pct': 0.015,
         'min_listing_days': 50,
-        'max_distance_from_support': 0.10,  # v5.0: Changed from 3% to 10% max (depth range 2-10%)
-        'min_distance_from_support': 0.02,  # v5.0: Minimum 2% depth for valid setup
-        'target_r_multiplier': 2.0,  # Changed from 2.5 to 2.0
+        'max_distance_from_support': 0.10,  # v7.0: Max 10% depth from support
+        'min_touches_60d': 3,  # v7.0: ≥3 touches in 60d OR ≥2 in 30d
+        'min_touches_30d': 2,  # v7.0: alternative shorter lookback
+        'target_r_multiplier': 2.0,  # v7.0: 2.5R (2.0R in bear)
         'support_tolerance_atr': 0.5,  # Support level ± 0.5 ATR
-        'volume_veto_threshold': 1.5,  # Volume > 1.5x MA20 for veto
-        'clv_veto_threshold': 0.3,  # CLV < 0.3 for veto
-        'time_stop_days': 5,  # Changed from 3 to 5
-        'time_stop_clv_min': 0.4,  # CLV avg > 0.4
-        'range_existence_bonus': 0.5,  # Range existence bonus from F
-        'max_reclaim_days': 5,  # v5.0: Maximum days for valid reclaim scoring
+        'time_stop_days': 5,
+        'time_stop_clv_min': 0.4,
+        'range_existence_bonus': 0.5,
+        'max_reclaim_days': 5,
         'sector_etfs': {  # Sector ETF mapping
             'Technology': 'XLK',
             'Financials': 'XLF',
@@ -103,14 +102,23 @@ class SupportBounceStrategy(BaseStrategy):
                 nearest_support = max(supports_below)
                 distance_pct = (current_price - nearest_support) / current_price
 
-                # v5.0: Depth range 2-10% (must be within window)
-                min_depth = self.PARAMS['min_distance_from_support']
+                # v7.0: Max depth 10% (no minimum - doc only requires within ±15% of EMA50)
                 max_depth = self.PARAMS['max_distance_from_support']
-                if distance_pct < min_depth or distance_pct > max_depth:
-                    logger.debug(f"SupportBounce_REJ: {symbol} - Depth {distance_pct:.2%} outside range [{min_depth:.0%}, {max_depth:.0%}]")
+                if distance_pct > max_depth:
+                    logger.debug(f"SupportBounce_REJ: {symbol} - Depth {distance_pct:.2%} > {max_depth:.0%}")
                     continue
 
-                logger.debug(f"SupportBounce_PASS: {symbol} - Support at {nearest_support:.2f}, depth {distance_pct:.2%}")
+                # v7.0: Check touch count (≥3 in 60d OR ≥2 in 30d)
+                touches_60d = calc.count_touches(nearest_support, lookback=60)
+                touches_30d = calc.count_touches(nearest_support, lookback=30)
+                min_touches_60d = self.PARAMS['min_touches_60d']
+                min_touches_30d = self.PARAMS['min_touches_30d']
+
+                if touches_60d < min_touches_60d and touches_30d < min_touches_30d:
+                    logger.debug(f"SupportBounce_REJ: {symbol} - Insufficient touches (60d={touches_60d}, 30d={touches_30d})")
+                    continue
+
+                logger.debug(f"SupportBounce_PASS: {symbol} - Support at {nearest_support:.2f}, depth {distance_pct:.2%}, touches_60d={touches_60d}, touches_30d={touches_30d}")
                 prefiltered.append(symbol)
 
             except Exception as e:
@@ -144,7 +152,7 @@ class SupportBounceStrategy(BaseStrategy):
             logger.warning(f"Could not load sector ETF data: {e}")
 
     def filter(self, symbol: str, df: pd.DataFrame) -> bool:
-        """Filter for U&R candidates with volume veto check."""
+        """Filter for SupportBounce candidates per v7.0 spec."""
         if len(df) < self.PARAMS['min_listing_days']:
             return False
 
@@ -172,10 +180,9 @@ class SupportBounceStrategy(BaseStrategy):
         nearest_support = max(supports_below)
         distance_pct = abs(current_price - nearest_support) / current_price
 
-        # v5.0: Depth range 2-10%
-        min_depth = self.PARAMS['min_distance_from_support']
+        # v7.0: Max depth 10% (no minimum depth gate)
         max_depth = self.PARAMS['max_distance_from_support']
-        if distance_pct < min_depth or distance_pct > max_depth:
+        if distance_pct > max_depth:
             return False
 
         # v7.0: Support touch requirement - ≥3 touches in 60d OR ≥2 touches in 30d
@@ -190,23 +197,6 @@ class SupportBounceStrategy(BaseStrategy):
         # v7.0: Require ≥3 in 60d OR ≥2 in 30d (recency matters more)
         if not (touches_60d >= 3 or touches_30d >= 2):
             logger.debug(f"{symbol}: v7.0 touch requirement failed (60d:{touches_60d}, 30d:{touches_30d})")
-            return False
-
-        # Defense 2: Volume Trap Veto (Falling Knife Detection)
-        volume_data = ind.indicators.get('volume', {})
-        volume_ratio = volume_data.get('volume_ratio', 1.0)
-
-        # Calculate CLV
-        today = df.iloc[-1]
-        clv = calculate_clv(today['close'], today['high'], today['low'])
-
-        # Veto if high volume with low CLV (accelerating decline)
-        if volume_ratio > self.PARAMS['volume_veto_threshold'] and clv < self.PARAMS['clv_veto_threshold']:
-            logger.debug(f"{symbol}: Volume trap veto (Vol:{volume_ratio:.2f}x, CLV:{clv:.2f})")
-            return False
-
-        # Check volume contraction (normal U&R requires dry volume)
-        if volume_ratio > 0.9:
             return False
 
         return True
