@@ -577,9 +577,9 @@ class StrategyScreener:
                     # Keep the one with higher technical score
                     existing_score = best_by_symbol[symbol].technical_snapshot.get('score', 0)
                     if current_score > existing_score:
-                        # Decrement old sector count, increment new
+                        # Decrement old sector count, increment new (always decrement first)
                         old_sector = best_by_symbol[symbol].technical_snapshot.get('sector', 'Unknown')
-                        if old_sector != 'Unknown' and old_sector != sector:
+                        if old_sector != 'Unknown':
                             sector_counts[old_sector] -= 1
                         best_by_symbol[symbol] = c
                         if sector != 'Unknown':
