@@ -19,11 +19,13 @@ from core.analyzer import OpportunityAnalyzer
 from core.reporter import ReportGenerator
 from core.market_regime import MarketRegimeDetector
 from core.notifier import MultiNotifier
+from core.logging_config import setup_logging
+from core.services import ServiceRegistry
+from core.services.providers import register_defaults
+from core.engine import PipelineOrchestrator, PipelineContext, PhaseResult
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+setup_logging()
+register_defaults()
 logger = logging.getLogger(__name__)
 
 
@@ -139,7 +141,7 @@ class CompleteScanner:
         skip_market_hours_check: bool = False
     ) -> Optional[str]:
         """
-        Run complete 6-phase workflow.
+        Run complete 6-phase workflow using the pipeline engine.
 
         Args:
             symbols: Optional list of symbols (uses universe sync if None)
@@ -151,7 +153,23 @@ class CompleteScanner:
         workflow_start = datetime.now()
         run_date = workflow_start.strftime('%Y-%m-%d')
 
-        # Initialize workflow status
+        if not skip_market_hours_check and not self.is_trading_day():
+            logger.info("Not a trading day, skipping workflow")
+            self._update_workflow_status(run_date, status='skipped')
+            return None
+
+        logger.info("=" * 60)
+        logger.info("STARTING COMPLETE 6-PHASE WORKFLOW")
+        logger.info("=" * 60)
+
+        check_memory()
+
+        ctx = PipelineContext(
+            symbols=symbols or [],
+            run_date=run_date,
+        )
+        self._last_ctx = ctx  # For debug inspector
+
         self.db.save_workflow_status({
             'run_date': run_date,
             'start_time': workflow_start.strftime('%H:%M:%S'),
@@ -159,103 +177,69 @@ class CompleteScanner:
         })
 
         try:
-            if not skip_market_hours_check and not self.is_trading_day():
-                logger.info("Not a trading day, skipping workflow")
-                self._update_workflow_status(run_date, status='skipped')
-                return None
+            # For test mode (symbols provided), run phases directly
+            if symbols is not None:
+                result = self._run_pipeline(ctx)
+            else:
+                # Production mode: Phase 0 subprocess, then pipeline for phases 1-6
+                phase0_result = self._phase0_data_prep(symbols)
+                if not phase0_result['success']:
+                    logger.error("Phase 0 failed, aborting workflow")
+                    self._update_workflow_status(run_date, status='failed', error_message='Phase 0 failed')
+                    return None
 
-            logger.info("=" * 60)
-            logger.info("STARTING COMPLETE 6-PHASE WORKFLOW")
-            logger.info("=" * 60)
+                ctx.symbols = phase0_result['symbols']
+                self._last_ctx = ctx
+                gc.collect()
+                logger.info("Memory cleaned after Phase 0")
 
-            # Check memory before starting
-            check_memory()
+                result = self._run_pipeline(ctx)
 
-            # Phase 0: Data Preparation
-            phase0_result = self._phase0_data_prep(symbols)
-            if not phase0_result['success']:
-                logger.error("Phase 0 failed, aborting workflow")
-                self._update_workflow_status(
-                    run_date,
-                    status='failed',
-                    error_message='Phase 0 failed'
-                )
-                return None
-
-            symbols = phase0_result['symbols']
-
-            # Memory cleanup after Phase 0
-            gc.collect()
-            logger.info("Memory cleaned after Phase 0")
-
-            # Phase 1: AI Market Regime Detection
-            phase1_result = self._phase1_market_analysis()
-            regime = phase1_result['regime']
-            ai_confidence = phase1_result.get('ai_confidence', 0)
-            ai_reasoning = phase1_result.get('ai_reasoning', '')
-
-            # Phase 2: Strategy Screening with 30 slots
-            phase2_result = self._phase2_screening(symbols, regime)
-            candidates = phase2_result['candidates']
-            fail_symbols = phase2_result.get('fail_symbols', [])
-
-            # Memory cleanup after Phase 2 (screener can use significant memory)
-            gc.collect()
-            logger.info("Memory cleaned after Phase 2")
-
-            if not candidates:
-                logger.warning("No candidates found, generating empty report")
-                report_path = self._phase5_report(
-                    [], [], regime, symbols, fail_symbols, phase1_result
-                )
-                self._phase6_notify(report_path, regime, [], ai_confidence, ai_reasoning)
+            if ctx.status == "completed":
+                total_duration = sum(ctx.phase_times.values())
                 self._update_workflow_status(
                     run_date,
                     status='completed',
-                    report_path=report_path
+                    report_path=ctx.report_path,
+                    candidates_count=len(ctx.top_10),
                 )
-                return report_path
-
-            # Phase 3: AI Scoring (top 30)
-            top_30 = self._phase3_ai_analysis(candidates, regime)
-
-            # Phase 4: Deep Analysis (top 10)
-            final_candidates = self._phase4_deep_analysis(top_30, regime)
-
-            # Phase 5: Report Generation
-            report_path = self._phase5_report(
-                top_30,      # All 30 for full table
-                final_candidates,  # Top 10 with deep analysis
-                regime, symbols, fail_symbols,
-                phase1_result  # Pass sentiment analysis details
-            )
-
-            # Phase 6: Push Notifications
-            self._phase6_notify(report_path, regime, final_candidates, ai_confidence, ai_reasoning)
-
-            # Finalize workflow status
-            total_duration = (datetime.now() - workflow_start).total_seconds()
-            self._update_workflow_status(
-                run_date,
-                status='completed',
-                report_path=report_path,
-                candidates_count=len(final_candidates)
-            )
-
-            logger.info("=" * 60)
-            logger.info(f"WORKFLOW COMPLETE in {total_duration:.0f}s")
-            logger.info("=" * 60)
-
-            return report_path
+                logger.info("=" * 60)
+                logger.info(f"WORKFLOW COMPLETE in {total_duration:.0f}s")
+                logger.info("=" * 60)
+                return ctx.report_path
+            else:
+                self._update_workflow_status(
+                    run_date,
+                    status='failed',
+                    error_message=ctx.error_message,
+                )
+                return None
 
         except Exception as e:
             logger.error(f"Workflow failed: {e}", exc_info=True)
-            self._update_workflow_status(
-                run_date,
-                status='failed',
-                error_message=str(e)
-            )
+            self._update_workflow_status(run_date, status='failed', error_message=str(e))
             return None
+
+    def _run_pipeline(self, ctx: PipelineContext) -> PipelineContext:
+        """Run phases 1-6 through the pipeline engine."""
+        from core.engine.phase_handlers import (
+            Phase1RegimeHandler, Phase2ScreeningHandler,
+            Phase3AIScoringHandler, Phase4DeepAnalysisHandler,
+            Phase5ReportHandler, Phase6NotifyHandler,
+        )
+
+        pipeline = PipelineOrchestrator()
+        # Replace default handlers with our custom set (skip phase0, already done)
+        pipeline.handlers = [
+            ("phase1", Phase1RegimeHandler()),
+            ("phase2", Phase2ScreeningHandler()),
+            ("phase3", Phase3AIScoringHandler()),
+            ("phase4", Phase4DeepAnalysisHandler()),
+            ("phase5", Phase5ReportHandler()),
+            ("phase6", Phase6NotifyHandler()),
+        ]
+
+        return pipeline.run(ctx)
 
     def _phase0_data_prep(self, symbols: Optional[List[str]]) -> Dict:
         """Phase 0: Data Preparation.
@@ -764,8 +748,17 @@ def main():
     parser.add_argument('--symbols', type=str, help='Comma-separated symbols for test')
     parser.add_argument('--force', action='store_true', help='Skip trading day check')
     parser.add_argument('--server', action='store_true', help='Start API server')
+    parser.add_argument('--debug', action='store_true', help='Enable debug mode with verbose logging')
+    parser.add_argument('--phase', type=str, help='Run specific phase only (phase0-phase6)')
 
     args = parser.parse_args()
+
+    if args.debug:
+        setup_logging(level='DEBUG', verbose=True)
+    else:
+        setup_logging()
+
+    register_defaults()
 
     if args.server:
         from api.server import run_server
@@ -781,10 +774,15 @@ def main():
         report_path = scanner.run_complete_workflow(skip_market_hours_check=args.force)
 
     if report_path:
-        print(f"\n✅ Workflow complete!")
-        print(f"📄 Report: {report_path}")
+        print(f"\nWorkflow complete!")
+        print(f"Report: {report_path}")
+
+        if args.debug:
+            from core.debug import PipelineInspector
+            inspector = PipelineInspector(scanner._last_ctx)
+            print("\n" + inspector.summary())
     else:
-        print("\n❌ Workflow failed or skipped")
+        print("\nWorkflow failed or skipped")
         sys.exit(1)
 
 

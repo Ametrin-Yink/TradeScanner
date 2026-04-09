@@ -1,5 +1,6 @@
 """Strategy E: 支撑回踩买入 (Support Rebound Buy) - Near support with volume contraction."""
 from ..scoring_utils import calculate_clv
+from ..constants import SECTOR_ETFS
 from typing import Dict, List, Optional, Tuple, Any
 import logging
 from datetime import datetime
@@ -31,34 +32,21 @@ class SupportBounceStrategy(BaseStrategy):
         'min_dollar_volume': 50_000_000,
         'min_atr_pct': 0.015,
         'min_listing_days': 50,
-        'max_distance_from_support': 0.10,  # v7.0: Max 10% depth from support
-        'min_touches_60d': 3,  # v7.0: ≥3 touches in 60d OR ≥2 in 30d
-        'min_touches_30d': 2,  # v7.0: alternative shorter lookback
-        'target_r_multiplier': 2.0,  # v7.0: 2.5R (2.0R in bear)
-        'support_tolerance_atr': 0.5,  # Support level ± 0.5 ATR
+        'max_distance_from_support': 0.10,
+        'min_touches_60d': 3,
+        'min_touches_30d': 2,
+        'target_r_multiplier': 2.0,
+        'support_tolerance_atr': 0.5,
         'time_stop_days': 5,
         'time_stop_clv_min': 0.4,
         'max_reclaim_days': 5,
-        'sector_etfs': {  # Sector ETF mapping
-            'Technology': 'XLK',
-            'Financials': 'XLF',
-            'Energy': 'XLE',
-            'Industrials': 'XLI',
-            'Consumer Staples': 'XLP',
-            'Consumer Discretionary': 'XLY',
-            'Materials': 'XLB',
-            'Utilities': 'XLU',
-            'Health Care': 'XLV',
-            'Biotechnology': 'XBI',
-            'Semiconductors': 'SMH',
-            'Software': 'IGV',
-            'Transportation': 'IYT',
-        }
+        'volume_veto_threshold': 2.0,
+        'clv_veto_threshold': 0.3,
     }
 
-    def __init__(self, fetcher=None, db=None):
+    def __init__(self, fetcher=None, db=None, config=None):
         """Initialize with sector ETF data cache."""
-        super().__init__(fetcher=fetcher, db=db)
+        super().__init__(fetcher=fetcher, db=db, config=config)
         self.sector_etf_data = {}
         self.stock_info = {}
 
@@ -143,7 +131,7 @@ class SupportBounceStrategy(BaseStrategy):
     def _load_sector_etf_data(self):
         """Load sector ETF data for Sector Alpha comparison."""
         try:
-            for etf in self.PARAMS['sector_etfs'].values():
+            for etf in SECTOR_ETFS.values():
                 df = self._get_data(etf)
                 if df is not None and len(df) > 50:
                     self.sector_etf_data[etf] = df
@@ -443,10 +431,10 @@ class SupportBounceStrategy(BaseStrategy):
             return 0.0
 
         sector = self.stock_info.get(symbol, {}).get('sector', 'Unknown')
-        if sector == 'Unknown' or sector not in self.PARAMS['sector_etfs']:
+        if sector == 'Unknown' or sector not in SECTOR_ETFS:
             return 0.0
 
-        etf_symbol = self.PARAMS['sector_etfs'][sector]
+        etf_symbol = SECTOR_ETFS[sector]
         if etf_symbol not in self.sector_etf_data:
             return 0.0
 
@@ -741,10 +729,10 @@ class SupportBounceStrategy(BaseStrategy):
             return 0.0
 
         sector = self.stock_info.get(symbol, {}).get('sector', 'Unknown')
-        if sector == 'Unknown' or sector not in self.PARAMS['sector_etfs']:
+        if sector == 'Unknown' or sector not in SECTOR_ETFS:
             return 0.0
 
-        etf_symbol = self.PARAMS['sector_etfs'][sector]
+        etf_symbol = SECTOR_ETFS[sector]
         if etf_symbol not in self.sector_etf_data:
             return 0.0
 

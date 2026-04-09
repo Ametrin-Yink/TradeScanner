@@ -58,9 +58,9 @@ class CapitulationReboundStrategy(BaseStrategy):
         'time_window_days': 10,
     }
 
-    def __init__(self, fetcher=None, db=None):
+    def __init__(self, fetcher=None, db=None, config=None):
         """Initialize with VIX data cache."""
-        super().__init__(fetcher=fetcher, db=db)
+        super().__init__(fetcher=fetcher, db=db, config=config)
         self.vix_data = None
 
     def screen(self, symbols: List[str], max_candidates: int = 5) -> List[StrategyMatch]:

@@ -1,85 +1,151 @@
-# Strategy Configuration Template
-# Copy this file to config/strategy_config.yaml and customize thresholds
+# Strategy Configuration
+# Parameters for all 8 strategy types (A-H with A1/A2 sub-modes)
+# Values override class-level PARAMS when loaded via config overlay
 
-# Common parameters used across strategies
-common_params:
+# --- Strategy A1: MomentumBreakout ---
+MomentumBreakout:
+  min_dollar_volume: 50_000_000
+  min_atr_pct: 0.015
+  min_listing_days: 60
+  platform_lookback: [15, 60]
+  rs_bonus_threshold: 0.85
+  platform_max_range: 0.12
+  concentration_threshold: 0.50
+  volume_contraction_vs_platform: 0.70
+  breakout_pct: 0.02
+  clv_threshold: 0.75
+  breakout_volume_vs_20d_sma: 2.0
+  max_distance_from_50ema: 0.20
+  max_distance_from_52w_high: 0.10
+  energy_ratio_cap: 3.0
+  rs_percentile_min: 80
+  min_rs_percentile: 50
+  max_raw_score: 20.0
+  bonus_max: 1.5
+
+# --- Strategy A2: PreBreakoutCompression ---
+PreBreakoutCompression:
+  min_dollar_volume: 50_000_000
+  min_atr_pct: 0.015
+  min_listing_days: 60
+  platform_lookback: [15, 60]
+  rs_bonus_threshold: 0.85
+  platform_max_range: 0.12
+  concentration_threshold: 0.50
+  volume_contraction_vs_platform: 0.70
+  breakout_pct: 0.0
+  clv_threshold: 0.75
+  breakout_volume_vs_20d_sma: 2.0
+  max_distance_from_50ema: 0.20
+  max_distance_from_52w_high: 0.10
+  energy_ratio_cap: 3.0
+  rs_percentile_min: 80
+  min_rs_percentile: 50
+  max_raw_score: 20.0
+  bonus_max: 1.5
+
+# --- Strategy B: PullbackEntry ---
+PullbackEntry:
+  min_data_days: 50
+  ema21_slope_threshold: 0
+  max_retracement_range: 0.08
+  ema8_penetration_tolerance: 0.985
+  volume_dry_threshold: 0.7
+  volume_surge_threshold: 1.5
+  gap_veto_threshold: 0.8
+  atr_initial_stop: 1.2
+  position_tiers:
+    S: { min_score: 12, position_pct: 0.20, label: Apex }
+    A: { min_score: 9, position_pct: 0.10, label: Strong }
+    B: { min_score: 7, position_pct: 0.05, label: Speculative }
+    C: { min_score: 0, position_pct: 0.0, label: Reject }
+  sector_etfs:
+    Technology: XLK
+    Financials: XLF
+    Energy: XLE
+    Industrials: XLI
+    Consumer Staples: XLP
+    Consumer Discretionary: XLY
+    Materials: XLB
+    Utilities: XLU
+    Health Care: XLV
+    Biotechnology: XBI
+    Semiconductors: SMH
+    Software: IGV
+    Transportation: IYT
+
+# --- Strategy C: SupportBounce ---
+SupportBounce:
   min_dollar_volume: 50_000_000
   min_atr_pct: 0.015
   min_listing_days: 50
-
-# Strategy A: MomentumBreakout (VCP-EP + Momentum merged)
-strategy_a_vcp_ep:
-  min_platform_days: 15
-  max_platform_range_pct: 0.05
-  min_contraction_factor: 0.6
-  breakout_threshold_pct: 0.02
-  min_adx: 25
-  min_rs_score: 75
-  volume_breakout_threshold: 1.5
-  target_r_multiplier: 2.5
-
-# Strategy C: PullbackEntry (Shoryuken + Pullbacks merged)
-strategy_c_shoryuken:
-  pullback_max_pct: 0.08
-  pullback_min_pct: 0.03
-  volume_dry_up_threshold: 0.7
-  ema_proximity_pct: 0.02
-  trend_strength_min: 0.6
-  volume_contraction_threshold: 0.8
+  max_distance_from_support: 0.10
+  min_touches_60d: 3
+  min_touches_30d: 2
   target_r_multiplier: 2.0
-
-# Strategy E: SupportBounce (Upthrust & Rebound)
-strategy_e_upthrust_rebound:
-  max_distance_from_support: 0.03
   support_tolerance_atr: 0.5
-  volume_veto_threshold: 1.5
+  time_stop_days: 5
+  time_stop_clv_min: 0.4
+  max_reclaim_days: 5
+  volume_veto_threshold: 2.0
   clv_veto_threshold: 0.3
-  target_r_multiplier: 2.0
 
-# Strategy F: RangeShort (Range Support/Resistance - short only)
-strategy_f_range_support:
-  max_distance_from_level: 0.03
-  min_range_width_atr_multiple: 1.5
-  min_test_interval_days: 3
-  time_decay_days: 5
-  target_r_multiplier: 2.5
+# --- Strategy D: DistributionTop ---
+DistributionTop:
+  min_market_cap: 2_000_000_000
+  min_dollar_volume: 30_000_000
+  min_dollar_volume_short: 30_000_000
+  min_atr_pct: 0.015
+  min_listing_days: 60
+  max_distance_from_60d_high: 0.08
+  max_distance_from_ema50: 1.05
+  ema_alignment_tolerance: 1.02
+  min_touches: 2
+  min_test_interval_days: 5
+  breakout_threshold_atr: 0.3
+  volume_veto_threshold: 1.5
 
-# Strategy G: DoubleTopBottom (DTSS - Double Top/Single Bottom)
-strategy_g_dtss:
-  max_distance_from_level: 0.03
-  min_test_interval_days: 10
-  volume_climax_threshold: 4.0
-  vix_reject_threshold: 30.0
-  vix_limit_threshold: 25.0
-  ts_max_score: 4.0
-  target_r_multiplier: 3.0
+# --- Strategy E: AccumulationBottom ---
+AccumulationBottom:
+  min_market_cap: 2_500_000_000
+  min_volume: 150_000
+  min_atr_pct: 0.015
+  min_listing_days: 180
+  max_distance_from_60d_low: 0.10
+  min_touches: 2
 
-# Strategy H: CapitulationRebound (Parabolic/Capitulation - long only)
-strategy_h_parabolic:
-  rsi_oversold: 20
-  ema_atr_multiplier: 5.0
-  volume_climax_threshold: 4.0
+# --- Strategy F: CapitulationRebound ---
+CapitulationRebound:
+  min_dollar_volume: 50_000_000
+  min_atr_pct: 0.015
+  min_listing_days: 50
+  rsi_overbought: 80
+  rsi_oversold: 25
+  ema_atr_multiplier: 3.0
+  min_gaps: 2
+  lookback_days: 5
   stop_atr_multiplier: 2.0
-  target_r_multiplier: 2.5
+  volume_climax_threshold: 4.0
+  volume_high_threshold: 3.0
+  volume_medium_threshold: 2.0
+  vix_min: 15
+  vix_max_full: 35
+  profit_efficiency_threshold: 1.5
+  efficiency_penalty: 2.0
+  time_window_days: 10
 
-# Scoring dimension weights
-# Most strategies use 0-15 scale
-# Strategy G (DTSS) uses 0-13 scale (TS max is 4.0 instead of 5.0)
-scoring_weights:
-  tier_s_threshold: 13.0
-  tier_a_threshold: 10.0
-  tier_b_threshold: 7.0
+# --- Strategy G: EarningsGap ---
+EarningsGap:
+  min_market_cap: 2_000_000_000
+  min_gap_pct: 0.05
+  max_days_post_earnings: 5
+  min_dollar_volume_gap_day: 100_000_000
+  min_rs_percentile: 50
+  max_consolidation_days: 10
+  min_price: 10.0
 
-# Risk management
-risk_management:
-  max_position_pct_tier_s: 0.20
-  max_position_pct_tier_a: 0.10
-  max_position_pct_tier_b: 0.05
-  max_portfolio_risk_daily: 0.02
-
-# Market regime detection
-market_regime:
-  spy_ema_period: 50
-  trend_strength_threshold: 0.02
-  vix_high_threshold: 30
-  vix_normal_threshold: 20
+# --- Strategy H: RelativeStrengthLong ---
+RelativeStrengthLong:
+  min_rs_percentile: 80
+  min_market_cap: 3_000_000_000
+  min_volume: 200_000

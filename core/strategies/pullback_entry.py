@@ -52,9 +52,9 @@ class PullbackEntryStrategy(BaseStrategy):
         }
     }
 
-    def __init__(self, fetcher=None, db=None):
+    def __init__(self, fetcher=None, db=None, config=None):
         """Initialize strategy with market ATR cache."""
-        super().__init__(fetcher=fetcher, db=db)
+        super().__init__(fetcher=fetcher, db=db, config=config)
         self.market_atr_median = 0.0
         self.sector_counts = {}
         self.stock_info = {}

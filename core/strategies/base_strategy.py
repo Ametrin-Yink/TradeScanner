@@ -102,11 +102,15 @@ class BaseStrategy(ABC):
     # Direction: 'long' or 'short' - used for regime-adaptive position sizing
     DIRECTION: str = 'long'
 
-    def __init__(self, fetcher: Optional[DataFetcher] = None, db: Optional[Database] = None):
-        """Initialize strategy with data fetcher and database."""
+    def __init__(self, fetcher: Optional[DataFetcher] = None, db: Optional[Database] = None,
+                 config: Optional[Dict] = None):
+        """Initialize strategy with data fetcher, database, and optional config override."""
         self.fetcher = fetcher or DataFetcher()
         self.db = db or Database()
         self.market_data: Dict[str, pd.DataFrame] = {}
+        if config:
+            class_params = getattr(self, 'PARAMS', {})
+            self.PARAMS = {**class_params, **config}
 
     @abstractmethod
     def filter(self, symbol: str, df: pd.DataFrame) -> bool:
