@@ -17,26 +17,13 @@ import pandas as pd
 from core.indicators import TechnicalIndicators
 from core.fetcher import DataFetcher
 from data.db import Database
+from core.constants import SECTOR_ETFS
 
 logger = logging.getLogger(__name__)
 
 
-# Sector ETF mapping
-SECTOR_ETFS = {
-    'Technology': 'XLK',
-    'Financials': 'XLF',
-    'Energy': 'XLE',
-    'Industrials': 'XLI',
-    'Consumer Staples': 'XLP',
-    'Consumer Discretionary': 'XLY',
-    'Materials': 'XLB',
-    'Utilities': 'XLU',
-    'Health Care': 'XLV',
-    'Biotechnology': 'XBI',
-    'Semiconductors': 'SMH',
-    'Software': 'IGV',
-    'Transportation': 'IYT',
-}
+# Re-export for backward compatibility
+__all__ = ['SECTOR_ETFS', 'ETFPreCalculator']
 
 # Market ETFs for regime detection
 MARKET_ETFS = ['SPY', 'QQQ', 'IWM', 'DIA']

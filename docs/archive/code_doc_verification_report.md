@@ -9,14 +9,14 @@
 
 ## Summary
 
-| Metric | Baseline | Current | Change |
-|--------|----------|---------|--------|
-| Total issues found in baseline | 27 | - | - |
-| Issues FIXED | - | 7 | +7 |
-| Issues remaining | - | 20 | -7 |
-| Critical remaining | 6 | 3 | -3 |
-| Medium remaining | 11 | 4 | -7 |
-| Low remaining | 10 | 13 | +3 |
+| Metric                         | Baseline | Current | Change |
+| ------------------------------ | -------- | ------- | ------ |
+| Total issues found in baseline | 27       | -       | -      |
+| Issues FIXED                   | -        | 7       | +7     |
+| Issues remaining               | -        | 20      | -7     |
+| Critical remaining             | 6        | 3       | -3     |
+| Medium remaining               | 11       | 4       | -7     |
+| Low remaining                  | 10       | 13      | +3     |
 
 **Key Finding**: The critical dimension max score fixes have been successfully applied to Strategies A, G, and H. However, several pre-filter mismatches and scoring logic differences remain.
 
@@ -52,11 +52,13 @@
 ### Remaining Issues ❌
 
 **Critical:**
+
 - [ ] **CQ max score should be 4.0, not 5.0** - Documentation specifies 4.0 max for consolidation quality
 - [ ] **BS max score should be 4.0, not 5.0** - Documentation specifies 4.0 max for breakout strength
 - [ ] **VC max score should be 4.0, not 5.0** - Documentation specifies 4.0 max for volume confirmation
 
 **Medium:**
+
 - [ ] Price > EMA200 filter: NOT CHECKED - Documentation requires this (line 146 in docs)
 - [ ] CLV bonus in TC: Code has CLV in TC (line 454-457) but docs say CLV should be in VC (0-0.5 pts)
 - [ ] Pattern-specific stop losses: All patterns use 0.98 (line 516), docs specify vcp/flat/ascending: 0.98, htf: 0.985, loose: -1.5 ATR
@@ -64,6 +66,7 @@
 - [ ] 3-month return >= -20% filter: NOT CHECKED
 
 **Low:**
+
 - [ ] Volume >= 100K filter: Assumed pre-filtered, not explicitly checked
 - [ ] Bonus pool items incomplete: Sector leadership, earnings catalyst, accumulation divergence bonuses NOT IMPLEMENTED
 - [ ] Duration quality scoring (0-1.0 pts): NOT IMPLEMENTED in CQ
@@ -86,6 +89,7 @@
 ### Remaining Issues ❌
 
 **Low:**
+
 - [ ] Price > EMA200 filter: NOT CHECKED (docs require it)
 - [ ] ADR >= 1.2% filter: NOT CHECKED (docs require it)
 
@@ -107,6 +111,7 @@
 ### Remaining Issues ❌
 
 **Low:**
+
 - [ ] Price vs EMA50 within 15%: NOT CHECKED (docs specify this filter)
 - [ ] ADR >= 1.5% filter: NOT CHECKED
 
@@ -157,11 +162,13 @@ None - Strategy D is fully compliant with documentation.
 ### Remaining Issues ❌
 
 **Medium:**
+
 - [ ] Market cap filter: Should be >= $3B, code uses default $2B
 - [ ] Volume filter: Should be >= 200K, code uses default 100K
 - [ ] Listed age: Should be > 180 days, code has 60 days
 
 **Low:**
+
 - [ ] ADR >= 1.5% filter: NOT CHECKED
 
 ---
@@ -183,6 +190,7 @@ None - Strategy D is fully compliant with documentation.
 ### Remaining Issues ❌
 
 **Low:**
+
 - [ ] Price vs EMA50 < EMA50 - 4×ATR: Code uses 5×ATR (lines 164-165), docs specify 4×ATR
 
 ---
@@ -210,6 +218,7 @@ None - Strategy D is fully compliant with documentation.
 ### Remaining Issues ❌
 
 **Medium:**
+
 - [ ] Price filter: Should be > $10, global filter has $2 - relies on external filters
 
 ---
@@ -240,6 +249,7 @@ None - Strategy D is fully compliant with documentation.
 ### Remaining Issues ❌
 
 **Low:**
+
 - [ ] Price > EMA200 filter: NOT CHECKED (docs require it)
 
 ---
@@ -266,6 +276,7 @@ ScoringDimension(name='VC', score=vc_score, max_score=5.0, ...)
 ### Strategy E: Pre-filters Still Wrong
 
 The baseline audit identified that Strategy E should have:
+
 - Market cap >= $3B (code uses $2B)
 - Volume >= 200K (code uses 100K)
 - Listed age > 180 days (code has 60)
@@ -319,19 +330,19 @@ PARAMS = {
 
 ## Appendix: Dimension Max Score Verification
 
-| Strategy | Dim 1 | Doc | Code | Status | Dim 2 | Doc | Code | Status | Dim 3 | Doc | Code | Status | Dim 4 | Doc | Code | Status |
-|----------|-------|-----|------|--------|-------|-----|------|--------|-------|-----|------|--------|-------|-----|------|--------|
-| A | TC | 5.0 | 5.0 | ✅ | CQ | **4.0** | **5.0** | ❌ | BS | **4.0** | **5.0** | ❌ | VC | **4.0** | **5.0** | ❌ |
-| B | TI | 5.0 | 5.0 | ✅ | RC | 5.0 | 5.0 | ✅ | VC | 5.0 | 5.0 | ✅ | BONUS | 2.0 | 2.0 | ✅ |
-| C | SQ | 4.0 | 4.0 | ✅ | VD | 5.0 | 5.0 | ✅ | RB | 6.0 | 6.0 | ✅ | - | - | - | - |
-| D | TQ | 4.0 | 4.0 | ✅ | RL | 4.0 | 4.0 | ✅ | DS | 4.0 | 4.0 | ✅ | VC | 3.0 | 3.0 | ✅ |
-| E | TQ | 4.0 | 4.0 | ✅ | AL | 4.0 | 4.0 | ✅ | AS | 4.0 | 4.0 | ✅ | VC | 3.0 | 3.0 | ✅ |
-| F | MO | 5.0 | 5.0 | ✅ | EX | 6.0 | 6.0 | ✅ | VC | 4.0 | 4.0 | ✅ | - | - | - | - |
-| G | GS | 5.0 | 5.0 | ✅ | QC | 4.0 | 4.0 | ✅ | TC | **3.0** | **3.0** | ✅ | VC | 3.0 | 3.0 | ✅ |
-| H | RD | **6.0** | **6.0** | ✅ | SH | 4.0 | 4.0 | ✅ | CQ | **3.0** | **3.0** | ✅ | VC | **2.0** | **2.0** | ✅ |
+| Strategy | Dim 1 | Doc     | Code    | Status | Dim 2 | Doc     | Code    | Status | Dim 3 | Doc     | Code    | Status | Dim 4 | Doc     | Code    | Status |
+| -------- | ----- | ------- | ------- | ------ | ----- | ------- | ------- | ------ | ----- | ------- | ------- | ------ | ----- | ------- | ------- | ------ |
+| A        | TC    | 5.0     | 5.0     | ✅     | CQ    | **4.0** | **5.0** | ❌     | BS    | **4.0** | **5.0** | ❌     | VC    | **4.0** | **5.0** | ❌     |
+| B        | TI    | 5.0     | 5.0     | ✅     | RC    | 5.0     | 5.0     | ✅     | VC    | 5.0     | 5.0     | ✅     | BONUS | 2.0     | 2.0     | ✅     |
+| C        | SQ    | 4.0     | 4.0     | ✅     | VD    | 5.0     | 5.0     | ✅     | RB    | 6.0     | 6.0     | ✅     | -     | -       | -       | -      |
+| D        | TQ    | 4.0     | 4.0     | ✅     | RL    | 4.0     | 4.0     | ✅     | DS    | 4.0     | 4.0     | ✅     | VC    | 3.0     | 3.0     | ✅     |
+| E        | TQ    | 4.0     | 4.0     | ✅     | AL    | 4.0     | 4.0     | ✅     | AS    | 4.0     | 4.0     | ✅     | VC    | 3.0     | 3.0     | ✅     |
+| F        | MO    | 5.0     | 5.0     | ✅     | EX    | 6.0     | 6.0     | ✅     | VC    | 4.0     | 4.0     | ✅     | -     | -       | -       | -      |
+| G        | GS    | 5.0     | 5.0     | ✅     | QC    | 4.0     | 4.0     | ✅     | TC    | **3.0** | **3.0** | ✅     | VC    | 3.0     | 3.0     | ✅     |
+| H        | RD    | **6.0** | **6.0** | ✅     | SH    | 4.0     | 4.0     | ✅     | CQ    | **3.0** | **3.0** | ✅     | VC    | **2.0** | **2.0** | ✅     |
 
 **Legend**: ✅ = Match, ❌ = Mismatch
 
 ---
 
-*End of Verification Report*
+_End of Verification Report_

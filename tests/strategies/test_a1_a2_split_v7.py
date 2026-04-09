@@ -24,7 +24,7 @@ class TestA1A2Split:
 
     def test_a2_is_prebreakout(self):
         """A2 should map to PreBreakoutCompressionStrategy."""
-        from core.strategies.momentum_breakout import PreBreakoutCompressionStrategy
+        from core.strategies.prebreakout_compression import PreBreakoutCompressionStrategy
         assert STRATEGY_REGISTRY[StrategyType.A2] == PreBreakoutCompressionStrategy
 
     def test_strategy_name_to_letter_mapping(self):

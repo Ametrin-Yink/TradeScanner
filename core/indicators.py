@@ -6,6 +6,8 @@ from dataclasses import dataclass
 import logging
 import threading
 
+from core.scoring_utils import calculate_clv as _calc_clv
+
 logger = logging.getLogger(__name__)
 
 
@@ -559,29 +561,11 @@ class TechnicalIndicators:
         return round(quality, 2)
 
     def calculate_clv(self) -> float:
-        """
-        Calculate Close Location Value (CLV).
-
-        Per Strategy Description v7.0:
-        CLV = (close - low) / (high - low)
-        Ranges from 0 (close at low) to 1 (close at high)
-
-        Returns:
-            CLV value for the most recent day
-        """
+        """Calculate Close Location Value for the most recent day."""
         if len(self.df) < 1:
             return 0.0
-
         latest = self.df.iloc[-1]
-        high = latest['high']
-        low = latest['low']
-        close = latest['close']
-
-        if high == low:  # Avoid division by zero
-            return 0.0
-
-        clv = (close - low) / (high - low)
-        return float(clv)
+        return _calc_clv(latest['close'], latest['high'], latest['low'])
 
     def calculate_52w_metrics(self) -> Dict[str, Optional[float]]:
         """

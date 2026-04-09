@@ -5,6 +5,7 @@
 **Goal:** Fix 20+ bugs and performance issues in the stock screening pipeline's Phase 0/1/2 implementation while maintaining different RS thresholds per strategy.
 
 **Architecture:**
+
 - Phase 0: Universal pre-calculation with strategy-aware data requirements
 - Phase 1: Parallel strategy screening with shared data cache
 - Phase 2: Dynamic allocation with resonance detection and balanced filling
@@ -16,24 +17,25 @@
 
 ## File Map
 
-| File | Responsibility | Changes |
-|------|---------------|---------|
-| `core/screener.py` | Orchestrates Phase 0/1/2 | Fix data requirements, RS calc, fill logic, SPY caching |
-| `core/strategies/base_strategy.py` | Base class for all strategies | Add shared screen implementation, thread-safe data handling |
-| `core/strategies/shoryuken.py` | Shoryuken strategy | Fix stats logging denominator, score formatting |
-| `core/strategies/parabolic.py` | Parabolic strategy | Cache VIX check, avoid duplicate calls, fix VIX fail behavior |
-| `core/strategies/momentum.py` | Momentum strategy | Use PARAMS for thresholds |
-| `core/strategies/vcp_ep.py` | VCP-EP strategy | Use PARAMS for thresholds |
-| `core/strategies/range_support.py` | Range Support strategy | Use PARAMS for thresholds, unify volume checks |
-| `core/strategies/upthrust_rebound.py` | U&R strategy | Use cached SPY data |
-| `core/indicators.py` | Technical indicators | Add EMA200 calculation |
-| `core/utils/screening_utils.py` | NEW - Shared screening utilities | Extract common screen logic |
+| File                                  | Responsibility                   | Changes                                                       |
+| ------------------------------------- | -------------------------------- | ------------------------------------------------------------- |
+| `core/screener.py`                    | Orchestrates Phase 0/1/2         | Fix data requirements, RS calc, fill logic, SPY caching       |
+| `core/strategies/base_strategy.py`    | Base class for all strategies    | Add shared screen implementation, thread-safe data handling   |
+| `core/strategies/shoryuken.py`        | Shoryuken strategy               | Fix stats logging denominator, score formatting               |
+| `core/strategies/parabolic.py`        | Parabolic strategy               | Cache VIX check, avoid duplicate calls, fix VIX fail behavior |
+| `core/strategies/momentum.py`         | Momentum strategy                | Use PARAMS for thresholds                                     |
+| `core/strategies/vcp_ep.py`           | VCP-EP strategy                  | Use PARAMS for thresholds                                     |
+| `core/strategies/range_support.py`    | Range Support strategy           | Use PARAMS for thresholds, unify volume checks                |
+| `core/strategies/upthrust_rebound.py` | U&R strategy                     | Use cached SPY data                                           |
+| `core/indicators.py`                  | Technical indicators             | Add EMA200 calculation                                        |
+| `core/utils/screening_utils.py`       | NEW - Shared screening utilities | Extract common screen logic                                   |
 
 ---
 
 ## Task 1: Fix Shoryuken Stats Logging Denominator (CORRECTED)
 
 **Files:**
+
 - Modify: `core/strategies/shoryuken.py:117-118`
 
 **Problem:** Stats line shows wrong denominator. The pre-filtering was done on `symbol_data` (symbols with valid data), not `symbols` (input parameter).
@@ -41,6 +43,7 @@
 - [ ] **Step 1: Fix the logging line**
 
 Replace line 117-118:
+
 ```python
 # BEFORE (WRONG):
 logger.info(f"Shoryuken: {len(prefiltered_symbols)}/{len(symbols)} passed EMA21 trend pre-filter")
@@ -52,10 +55,12 @@ logger.info(f"Shoryuken: {len(prefiltered_symbols)}/{len(symbol_data)} passed EM
 - [ ] **Step 2: Verify fix**
 
 Run syntax check:
+
 ```bash
 python3 -m py_compile core/strategies/shoryuken.py
 echo "Exit code: $?"
 ```
+
 Expected: `Exit code: 0`
 
 - [ ] **Step 3: Commit**
@@ -70,6 +75,7 @@ git commit -m "fix: correct Shoryuken stats logging denominator to use symbol_da
 ## Task 2: Fix Shoryuken Score Formatting
 
 **Files:**
+
 - Modify: `core/strategies/shoryuken.py:369`
 
 **Problem:** Score format uses `.0f` which truncates decimals, showing misleading scores (e.g., 12.5 becomes 13).
@@ -77,6 +83,7 @@ git commit -m "fix: correct Shoryuken stats logging denominator to use symbol_da
 - [ ] **Step 1: Fix score formatting**
 
 Replace line 369:
+
 ```python
 # BEFORE:
 f"Score: {score:.0f}/15 (Tier {tier}-{position_pct*100:.0f}%)",
@@ -88,10 +95,12 @@ f"Score: {score:.1f}/15 (Tier {tier}-{position_pct*100:.0f}%)",
 - [ ] **Step 2: Verify fix**
 
 Run syntax check:
+
 ```bash
 python3 -m py_compile core/strategies/shoryuken.py
 echo "Exit code: $?"
 ```
+
 Expected: `Exit code: 0`
 
 - [ ] **Step 3: Commit**
@@ -106,6 +115,7 @@ git commit -m "fix: show decimal precision in Shoryuken score display"
 ## Task 3: Optimize RS Percentile Calculation and Fix Edge Case
 
 **Files:**
+
 - Modify: `core/screener.py:195-206`
 
 **Problem:** Edge case where first symbol gets 0 percentile, causing valid stocks to fail RS filters.
@@ -113,6 +123,7 @@ git commit -m "fix: show decimal precision in Shoryuken score display"
 - [ ] **Step 1: Fix RS percentile calculation with edge case handling**
 
 Replace lines 195-206:
+
 ```python
 # BEFORE:
 if rs_scores:
@@ -138,10 +149,12 @@ if rs_scores:
 - [ ] **Step 2: Verify fix**
 
 Run syntax check:
+
 ```bash
 python3 -m py_compile core/screener.py
 echo "Exit code: $?"
 ```
+
 Expected: `Exit code: 0`
 
 - [ ] **Step 3: Commit**
@@ -156,6 +169,7 @@ git commit -m "fix: fix RS percentile edge case where lowest stock gets 0 percen
 ## Task 4: Fix Phase 0 Data Requirements Check
 
 **Files:**
+
 - Modify: `core/screener.py:113-116`
 
 **Problem:** The check at line 113 still uses 60 days despite MIN_HISTORY_DAYS being set to 200. This causes symbols with 60-199 days to pass Phase 0 but waste processing time in Momentum.
@@ -163,6 +177,7 @@ git commit -m "fix: fix RS percentile edge case where lowest stock gets 0 percen
 - [ ] **Step 1: Update the length check to use MIN_HISTORY_DAYS**
 
 Replace line 113:
+
 ```python
 # BEFORE:
 if df is None or len(df) < 60:  # Absolute minimum for any calculation
@@ -176,10 +191,12 @@ if df is None or len(df) < self.MIN_HISTORY_DAYS:
 - [ ] **Step 2: Verify fix**
 
 Run syntax check:
+
 ```bash
 python3 -m py_compile core/screener.py
 echo "Exit code: $?"
 ```
+
 Expected: `Exit code: 0`
 
 - [ ] **Step 3: Commit**
@@ -194,6 +211,7 @@ git commit -m "fix: use MIN_HISTORY_DAYS (200) consistently in Phase 0 data chec
 ## Task 5: Cache SPY Data to Prevent Duplicate Fetches
 
 **Files:**
+
 - Modify: `core/screener.py:447-454`
 - Modify: `core/strategies/dtss.py:98-106`
 - Modify: `core/strategies/range_support.py:93-103`
@@ -205,6 +223,7 @@ git commit -m "fix: use MIN_HISTORY_DAYS (200) consistently in Phase 0 data chec
 - [ ] **Step 1: Ensure SPY data is shared with all strategies**
 
 In `core/screener.py`, verify lines 447-454 already share SPY:
+
 ```python
 # Should already exist:
 strategy._spy_df = self._spy_data
@@ -213,6 +232,7 @@ strategy._spy_df = self._spy_data
 - [ ] **Step 2: Update DTSS to use cached SPY**
 
 In `core/strategies/dtss.py`, modify `_detect_market_direction`:
+
 ```python
 def _detect_market_direction(self):
     """Detect market direction - use cached SPY if available."""
@@ -231,6 +251,7 @@ def _detect_market_direction(self):
 - [ ] **Step 3: Update RangeSupport to use cached SPY**
 
 In `core/strategies/range_support.py`, modify `_detect_market_direction`:
+
 ```python
 def _detect_market_direction(self):
     """Detect market direction - use cached SPY if available."""
@@ -249,6 +270,7 @@ def _detect_market_direction(self):
 - [ ] **Step 4: Update Parabolic to use cached SPY**
 
 In `core/strategies/parabolic.py`, modify `_detect_market_direction`:
+
 ```python
 def _detect_market_direction(self):
     """Detect market direction - use cached SPY if available."""
@@ -267,6 +289,7 @@ def _detect_market_direction(self):
 - [ ] **Step 5: Update U&R to use cached SPY (NEW)**
 
 In `core/strategies/upthrust_rebound.py`, modify `screen` method lines 63-70:
+
 ```python
 # BEFORE:
 spy_df = self._get_data('SPY')
@@ -280,10 +303,12 @@ if spy_df is None:
 - [ ] **Step 6: Verify all files**
 
 Run syntax checks:
+
 ```bash
 python3 -m py_compile core/screener.py core/strategies/dtss.py core/strategies/range_support.py core/strategies/parabolic.py core/strategies/upthrust_rebound.py
 echo "Exit code: $?"
 ```
+
 Expected: `Exit code: 0`
 
 - [ ] **Step 7: Commit**
@@ -298,6 +323,7 @@ git commit -m "fix: cache SPY data in screener to prevent duplicate fetches acro
 ## Task 6: Cache VIX Filter Result and Fix Fail Behavior
 
 **Files:**
+
 - Modify: `core/strategies/parabolic.py:56-96`
 - Modify: `core/strategies/parabolic.py:133-166`
 - Modify: `core/strategies/parabolic.py:221-224`
@@ -307,6 +333,7 @@ git commit -m "fix: cache SPY data in screener to prevent duplicate fetches acro
 - [ ] **Step 1: Add VIX status cache and modify screen method**
 
 Replace lines 56-75 in `screen` method:
+
 ```python
 def screen(self, symbols: List[str]) -> List[StrategyMatch]:
     """Screen symbols with Phase 0 market direction and VIX filter."""
@@ -333,6 +360,7 @@ def screen(self, symbols: List[str]) -> List[StrategyMatch]:
 - [ ] **Step 2: Fix VIX filter to reject on failure**
 
 Replace lines 133-166 in `_check_vix_filter`:
+
 ```python
 def _check_vix_filter(self) -> str:
     """
@@ -373,6 +401,7 @@ def _check_vix_filter(self) -> str:
 - [ ] **Step 3: Update filter method to use cached VIX status**
 
 Replace line 221-224 in `filter` method:
+
 ```python
 # BEFORE (recalculates):
 vix_status = self._check_vix_filter()
@@ -388,10 +417,12 @@ if vix_status == 'reject':
 - [ ] **Step 4: Verify fix**
 
 Run syntax check:
+
 ```bash
 python3 -m py_compile core/strategies/parabolic.py
 echo "Exit code: $?"
 ```
+
 Expected: `Exit code: 0`
 
 - [ ] **Step 5: Commit**
@@ -406,6 +437,7 @@ git commit -m "fix: cache VIX filter and use safer 'limit' default on VIX failur
 ## Task 7: Fix Log Level Issues
 
 **Files:**
+
 - Modify: `core/screener.py:189-191`
 
 **Problem:** Phase 0 errors logged at debug level, hiding important failures.
@@ -413,6 +445,7 @@ git commit -m "fix: cache VIX filter and use safer 'limit' default on VIX failur
 - [ ] **Step 1: Fix Phase 0 error logging**
 
 Replace lines 189-191:
+
 ```python
 # BEFORE:
 except Exception as e:
@@ -428,10 +461,12 @@ except Exception as e:
 - [ ] **Step 2: Verify fix**
 
 Run syntax check:
+
 ```bash
 python3 -m py_compile core/screener.py
 echo "Exit code: $?"
 ```
+
 Expected: `Exit code: 0`
 
 - [ ] **Step 3: Commit**
@@ -446,6 +481,7 @@ git commit -m "fix: correct log level for Phase 0 errors (debug -> warning)"
 ## Task 8: Unify RangeSupport Volume Thresholds
 
 **Files:**
+
 - Modify: `core/strategies/range_support.py:166-173`
 - Modify: `core/strategies/range_support.py:252-260`
 
@@ -454,6 +490,7 @@ git commit -m "fix: correct log level for Phase 0 errors (debug -> warning)"
 - [ ] **Step 1: Update pre-filter to use volume_veto_threshold consistently**
 
 Replace lines 166-173 in `_prefilter_symbol`:
+
 ```python
 # BEFORE:
 if volume_ratio > self.PARAMS['volume_prefilter_threshold']:
@@ -467,6 +504,7 @@ if volume_ratio > self.PARAMS['volume_veto_threshold']:
 - [ ] **Step 2: Verify both checks use same threshold**
 
 Verify line 252-260 also uses `volume_veto_threshold`:
+
 ```python
 # Should already be:
 if volume_ratio > self.PARAMS['volume_veto_threshold']:
@@ -476,10 +514,12 @@ if volume_ratio > self.PARAMS['volume_veto_threshold']:
 - [ ] **Step 3: Verify fix**
 
 Run syntax check:
+
 ```bash
 python3 -m py_compile core/strategies/range_support.py
 echo "Exit code: $?"
 ```
+
 Expected: `Exit code: 0`
 
 - [ ] **Step 4: Commit**
@@ -494,6 +534,7 @@ git commit -m "fix: unify RangeSupport volume thresholds to use volume_veto_thre
 ## Task 9: Move Hardcoded Values to PARAMS
 
 **Files:**
+
 - Modify: `core/strategies/momentum.py:404-410`
 - Modify: `core/strategies/vcp_ep.py:49-52`
 
@@ -502,6 +543,7 @@ git commit -m "fix: unify RangeSupport volume thresholds to use volume_veto_thre
 - [ ] **Step 1: Update Momentum PARAMS and usage**
 
 In `momentum.py`, add to PARAMS (line 32-41):
+
 ```python
 PARAMS = {
     # ... existing params ...
@@ -510,6 +552,7 @@ PARAMS = {
 ```
 
 Then update line 404:
+
 ```python
 # BEFORE:
 if p0.get('adr_pct', 0) > 0.03:
@@ -521,6 +564,7 @@ if p0.get('adr_pct', 0) > self.PARAMS['adr_min']:
 - [ ] **Step 2: Update VCP-EP to use configurable threshold**
 
 In `vcp_ep.py`, add to PARAMS:
+
 ```python
 PARAMS = {
     # ... existing params ...
@@ -529,6 +573,7 @@ PARAMS = {
 ```
 
 Update line 49:
+
 ```python
 # BEFORE:
 if p0.get('rs_percentile', 0) < 80:
@@ -540,10 +585,12 @@ if p0.get('rs_percentile', 0) < self.PARAMS['rs_percentile_min']:
 - [ ] **Step 3: Verify all files**
 
 Run syntax checks:
+
 ```bash
 python3 -m py_compile core/strategies/momentum.py core/strategies/vcp_ep.py
 echo "Exit code: $?"
 ```
+
 Expected: `Exit code: 0`
 
 - [ ] **Step 4: Commit**
@@ -558,14 +605,16 @@ git commit -m "refactor: move hardcoded thresholds to PARAMS dictionaries"
 ## Task 10: Add EMA200 to Technical Indicators
 
 **Files:**
+
 - Modify: `core/indicators.py:61-73`
 - Modify: `core/screener.py:179-181`
 
 **Problem:** Phase 0 stores EMA200 but it's never calculated, always returning 0.
 
-- [ ] **Step 1: Add EMA200 calculation to _calculate_emas**
+- [ ] **Step 1: Add EMA200 calculation to \_calculate_emas**
 
 Replace lines 61-73 in `core/indicators.py`:
+
 ```python
 def _calculate_emas(self) -> Dict[str, Optional[float]]:
     """Calculate EMA8, EMA21, EMA50, EMA200."""
@@ -587,6 +636,7 @@ def _calculate_emas(self) -> Dict[str, Optional[float]]:
 - [ ] **Step 2: Verify Phase 0 will now get valid EMA200**
 
 The existing code in `core/screener.py` lines 179-181 will now work correctly:
+
 ```python
 'ema200': ind.indicators.get('ema', {}).get('ema200', 0),
 ```
@@ -594,10 +644,12 @@ The existing code in `core/screener.py` lines 179-181 will now work correctly:
 - [ ] **Step 3: Verify fix**
 
 Run syntax check:
+
 ```bash
 python3 -m py_compile core/indicators.py
 echo "Exit code: $?"
 ```
+
 Expected: `Exit code: 0`
 
 - [ ] **Step 4: Commit**
@@ -612,6 +664,7 @@ git commit -m "fix: add EMA200 calculation to TechnicalIndicators for Phase 0"
 ## Task 11: Fix Phase 2 Selected Count Logic
 
 **Files:**
+
 - Modify: `core/screener.py:304`
 
 **Problem:** `selected_from_group` calculation logic is flawed and produces incorrect log output.
@@ -619,6 +672,7 @@ git commit -m "fix: add EMA200 calculation to TechnicalIndicators for Phase 0"
 - [ ] **Step 1: Fix the counting logic**
 
 Replace line 304:
+
 ```python
 # BEFORE (flawed logic):
 selected_from_group = len([s for s in selected if s in candidates])
@@ -630,6 +684,7 @@ logger.info(f"[{group}] Selected {selected_from_group}/{len(candidates)} candida
 ```
 
 Actually, better to fix the whole counting approach:
+
 ```python
 # Count how many were selected from this group
 selected_from_group = len([c for c in selected
@@ -640,10 +695,12 @@ logger.info(f"[{group}] Selected {selected_from_group}/{len(candidates)} candida
 - [ ] **Step 2: Verify fix**
 
 Run syntax check:
+
 ```bash
 python3 -m py_compile core/screener.py
 echo "Exit code: $?"
 ```
+
 Expected: `Exit code: 0`
 
 - [ ] **Step 3: Commit**
@@ -658,6 +715,7 @@ git commit -m "fix: correct Phase 2 selected group counting logic"
 ## Task 12: Add Thread Safety for Strategy Properties
 
 **Files:**
+
 - Modify: `core/screener.py:447-454`
 
 **Problem:** Direct property modification may cause race conditions with shared references.
@@ -665,6 +723,7 @@ git commit -m "fix: correct Phase 2 selected group counting logic"
 - [ ] **Step 1: Use copy instead of direct assignment in screener**
 
 Replace lines 447-454:
+
 ```python
 # BEFORE (direct reference - unsafe):
 for strategy in self._strategies.values():
@@ -689,6 +748,7 @@ for strategy in self._strategies.values():
 - [ ] **Step 2: Add copy import at top of screener.py if not present**
 
 Add import at line 1-10 if missing:
+
 ```python
 import copy
 import logging
@@ -699,10 +759,12 @@ from typing import Dict, List, Optional
 - [ ] **Step 3: Verify fix**
 
 Run syntax check:
+
 ```bash
 python3 -m py_compile core/screener.py
 echo "Exit code: $?"
 ```
+
 Expected: `Exit code: 0`
 
 - [ ] **Step 4: Commit**
@@ -717,6 +779,7 @@ git commit -m "fix: add thread safety with copy for strategy data sharing"
 ## Task 13: Reduce Logging Verbosity
 
 **Files:**
+
 - Modify: `core/screener.py:472-478` (approximate lines)
 - Modify: `core/screener.py:543-552` (approximate lines)
 
@@ -725,6 +788,7 @@ git commit -m "fix: add thread safety with copy for strategy data sharing"
 - [ ] **Step 1: Reduce log verbosity in Phase 1 start**
 
 Replace the START logging:
+
 ```python
 # BEFORE:
 logger.info(f"\n{'='*60}")
@@ -740,6 +804,7 @@ logger.info(f"[START] {strategy_type.value} Screening: {total_symbols} symbols, 
 - [ ] **Step 2: Reduce log verbosity in Phase 1 completion**
 
 Replace the COMPLETE logging:
+
 ```python
 # BEFORE:
 logger.info(f"\n{'='*60}")
@@ -762,10 +827,12 @@ logger.info(f"[COMPLETE] {strategy_type.value}: {len(strategy_candidates)}/{pass
 - [ ] **Step 3: Verify fix**
 
 Run syntax check:
+
 ```bash
 python3 -m py_compile core/screener.py
 echo "Exit code: $?"
 ```
+
 Expected: `Exit code: 0`
 
 - [ ] **Step 4: Commit**
@@ -780,6 +847,7 @@ git commit -m "refactor: reduce logging verbosity in Phase 1"
 ## Task 14: Final Verification
 
 **Files:**
+
 - All modified files
 
 - [ ] **Step 1: Run comprehensive syntax check**
@@ -820,24 +888,25 @@ git log --oneline -15
 
 ## Spec Coverage Check
 
-| Issue | Task | Status |
-|-------|------|--------|
-| Shoryuken stats wrong denominator | Task 1 | ✅ Corrected to use symbol_data |
-| Shoryuken score format | Task 2 | ✅ Add decimal precision |
-| RS percentile edge case | Task 3 | ✅ Use (i+1)/n to avoid 0 percentile |
-| Phase 0 days mismatch | Task 4 | ✅ Use MIN_HISTORY_DAYS consistently |
-| SPY duplicate fetching | Task 5 | ✅ Cache and share with all strategies |
-| VIX duplicate calls | Task 6 | ✅ Cache VIX status |
-| VIX fail = normal | Task 6 | ✅ Changed to 'limit' default |
-| Log levels wrong | Task 7 | ✅ debug -> warning |
-| RangeSupport volume thresholds | Task 8 | ✅ Unify to volume_veto_threshold |
-| Hardcoded values | Task 9 | ✅ Move to PARAMS |
-| Phase 0 EMA200 missing | Task 10 | ✅ Add to TechnicalIndicators |
-| Phase 2 selected count | Task 11 | ✅ Fix counting logic |
-| Thread safety | Task 12 | ✅ Use copy for shared data |
-| Logging verbosity | Task 13 | ✅ Reduce separators |
+| Issue                             | Task    | Status                                 |
+| --------------------------------- | ------- | -------------------------------------- |
+| Shoryuken stats wrong denominator | Task 1  | ✅ Corrected to use symbol_data        |
+| Shoryuken score format            | Task 2  | ✅ Add decimal precision               |
+| RS percentile edge case           | Task 3  | ✅ Use (i+1)/n to avoid 0 percentile   |
+| Phase 0 days mismatch             | Task 4  | ✅ Use MIN_HISTORY_DAYS consistently   |
+| SPY duplicate fetching            | Task 5  | ✅ Cache and share with all strategies |
+| VIX duplicate calls               | Task 6  | ✅ Cache VIX status                    |
+| VIX fail = normal                 | Task 6  | ✅ Changed to 'limit' default          |
+| Log levels wrong                  | Task 7  | ✅ debug -> warning                    |
+| RangeSupport volume thresholds    | Task 8  | ✅ Unify to volume_veto_threshold      |
+| Hardcoded values                  | Task 9  | ✅ Move to PARAMS                      |
+| Phase 0 EMA200 missing            | Task 10 | ✅ Add to TechnicalIndicators          |
+| Phase 2 selected count            | Task 11 | ✅ Fix counting logic                  |
+| Thread safety                     | Task 12 | ✅ Use copy for shared data            |
+| Logging verbosity                 | Task 13 | ✅ Reduce separators                   |
 
 **Intentionally NOT fixed:**
+
 - Different RS thresholds per strategy (EP 80%, Momentum 75%) - this is by design
 
 ---
@@ -845,6 +914,7 @@ git log --oneline -15
 ## Execution Complete
 
 All 20+ issues have been addressed through 14 tasks. Each task includes:
+
 - Exact file paths and line numbers
 - Before/after code changes
 - Verification commands

@@ -14,15 +14,15 @@
 
 ## File Structure
 
-| File | Responsibility | Changes |
-|------|---------------|---------|
-| `core/strategies/capitulation_rebound.py` | Capitulation bottom detection | Fix VIX symbol, add filter logging |
-| `core/strategies/momentum_breakout.py` | VCP breakout detection | Add VCP detection logging |
-| `core/indicators.py` | Technical indicator calculations | Relax VCP platform detection thresholds |
-| `core/strategies/support_bounce.py` | Support bounce detection | Add SPY buffer, add filter logging |
-| `core/strategies/range_short.py` | Range resistance short | Relax downtrend requirement, add filter logging |
-| `core/strategies/double_top_bottom.py` | Double top/bottom detection | Reduce interval threshold, add filter logging |
-| `docs/Strategy_Description.md` | Strategy documentation | Update thresholds to match code |
+| File                                      | Responsibility                   | Changes                                         |
+| ----------------------------------------- | -------------------------------- | ----------------------------------------------- |
+| `core/strategies/capitulation_rebound.py` | Capitulation bottom detection    | Fix VIX symbol, add filter logging              |
+| `core/strategies/momentum_breakout.py`    | VCP breakout detection           | Add VCP detection logging                       |
+| `core/indicators.py`                      | Technical indicator calculations | Relax VCP platform detection thresholds         |
+| `core/strategies/support_bounce.py`       | Support bounce detection         | Add SPY buffer, add filter logging              |
+| `core/strategies/range_short.py`          | Range resistance short           | Relax downtrend requirement, add filter logging |
+| `core/strategies/double_top_bottom.py`    | Double top/bottom detection      | Reduce interval threshold, add filter logging   |
+| `docs/Strategy_Description.md`            | Strategy documentation           | Update thresholds to match code                 |
 
 ---
 
@@ -37,6 +37,7 @@
 ### Task 1: Fix CapitulationRebound VIX Symbol
 
 **Files:**
+
 - Modify: `core/strategies/capitulation_rebound.py:99`
 - Modify: `core/strategies/capitulation_rebound.py:61-68` (add filter logging)
 
@@ -52,7 +53,7 @@ vix_df = self._get_data('VIX')
 vix_df = self._get_data('^VIX')
 ```
 
-- [x] **Step 2: Add diagnostic logging to _prefilter_symbol method**
+- [x] **Step 2: Add diagnostic logging to \_prefilter_symbol method**
 
 Add at the start of `_prefilter_symbol` method (around line 126):
 
@@ -112,6 +113,7 @@ git commit -m "fix(capitulation): use correct VIX symbol ^VIX, add filter loggin
 ### Task 2: Relax VCP Detection in indicators.py
 
 **Files:**
+
 - Modify: `core/indicators.py:396-464` (detect_vcp_platform method)
 
 **Context:** The VCP detection requires ALL three conditions (range <12%, concentration >50%, valid volume), resulting in 0 matches. Change to score-based system.
@@ -246,6 +248,7 @@ git commit -m "fix(indicators): relax VCP detection to scoring system (2 of 3 cr
 ### Task 3: Add Filter Logging to MomentumBreakout
 
 **Files:**
+
 - Modify: `core/strategies/momentum_breakout.py:40-106` (filter method)
 
 - [x] **Step 1: Add layer-by-layer logging to filter method**
@@ -347,6 +350,7 @@ git commit -m "feat(momentum): add layer-by-layer filter logging for diagnostics
 ### Task 4: Fix SupportBounce SPY EMA200 Gate
 
 **Files:**
+
 - Modify: `core/strategies/support_bounce.py:59-128` (screen method)
 
 - [x] **Step 1: Add buffer to SPY EMA200 check**
@@ -432,7 +436,8 @@ git commit -m "fix(support_bounce): add 2% buffer to SPY EMA200 gate, add filter
 ### Task 5: Relax RangeShort Pre-Filter
 
 **Files:**
-- Modify: `core/strategies/range_short.py:109-152` (_prefilter_symbol method)
+
+- Modify: `core/strategies/range_short.py:109-152` (\_prefilter_symbol method)
 
 - [x] **Step 1: Relax downtrend requirement**
 
@@ -523,8 +528,9 @@ git commit -m "fix(range_short): relax downtrend filter (price < EMA50 only), ad
 ### Task 6: Reduce DoubleTopBottom Interval Threshold
 
 **Files:**
+
 - Modify: `core/strategies/double_top_bottom.py:38`
-- Modify: `core/strategies/double_top_bottom.py:125-171` (_prefilter_symbol method)
+- Modify: `core/strategies/double_top_bottom.py:125-171` (\_prefilter_symbol method)
 
 - [x] **Step 1: Reduce min_test_interval_days from 10 to 7**
 
@@ -533,7 +539,7 @@ git commit -m "fix(range_short): relax downtrend filter (price < EMA50 only), ad
 'min_test_interval_days': 7,  # RELAXED: Was 10 days, now 7 days
 ```
 
-- [x] **Step 2: Add filter logging to _prefilter_symbol**
+- [x] **Step 2: Add filter logging to \_prefilter_symbol**
 
 ```python
 def _prefilter_symbol(self, symbol: str, df: pd.DataFrame) -> bool:
@@ -607,6 +613,7 @@ git commit -m "fix(double_top): reduce test interval 10->7 days, add filter logg
 ### Task 7: Update Documentation
 
 **Files:**
+
 - Modify: `docs/Strategy_Description.md` (multiple sections)
 
 - [x] **Step 1: Update MomentumBreakout pre-filter threshold**
@@ -615,6 +622,7 @@ Find line ~471 (52w high proximity in pre-filter) and update:
 
 ```markdown
 ### Pre-filter
+
 - 52-week high proximity <25% (relaxed from 10% for more candidates)
 - RS > 80 percentile
 ```
@@ -625,6 +633,7 @@ Find line ~411 (Test Strength section) and update:
 
 ```markdown
 **Components:**
+
 - Touch count (>3)
 - Interval (>7 days, was 10 days - relaxed for more signals)
 - Left/right side (Expert A): Left = Tier B max
@@ -638,6 +647,7 @@ Find line ~315-319 and update:
 ### Market Environment Filter
 
 **Pre-filter** (SPY context):
+
 - If SPY > EMA200: Skip (no shorts in bull)
 - If SPY < EMA200 OR flat (±0.3%): Proceed
 
@@ -696,11 +706,13 @@ Expected: Should not see "possibly delisted" errors for ^VIX.
 ## Rollback Plan
 
 If issues occur, revert individual commits:
+
 ```bash
 git revert <commit-hash>  # For each fix if needed
 ```
 
 Or restore original files from git:
+
 ```bash
 git checkout HEAD~6 -- core/strategies/capitulation_rebound.py core/indicators.py core/strategies/momentum_breakout.py core/strategies/support_bounce.py core/strategies/range_short.py core/strategies/double_top_bottom.py
 ```

@@ -1,6 +1,7 @@
 # BUG-004: 扫描在策略筛选阶段卡住/超时
 
 ## 状态
+
 - **Status**: `RESOLVED`
 - **Severity**: HIGH
 - **Component**: `core/screener.py`, `core/strategies/base_strategy.py`, `core/strategies/shoryuken.py`
@@ -37,6 +38,7 @@ Number of strategies: 8
 ### 2. 修复 Shoryuken Bug (core/strategies/shoryuken.py)
 
 原代码：
+
 ```python
 for symbol, data in symbol_data.items():
     ...
@@ -44,6 +46,7 @@ for symbol, data in symbol_data.items():
 ```
 
 修复后：
+
 ```python
 symbols_to_remove = []
 for symbol, data in symbol_data.items():

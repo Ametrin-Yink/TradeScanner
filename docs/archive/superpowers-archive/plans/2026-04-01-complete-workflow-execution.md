@@ -15,6 +15,7 @@
 ### Task 0: Environment Verification
 
 **Files:**
+
 - Read: `config/settings.py`
 - Read: `config/secrets.json`
 - Read: `requirements.txt`
@@ -27,6 +28,7 @@ cd /home/admin/Projects/TradeChanceScreen
 source venv/bin/activate
 python --version
 ```
+
 Expected: `Python 3.12.x`
 
 - [ ] **Step 2: Verify API keys configured**
@@ -34,6 +36,7 @@ Expected: `Python 3.12.x`
 ```bash
 python -c "from config.settings import settings; print('API Key present:', bool(settings.get_dashscope_api_key()))"
 ```
+
 Expected: `API Key present: True`
 
 - [ ] **Step 3: Check database connectivity**
@@ -41,6 +44,7 @@ Expected: `API Key present: True`
 ```bash
 python -c "from data.db import Database; db = Database(); print('Stocks count:', len(db.get_active_stocks()))"
 ```
+
 Expected: Number of stocks in database (e.g., `518`)
 
 - [ ] **Step 4: Verify web server status**
@@ -48,6 +52,7 @@ Expected: Number of stocks in database (e.g., `518`)
 ```bash
 ss -tlnp | grep 19801 || echo "Server not running"
 ```
+
 Note: Server may or may not be running - we'll start it if needed.
 
 ---
@@ -57,6 +62,7 @@ Note: Server may or may not be running - we'll start it if needed.
 ### Task 1: Fix AI Market Sentiment Parse Bug
 
 **Files:**
+
 - Read: `core/market_analyzer.py`
 - Modify: `core/market_analyzer.py`
 - Test: Run sentiment analysis
@@ -70,6 +76,7 @@ Read the file and identify where sentiment is parsed from AI response.
 - [ ] **Step 2: Identify the parse issue**
 
 Look for:
+
 1. How AI response is parsed
 2. Expected JSON fields (sentiment, confidence, etc.)
 3. Default/fallback values when parsing fails
@@ -78,12 +85,14 @@ Look for:
 - [ ] **Step 3: Fix the sentiment parsing logic**
 
 Common issues to check:
+
 - Field name mismatch (e.g., AI returns `market_sentiment` but code looks for `sentiment`)
 - Missing default values when keys are absent
 - Case sensitivity issues
 - Wrong variable being returned
 
 Example fix pattern:
+
 ```python
 # Before (buggy):
 sentiment = result.get('sentiment', 'neutral')
@@ -104,6 +113,7 @@ print('Confidence:', result.get('confidence'))
 print('Full result:', result)
 "
 ```
+
 Expected: sentiment should be one of `bullish`, `bearish`, `neutral`, `watch` with numeric confidence
 
 - [ ] **Step 5: Commit the fix**
@@ -124,7 +134,9 @@ Fixes BUG-002"
 ## Phase 2: Workflow Execution
 
 ### Checkpoint Format
+
 Each phase ends with a checkpoint. Mark as:
+
 - ✅ **SUCCESS** - Step completed, output verified
 - ❌ **FAILED** - Step failed, fix required before proceeding
 - ⚠️ **PARTIAL** - Step completed with warnings
@@ -134,6 +146,7 @@ Each phase ends with a checkpoint. Mark as:
 ### Task 2: Step 1/5 - Market Sentiment Analysis
 
 **Files:**
+
 - Run: `scheduler.py` (specifically market_analyzer)
 - Verify: Log output shows valid sentiment
 
@@ -156,6 +169,7 @@ print(f'Success: {result.get(\"sentiment\") in [\"bullish\", \"bearish\", \"neut
 ```
 
 **Checkpoint 1 Result:**
+
 ```
 === CHECKPOINT: Step 1/5 ===
 Sentiment: [bullish/bearish/neutral/watch]
@@ -172,6 +186,7 @@ Success: True
 ### Task 3: Step 2/5 - Symbol Screening with 6 Strategies
 
 **Files:**
+
 - Run: `scheduler.py --test --symbols AAPL,MSFT,NVDA`
 - Verify: Screening completes, candidates found
 
@@ -188,7 +203,9 @@ python scheduler.py --test --symbols AAPL,MSFT,NVDA 2>&1 | tee /tmp/scan_step2.l
 ```bash
 grep -E "(Step 2/5|Found.*candidates|screening.*success)" /tmp/scan_step2.log
 ```
+
 Expected output patterns:
+
 - `Step 2/5: Screening symbols with 6 strategies`
 - `Found N total candidates`
 - No ERROR-level log messages about screening failures
@@ -198,9 +215,11 @@ Expected output patterns:
 ```bash
 grep -E "MomentumBreakout|PullbackEntry|SupportBounce|RangeShort|DoubleTopBottom|CapitulationRebound" /tmp/scan_step2.log | head -20
 ```
+
 Expected: Evidence that strategy plugins are being called
 
 **Checkpoint 2 Result:**
+
 ```
 === CHECKPOINT: Step 2/5 ===
 Screened: [N] symbols
@@ -219,6 +238,7 @@ Success: True/False
 ### Task 4: Step 3/5 - AI Scoring and Selection
 
 **Files:**
+
 - Verify: `core/selector.py` AI calls work
 - Check: Log output for AI scoring
 
@@ -227,7 +247,9 @@ Success: True/False
 ```bash
 grep -E "(Step 3/5|AI scoring|select.*top|confidence)" /tmp/scan_step2.log
 ```
+
 Expected:
+
 - `Step 3/5: AI scoring and selecting top 10...`
 - `Selected N opportunities`
 - Confidence values shown
@@ -237,9 +259,11 @@ Expected:
 ```bash
 grep -E "ERROR.*AI|Failed.*analyze|JSON" /tmp/scan_step2.log
 ```
+
 Expected: No ERROR lines related to AI analysis
 
 **Checkpoint 3 Result:**
+
 ```
 === CHECKPOINT: Step 3/5 ===
 Opportunities selected: [N]
@@ -257,6 +281,7 @@ Success: True/False
 ### Task 5: Step 4/5 - Deep AI Analysis
 
 **Files:**
+
 - Verify: `core/analyzer.py` deep analysis
 - Check: Per-opportunity analysis in logs
 
@@ -265,7 +290,9 @@ Success: True/False
 ```bash
 grep -E "(Step 4/5|Analyzing [A-Z]+|deep AI analysis)" /tmp/scan_step2.log
 ```
+
 Expected:
+
 - `Step 4/5: Running deep AI analysis...`
 - `Analyzing SYMBOL (N/M)...` for each opportunity
 - `Analyzed N opportunities`
@@ -275,9 +302,11 @@ Expected:
 ```bash
 grep -E "Failed to analyze|ERROR.*analyze" /tmp/scan_step2.log
 ```
+
 Expected: No errors (or minimal graceful failures)
 
 **Checkpoint 4 Result:**
+
 ```
 === CHECKPOINT: Step 4/5 ===
 Opportunities analyzed: [N]
@@ -294,6 +323,7 @@ Success: True/False
 ### Task 6: Step 5/5 - Report Generation
 
 **Files:**
+
 - Verify: `core/reporter.py` generates report
 - Check: Report file created
 
@@ -302,7 +332,9 @@ Success: True/False
 ```bash
 grep -E "(Step 5/5|Generating report|Report:|report_.*html)" /tmp/scan_step2.log
 ```
+
 Expected:
+
 - `Step 5/5: Generating report...`
 - `Report: /home/admin/Projects/TradeChanceScreen/web/reports/report_YYYY-MM-DD.html`
 
@@ -312,6 +344,7 @@ Expected:
 REPORT_PATH=$(grep -oP 'Report: \K.*' /tmp/scan_step2.log | tail -1)
 ls -la "$REPORT_PATH"
 ```
+
 Expected: File exists with non-zero size
 
 - [ ] **Step 3: Verify report content**
@@ -319,9 +352,11 @@ Expected: File exists with non-zero size
 ```bash
 grep -E "(Market Sentiment|Opportunities|Strategy)" "$REPORT_PATH" | head -5
 ```
+
 Expected: HTML content with market sentiment and opportunities sections
 
 **Checkpoint 5 Result:**
+
 ```
 === CHECKPOINT: Step 5/5 ===
 Report file: [path]
@@ -339,6 +374,7 @@ Success: True/False
 ### Task 7: Web Server Verification
 
 **Files:**
+
 - Run: `api/server.py`
 - Verify: Server serves report at port 19801
 
@@ -362,6 +398,7 @@ fi
 ```bash
 curl -s http://localhost:19801/ | head -20
 ```
+
 Expected: HTML response with dashboard content
 
 - [ ] **Step 3: Verify report is accessible**
@@ -370,6 +407,7 @@ Expected: HTML response with dashboard content
 REPORT_NAME=$(basename "$REPORT_PATH")
 curl -s "http://localhost:19801/reports/$REPORT_NAME" | head -10
 ```
+
 Expected: HTML content of the generated report
 
 - [ ] **Step 4: Verify charts directory**
@@ -377,9 +415,11 @@ Expected: HTML content of the generated report
 ```bash
 ls -la /home/admin/Projects/TradeChanceScreen/data/charts/ | head -10
 ```
+
 Expected: PNG chart files for opportunities
 
 **Checkpoint 6 Result:**
+
 ```
 === CHECKPOINT: Web Server ===
 Server status: running/not running
@@ -415,6 +455,7 @@ echo "Overall Status: [ALL SUCCESS / SOME FAILURES]"
 - [ ] **Step 2: Update BUG-002 status if fixed**
 
 If BUG-002 was fixed during execution:
+
 - Update `bugs/BUG-002-ai-market-sentiment-parse.md` with resolution
 - Update `bugs/bug-inventory.md` status
 
@@ -434,20 +475,24 @@ If BUG-002 was fixed during execution:
 ### Common Issues:
 
 **Market Sentiment Empty (BUG-002):**
+
 - Check field name mapping in `core/market_analyzer.py`
 - Verify AI response format matches expected keys
 
 **Screening No Candidates:**
+
 - Check if market data is stale
 - Verify strategy plugins are loading correctly
 - Check for data fetching errors
 
 **AI Analysis Errors:**
+
 - Check API key validity
 - Verify JSON parsing regex
 - Check rate limiting
 
 **Report Generation Fails:**
+
 - Check disk space
 - Verify `web/reports/` directory exists and is writable
 - Check for missing chart files

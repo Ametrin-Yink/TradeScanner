@@ -1,4 +1,4 @@
-# BUG-009: Strategy name mismatch in _allocate_candidates causing 0 selections
+# BUG-009: Strategy name mismatch in \_allocate_candidates causing 0 selections
 
 **Date:** 2026-04-02
 **Severity:** High
@@ -25,11 +25,13 @@ Phase 2 (Strategy Screening) found 10 candidates from Shoryuken strategy, but Ph
 The `_allocate_candidates` method in `core/screener.py` was comparing `candidate.strategy` (strategy NAME like `"PullbackEntry"`) to `StrategyType.value` (like `"Shoryuken"`).
 
 **StrategyType enum values:**
+
 - `EP = "EP"`
 - `SHORYUKEN = "Shoryuken"`
 - etc.
 
 **Strategy NAME attributes:**
+
 - `MomentumBreakout.NAME = "MomentumBreakout"`
 - `PullbackEntry.NAME = "PullbackEntry"`
 - etc.
@@ -39,6 +41,7 @@ The `candidate.strategy` field is populated from `self.NAME` in each strategy, b
 ## Fix Applied
 
 1. Added new mapping `STRATEGY_NAME_TO_GROUP` that maps strategy NAME to group:
+
 ```python
 STRATEGY_NAME_TO_GROUP = {
     "MomentumBreakout": "breakout_momentum",
@@ -53,6 +56,7 @@ STRATEGY_NAME_TO_GROUP = {
 2. Updated `_allocate_candidates` to use the new mapping instead of `STRATEGY_GROUPS`.
 
 ## Files Modified
+
 - `core/screener.py` - Added `STRATEGY_NAME_TO_GROUP` mapping and updated `_allocate_candidates` method
 
 ## Verification

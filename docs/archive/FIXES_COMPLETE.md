@@ -10,17 +10,17 @@
 
 All 34 documented mismatches between code and Strategy_Description_v5.md have been fixed.
 
-| Strategy | Critical | High | Medium | Total | Status |
-|----------|----------|------|--------|-------|--------|
-| A | 3 | 5 | 3 | 11 | ✅ FIXED |
-| B | 1 | 1 | 1 | 3 | ✅ FIXED |
-| C | 1 | 2 | 2 | 5 | ✅ FIXED |
-| D | 1 | 2 | 2 | 5 | ✅ FIXED |
-| E | 0 | 3 | 1 | 4 | ✅ FIXED |
-| F | 0 | 2 | 1 | 3 | ✅ FIXED |
-| G | 1 | 2 | 0 | 3 | ✅ FIXED |
-| H | 0 | 3 | 1 | 4 | 4 | ✅ FIXED |
-| **TOTAL** | **7** | **20** | **11** | **38** | ✅ **DONE** |
+| Strategy  | Critical | High   | Medium | Total  | Status      |
+| --------- | -------- | ------ | ------ | ------ | ----------- | -------- |
+| A         | 3        | 5      | 3      | 11     | ✅ FIXED    |
+| B         | 1        | 1      | 1      | 3      | ✅ FIXED    |
+| C         | 1        | 2      | 2      | 5      | ✅ FIXED    |
+| D         | 1        | 2      | 2      | 5      | ✅ FIXED    |
+| E         | 0        | 3      | 1      | 4      | ✅ FIXED    |
+| F         | 0        | 2      | 1      | 3      | ✅ FIXED    |
+| G         | 1        | 2      | 0      | 3      | ✅ FIXED    |
+| H         | 0        | 3      | 1      | 4      | 4           | ✅ FIXED |
+| **TOTAL** | **7**    | **20** | **11** | **38** | ✅ **DONE** |
 
 ---
 
@@ -51,9 +51,11 @@ fe1ff96 fix: correct Strategy A dimension max scores
 ### Strategy A: MomentumBreakout ✅
 
 **Dimension Scores Fixed:**
+
 - BS max: 5.0 → 4.0 (breakout % 0-2.5, energy 0-1.5)
 
 **Pre-filters Removed (NOT in docs):**
+
 - $50M dollar volume check
 - ADR >= 1.5% check
 - EMA50 distance < 20% check
@@ -61,11 +63,13 @@ fe1ff96 fix: correct Strategy A dimension max scores
 - 52-week high < 10% hard filter
 
 **Pre-filters Added (in docs):**
+
 - Price > EMA200
 - 3-month return >= -20%
 - Avg 20d volume >= 100K
 
 **Bonus Pool Implemented:**
+
 - VCP structure: 2.0 max
 - Sector leadership: 0.5 max
 - Earnings catalyst: 0.5 max
@@ -73,6 +77,7 @@ fe1ff96 fix: correct Strategy A dimension max scores
 - Total capped at 3.0
 
 **Entry/Exit Fixed:**
+
 - Pattern-specific stops (VCP/flat/ascending: 0.98, HTF: 0.985, loose: -1.5 ATR)
 - 8% stop floor: `max(stop, entry × 0.92)`
 - S-tier 4R target, others 3R
@@ -82,6 +87,7 @@ fe1ff96 fix: correct Strategy A dimension max scores
 ### Strategy B: PullbackEntry ✅
 
 **Bonus Pool Fixed:**
+
 - Changed from flat +2 for sector count >= 3
 - To ETF-based sector leadership 0-1.0:
   - RS >= 90th AND > EMA50: 1.0
@@ -93,12 +99,14 @@ fe1ff96 fix: correct Strategy A dimension max scores
 ### Strategy C: SupportBounce ✅
 
 **VD Dimension Fixed:**
+
 - Changed from simple volume ratio to 3-phase pattern:
   - Phase 1 - Climax: 0-1.5 pts (>=3× avg20d)
   - Phase 2 - Dry-up: 0-1.5 pts (<0.6× avg)
   - Phase 3 - Surge: 0-2.0 pts (>=2× on reclaim)
 
 **RB Dimension Fixed:**
+
 - Added sector alignment: 0-1.0 pts
   - Sector ETF > EMA50 by >2%: 1.0
   - Within EMA50±2%: 0.5
@@ -109,10 +117,12 @@ fe1ff96 fix: correct Strategy A dimension max scores
 ### Strategy D: DistributionTop ✅
 
 **DS Dimension Fixed:**
+
 - Added price action exhaustion detection: 0-2.0 pts
   - Shooting star, failed breakout, long upper wick, gap fade
 
 **RL Dimension Fixed:**
+
 - Added interval quality: 0-1.5 pts
   - 15-30 days between touches: 1.5
   - 10-15 days: 1.0-1.5
@@ -123,15 +133,18 @@ fe1ff96 fix: correct Strategy A dimension max scores
 ### Strategy E: AccumulationBottom ✅
 
 **Pre-filters Fixed:**
+
 - Market cap: $2B → $3B
 - Volume: 100K → 200K
 - Listed age: 60 → 180 days
 
 **AS Dimension Fixed:**
+
 - Added price action strength: 0-2.0 pts
   - Hammer, failed breakdown, long lower wick, gap reversal
 
 **VC Dimension Fixed:**
+
 - Surge: 0-3.0 → 0-2.0
 - Added follow-through: 0-1.0 pts
 
@@ -140,6 +153,7 @@ fe1ff96 fix: correct Strategy A dimension max scores
 ### Strategy F: CapitulationRebound ✅
 
 **MO Dimension Fixed:**
+
 - RSI thresholds per docs:
   - <12: 3.0
   - 12-15: 2.5-3.0 (interpolate)
@@ -147,11 +161,13 @@ fe1ff96 fix: correct Strategy A dimension max scores
   - 18-22: 1.0-2.0 (interpolate)
 
 **EX Dimension Fixed:**
+
 - Added consecutive down-days: 0-1.0 pts
-  - >=5 days: 1.0
+  - > =5 days: 1.0
   - 3-4 days: 0.5
 
 **Pre-filter Fixed:**
+
 - ATR multiplier: 5.0 → 4.0
 
 ---
@@ -159,9 +175,11 @@ fe1ff96 fix: correct Strategy A dimension max scores
 ### Strategy G: EarningsGap ✅
 
 **TC Dimension Fixed:**
+
 - Max score: 4.0 → 3.0
 
 **GS Dimension Fixed:**
+
 - Changed from gap size only (0-4.0)
 - To full 3-component scoring:
   - Gap size: 0-2.5
@@ -169,6 +187,7 @@ fe1ff96 fix: correct Strategy A dimension max scores
   - Initial bar quality (CLV): 0-1.0
 
 **Pre-filter Fixed:**
+
 - Price: $2 → $10
 
 ---
@@ -176,6 +195,7 @@ fe1ff96 fix: correct Strategy A dimension max scores
 ### Strategy H: RelativeStrengthLong ✅
 
 **RD Dimension Fixed:**
+
 - Changed from simple RS percentile (0-4.0)
 - To 3-component scoring (6.0 max):
   - RS percentile: 0-3.0
@@ -183,9 +203,11 @@ fe1ff96 fix: correct Strategy A dimension max scores
   - Consistency (outperf days): 0-1.0
 
 **SH Dimension Fixed:**
+
 - Added recent trend: 0-0.5 pts (if 5d return > 0)
 
 **CQ Dimension Fixed:**
+
 - Replaced ADR with relative volatility vs SPY: 0-1.5 pts
 
 ---
@@ -206,6 +228,7 @@ fe1ff96 fix: correct Strategy A dimension max scores
 ## Verification
 
 All strategies verified against Strategy_Description_v5.md:
+
 - ✅ All dimension max scores match
 - ✅ All pre-filters match Tier 1 tables
 - ✅ All scoring components implemented

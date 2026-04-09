@@ -15,6 +15,7 @@
 ### Task 1: Fix secrets.json file permissions
 
 **Files:**
+
 - Modify: `config/secrets.json` (file permissions only)
 
 **Issue:** API keys stored with world-readable permissions (644)
@@ -41,6 +42,7 @@ git commit -m "security: restrict secrets.json permissions to owner-only"
 ### Task 2: Add input validation to Flask API
 
 **Files:**
+
 - Modify: `api/server.py:178, 203`
 
 **Issue:** Stock symbols not validated against whitelist/format
@@ -62,6 +64,7 @@ def validate_symbol(symbol: str) -> bool:
 - [ ] **Step 2: Apply validation to get_stock_data endpoint**
 
 Locate around line 178:
+
 ```python
 @app.route('/api/stock/<symbol>')
 def get_stock_data(symbol):
@@ -75,6 +78,7 @@ def get_stock_data(symbol):
 - [ ] **Step 3: Apply validation to scan_symbol endpoint**
 
 Locate around line 203:
+
 ```python
 @app.route('/api/scan/<symbol>')
 def scan_symbol(symbol):
@@ -97,6 +101,7 @@ git commit -m "security: add stock symbol validation to API endpoints"
 ### Task 3: Fix Flask debug mode security
 
 **Files:**
+
 - Modify: `api/server.py:301`
 
 **Issue:** Debug parameter can be enabled in production
@@ -128,15 +133,17 @@ git commit -m "security: use environment variable for Flask debug mode"
 ### Task 4: Replace all bare except clauses
 
 **Files:**
+
 - Modify: `core/screener.py:383`
 - Modify: `core/reporter.py:173`
 - Modify: `core/indicators.py:677, 1018`
 
 **Issue:** Bare `except:` masks critical errors
 
-- [ ] **Step 1: Fix screener.py _check_basic_requirements**
+- [ ] **Step 1: Fix screener.py \_check_basic_requirements**
 
 Locate line 276-277:
+
 ```python
 # Replace:
 except:
@@ -150,6 +157,7 @@ except (KeyError, IndexError, AttributeError, ValueError) as e:
 - [ ] **Step 2: Fix reporter.py timestamp parsing**
 
 Locate around line 173:
+
 ```python
 # Replace:
 except:
@@ -160,9 +168,10 @@ except (ValueError, KeyError, TypeError) as e:
     sentiment['timestamp'] = 'Unknown'
 ```
 
-- [ ] **Step 3: Fix indicators.py _detect_blow_off**
+- [ ] **Step 3: Fix indicators.py \_detect_blow_off**
 
 Locate around line 677:
+
 ```python
 # Replace:
 except:
@@ -173,9 +182,10 @@ except (KeyError, IndexError, ValueError) as e:
     return 0
 ```
 
-- [ ] **Step 4: Fix indicators.py _calculate_clv_for_index**
+- [ ] **Step 4: Fix indicators.py \_calculate_clv_for_index**
 
 Locate around line 1018:
+
 ```python
 # Replace:
 except:
@@ -198,6 +208,7 @@ git commit -m "fix: replace bare except clauses with specific exceptions"
 ### Task 5: Fix thread-unsafe global cache
 
 **Files:**
+
 - Modify: `core/indicators.py:30-32`
 
 **Issue:** Class-level cache without thread synchronization
@@ -212,6 +223,7 @@ import threading
 - [ ] **Step 2: Add lock to class definition**
 
 Replace lines 30-32:
+
 ```python
 class TechnicalIndicators:
     """Calculate technical indicators for stock analysis with caching."""
@@ -226,6 +238,7 @@ class TechnicalIndicators:
 - [ ] **Step 3: Wrap cache access with lock**
 
 In `calculate_all()` method, replace cache check:
+
 ```python
 # Replace:
 if cache_key in TechnicalIndicators._cache:
@@ -241,6 +254,7 @@ with TechnicalIndicators._cache_lock:
 ```
 
 And cache storage:
+
 ```python
 # Replace:
 TechnicalIndicators._cache[cache_key] = self.indicators
@@ -261,6 +275,7 @@ git commit -m "fix: add thread-safe locking to indicator cache"
 ### Task 6: Fix IndexError vulnerabilities in screener
 
 **Files:**
+
 - Modify: `core/screener.py:101-102, 136, 139, 142, 146`
 
 **Issue:** DataFrame index access without bounds checking
@@ -268,6 +283,7 @@ git commit -m "fix: add thread-safe locking to indicator cache"
 - [ ] **Step 1: Fix SPY data access**
 
 Locate lines 100-103:
+
 ```python
 # Replace:
 if self._spy_data is not None and len(self._spy_data) >= 5:
@@ -285,6 +301,7 @@ else:
 - [ ] **Step 2: Fix returns calculations with proper bounds**
 
 Locate lines 134-147:
+
 ```python
 # Replace entire block with:
 returns = {}
@@ -314,13 +331,15 @@ git commit -m "fix: add bounds checking for DataFrame index access in screener"
 ### Task 7: Fix None dereference in strategy pipeline
 
 **Files:**
+
 - Modify: `core/strategies/base_strategy.py:184-186`
 
 **Issue:** `_get_data` can return None but code assumes DataFrame
 
-- [ ] **Step 1: Fix _get_data return handling in screen method**
+- [ ] **Step 1: Fix \_get_data return handling in screen method**
 
 Locate lines 182-186:
+
 ```python
 # Replace:
 df = self._get_data(symbol)
@@ -350,11 +369,12 @@ git commit -m "fix: add proper None/type checking for DataFrame in strategy pipe
 ### Task 8: Fix timezone inconsistency in cache merging
 
 **Files:**
+
 - Modify: `core/fetcher.py:150`
 
 **Issue:** yfinance data may have timezone-aware timestamps while cached data is naive
 
-- [ ] **Step 1: Add timezone normalization in _merge_with_cache**
+- [ ] **Step 1: Add timezone normalization in \_merge_with_cache**
 
 ```python
 # Before cache merge logic, add:
@@ -368,6 +388,7 @@ def _normalize_timezone(self, df: pd.DataFrame) -> pd.DataFrame:
 - [ ] **Step 2: Apply normalization before comparison**
 
 Locate cache merging code:
+
 ```python
 # Before the merge, normalize both DataFrames:
 cached_df = self._normalize_timezone(cached_df)
@@ -386,6 +407,7 @@ git commit -m "fix: normalize timezone before cache merging"
 ### Task 9: Fix date parsing in fetcher
 
 **Files:**
+
 - Modify: `core/fetcher.py:245`
 
 **Issue:** `str(date)[:10]` produces malformed dates
@@ -393,6 +415,7 @@ git commit -m "fix: normalize timezone before cache merging"
 - [ ] **Step 1: Replace with proper date formatting**
 
 Locate line 245:
+
 ```python
 # Replace:
 str(date)[:10]
@@ -412,6 +435,7 @@ git commit -m "fix: use proper date formatting instead of string slicing"
 ### Task 10: Fix NaN handling in type conversions
 
 **Files:**
+
 - Modify: `core/fetcher.py:248-252`
 
 **Issue:** Aggressive type conversion without null checks
@@ -419,6 +443,7 @@ git commit -m "fix: use proper date formatting instead of string slicing"
 - [ ] **Step 1: Add null checks before conversions**
 
 Locate lines 248-252:
+
 ```python
 # Replace with:
 for col in ['open', 'high', 'low', 'close']:
@@ -444,6 +469,7 @@ git commit -m "fix: add NaN/null checks before type conversions in fetcher"
 ### Task 11: Fix JSON parsing in analyzer
 
 **Files:**
+
 - Modify: `core/analyzer.py:270-273`
 
 **Issue:** Fragile regex extraction and unhandled json.loads
@@ -451,6 +477,7 @@ git commit -m "fix: add NaN/null checks before type conversions in fetcher"
 - [ ] **Step 1: Add robust JSON extraction with error handling**
 
 Locate lines 270-273:
+
 ```python
 # Replace with:
 try:
@@ -478,6 +505,7 @@ git commit -m "fix: add robust JSON parsing with error handling"
 ### Task 12: Fix KeyError in API response parsing
 
 **Files:**
+
 - Modify: `core/ai_confidence_scorer.py:405`
 
 **Issue:** Assumes nested structure exists without validation
@@ -485,6 +513,7 @@ git commit -m "fix: add robust JSON parsing with error handling"
 - [ ] **Step 1: Add safe navigation for API response**
 
 Locate line 405:
+
 ```python
 # Replace:
 content = result['choices'][0]['message']['content']
@@ -513,6 +542,7 @@ git commit -m "fix: add safe navigation for AI API response parsing"
 ### Task 13: Fix RSI divergence logic
 
 **Files:**
+
 - Modify: `core/strategies/double_top_bottom.py:543-552`
 
 **Issue:** `tail(20).head(10)` gets wrong historical period
@@ -568,6 +598,7 @@ git commit -m "fix: correct RSI divergence logic to compare proper time periods"
 ### Task 14: Fix ATR percentage calculation
 
 **Files:**
+
 - Modify: `core/indicators.py:166`
 
 **Issue:** Returns percentage instead of decimal
@@ -575,6 +606,7 @@ git commit -m "fix: correct RSI divergence logic to compare proper time periods"
 - [ ] **Step 1: Fix ATR percentage calculation**
 
 Locate line 166:
+
 ```python
 # Replace:
 atr_pct = (atr / current_price) * 100
@@ -585,6 +617,7 @@ atr_pct = atr / current_price if current_price > 0 else None
 - [ ] **Step 2: Add division by zero protection**
 
 Also add check for current_price:
+
 ```python
 if current_price <= 0:
     return {'atr': atr, 'atr_pct': None}
@@ -602,6 +635,7 @@ git commit -m "fix: remove *100 from ATR percentage (return decimal not percenta
 ### Task 15: Fix gap detection off-by-one
 
 **Files:**
+
 - Modify: `core/indicators.py:291-297`
 
 **Issue:** Loop skips yesterday which should be included
@@ -635,6 +669,7 @@ git commit -m "fix: correct gap detection to include all 5 days"
 ### Task 16: Fix RangeShort risk/reward calculation
 
 **Files:**
+
 - Modify: `core/strategies/range_short.py:294-299`
 
 **Issue:** Incorrect use of abs() for short positions
@@ -662,6 +697,7 @@ git commit -m "fix: correct risk/reward calculation for short positions"
 ### Task 17: Add bounds checking to scoring_utils
 
 **Files:**
+
 - Modify: `core/scoring_utils/__init__.py:262-278, 284-317`
 
 **Issue:** Missing bounds checking in detect_market_direction and check_vix_filter
@@ -747,6 +783,7 @@ git commit -m "fix: add bounds checking to market direction and VIX filter funct
 ### Task 18: Fix shared market_data in strategies
 
 **Files:**
+
 - Modify: `core/strategies/base_strategy.py:71`
 
 **Issue:** `market_data` dictionary shared across strategy instances
@@ -754,6 +791,7 @@ git commit -m "fix: add bounds checking to market direction and VIX filter funct
 - [ ] **Step 1: Make market_data instance-specific**
 
 Locate line 71:
+
 ```python
 # Replace:
 self.market_data: Dict[str, pd.DataFrame] = {}
@@ -763,6 +801,7 @@ self.market_data: Dict[str, pd.DataFrame] = {} if market_data is None else marke
 ```
 
 Actually, better approach - just ensure each instance gets its own dict:
+
 ```python
 # In __init__, line 71:
 self.market_data: Dict[str, pd.DataFrame] = {}
@@ -779,6 +818,7 @@ Actually, the current code is correct - each instance gets its own empty dict. T
 ### Task 19: Update Strategy_Description.md dimension names
 
 **Files:**
+
 - Modify: `docs/Strategy_Description.md`
 
 **Issue:** Dimension names in docs don't match code
@@ -786,8 +826,10 @@ Actually, the current code is correct - each instance gets its own empty dict. T
 - [ ] **Step 1: Update MomentumBreakout dimensions**
 
 Find Section A and update:
+
 ```markdown
 **Dimensions (4):**
+
 - PQ: Platform Quality
 - BS: Breakout Strength
 - VC: Volume Confirmation
@@ -797,8 +839,10 @@ Find Section A and update:
 - [ ] **Step 2: Update PullbackEntry dimensions**
 
 Find Section B and update:
+
 ```markdown
 **Dimensions (4):**
+
 - TI: Trend Intensity
 - RC: Retracement Structure
 - VC: Volume Confirmation
@@ -808,8 +852,10 @@ Find Section B and update:
 - [ ] **Step 3: Update SupportBounce dimensions**
 
 Find Section C and update (note it's 3 dimensions in code):
+
 ```markdown
 **Dimensions (3):**
+
 - SQ: Support Quality
 - VD: Volume Dynamics
 - RB: Reversal Breadth
@@ -818,8 +864,10 @@ Find Section C and update (note it's 3 dimensions in code):
 - [ ] **Step 4: Update RangeShort dimensions**
 
 Find Section D and update (note it's 3 dimensions in code):
+
 ```markdown
 **Dimensions (3):**
+
 - TQ: Trend Quality
 - RL: Range Location
 - VC: Volume Confirmation
@@ -837,6 +885,7 @@ git commit -m "docs: align dimension names with code implementation"
 ### Task 20: Add missing features documentation
 
 **Files:**
+
 - Modify: `docs/Strategy_Description.md`
 
 **Issue:** Several features undocumented
@@ -844,8 +893,10 @@ git commit -m "docs: align dimension names with code implementation"
 - [ ] **Step 1: Add market direction filtering documentation**
 
 Add new section to each relevant strategy:
+
 ```markdown
 **Market Direction Filter:**
+
 - Long signals only in accumulation environment (price > EMA50)
 - Short signals only in distribution environment (price < EMA50)
 - SPY trend analysis used for direction determination
@@ -854,8 +905,10 @@ Add new section to each relevant strategy:
 - [ ] **Step 2: Add VIX second wave filter documentation**
 
 Add to CapitulationRebound:
+
 ```markdown
 **VIX Risk Filter:**
+
 - VIX > 30 with positive slope: Reject signals
 - VIX > 25: Limit position size to Tier B maximum
 - VIX < 25: Normal position sizing
@@ -864,8 +917,10 @@ Add to CapitulationRebound:
 - [ ] **Step 3: Add position limit documentation**
 
 Add to relevant strategies:
+
 ```markdown
 **Position Size Limits:**
+
 - DoubleTopBottom: Left-side signals capped at Tier B (5%) maximum
 - CapitulationRebound: VIX > 25 limits to Tier B maximum
 ```
@@ -884,6 +939,7 @@ git commit -m "docs: add missing risk management and filtering features"
 ### Task 21: Run test scan to verify fixes
 
 **Files:**
+
 - Run: `scheduler.py --test`
 
 - [ ] **Step 1: Run test scan**
@@ -925,14 +981,14 @@ All critical and high-severity bugs fixed.
 
 ## Summary
 
-| Phase | Tasks | Description |
-|-------|-------|-------------|
-| 1 | 1-3 | Security fixes (permissions, validation, debug mode) |
-| 2 | 4-7 | Runtime error fixes (exceptions, threading, bounds) |
-| 3 | 8-12 | Data pipeline fixes (timezone, parsing, JSON) |
-| 4 | 13-17 | Strategy logic fixes (RSI, ATR, gaps, R/R) |
-| 5 | 18 | Shared state (skip - already correct) |
-| 6 | 19-20 | Documentation alignment |
-| 7 | 21-22 | Testing and verification |
+| Phase | Tasks | Description                                          |
+| ----- | ----- | ---------------------------------------------------- |
+| 1     | 1-3   | Security fixes (permissions, validation, debug mode) |
+| 2     | 4-7   | Runtime error fixes (exceptions, threading, bounds)  |
+| 3     | 8-12  | Data pipeline fixes (timezone, parsing, JSON)        |
+| 4     | 13-17 | Strategy logic fixes (RSI, ATR, gaps, R/R)           |
+| 5     | 18    | Shared state (skip - already correct)                |
+| 6     | 19-20 | Documentation alignment                              |
+| 7     | 21-22 | Testing and verification                             |
 
 **Total: 21 tasks**

@@ -14,6 +14,7 @@ The Trade Scanner uses a **static CSV file** (`nasdaq_stocklist_screener.csv`) a
 ### Market Cap Filter
 
 Only stocks with market cap >= $2B are included in the scan:
+
 - Fetched from yfinance during Phase 0
 - Stored in `stocks.market_cap` column
 - Updated on each universe sync
@@ -25,12 +26,14 @@ Only stocks with market cap >= $2B are included in the scan:
 ### Method 1: CSV File (Recommended)
 
 Edit `nasdaq_stocklist_screener.csv`:
+
 ```csv
 symbol,name,sector,category
 NEW_TICKER,Company Name,Technology,stocks
 ```
 
 Then re-initialize the database:
+
 ```bash
 python -c "from core.stock_universe import StockUniverseManager; StockUniverseManager().initialize_database()"
 ```
@@ -191,6 +194,7 @@ CREATE TABLE tier3_cache (
 ## CSV File Format
 
 The `nasdaq_stocklist_screener.csv` format:
+
 ```csv
 symbol,name,sector,category
 AAPL,Apple Inc,Technology,stocks

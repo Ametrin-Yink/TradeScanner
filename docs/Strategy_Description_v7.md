@@ -8,16 +8,16 @@
 
 ### Indicators
 
-| Indicator | Formula |
-|-----------|---------|
-| ATR14 | SMA(TR, 14); TR = max(H−L, \|H−C_prev\|, \|L−C_prev\|) |
-| EMA(n) | C × m + EMA_prev × (1−m); m = 2/(n+1) |
-| RSI14 | 100 − 100/(1 + SMA(gain,14)/SMA(loss,14)) |
-| CLV | (close − low) / (high − low) |
-| S_norm | (EMA21_today − EMA21_5d) / ATR14 |
-| RS_pct | percentile_rank(stock_63d_return / SPY_63d_return, universe) |
-| accum_ratio | sum(vol on up-days, 15d) / sum(vol on down-days, 15d) |
-| dollar_vol | close × avg_volume_20d |
+| Indicator   | Formula                                                      |
+| ----------- | ------------------------------------------------------------ |
+| ATR14       | SMA(TR, 14); TR = max(H−L, \|H−C_prev\|, \|L−C_prev\|)       |
+| EMA(n)      | C × m + EMA_prev × (1−m); m = 2/(n+1)                        |
+| RSI14       | 100 − 100/(1 + SMA(gain,14)/SMA(loss,14))                    |
+| CLV         | (close − low) / (high − low)                                 |
+| S_norm      | (EMA21_today − EMA21_5d) / ATR14                             |
+| RS_pct      | percentile_rank(stock_63d_return / SPY_63d_return, universe) |
+| accum_ratio | sum(vol on up-days, 15d) / sum(vol on down-days, 15d)        |
+| dollar_vol  | close × avg_volume_20d                                       |
 
 ### Scoring & Tiers
 
@@ -28,31 +28,31 @@ normalized = (raw_score / strategy_max) * 15.0
 ```
 
 | Normalized | Tier | Base Position |
-|------------|------|---------------|
-| ≥ 12.0 | S | 20% |
-| ≥ 9.0 | A | 10% |
-| ≥ 7.0 | B | 5% |
-| < 7.0 | C | 0% |
+| ---------- | ---- | ------------- |
+| ≥ 12.0     | S    | 20%           |
+| ≥ 9.0      | A    | 10%           |
+| ≥ 7.0      | B    | 5%            |
+| < 7.0      | C    | 0%            |
 
 ### Regime-Adaptive Position Sizing
 
-| Regime | Long | Short | Exemptions |
-|--------|------|-------|------------|
-| bull_strong | 1.0× | 0.3× | — |
-| bull_moderate | 1.0× | 0.3× | — |
-| neutral | 0.8× | 0.8× | — |
-| bear_moderate | 0.5× | 1.0× | — |
-| bear_strong | 0.5× | 1.0× | — |
-| extreme_vix | 0.3× | 0.5× | F, H → 1.0× |
+| Regime        | Long | Short | Exemptions  |
+| ------------- | ---- | ----- | ----------- |
+| bull_strong   | 1.0× | 0.3×  | —           |
+| bull_moderate | 1.0× | 0.3×  | —           |
+| neutral       | 0.8× | 0.8×  | —           |
+| bear_moderate | 0.5× | 1.0×  | —           |
+| bear_strong   | 0.5× | 1.0×  | —           |
+| extreme_vix   | 0.3× | 0.5×  | F, H → 1.0× |
 
 ### Trailing Stops (4-stage)
 
-| Stage | Trigger | Stop Action |
-|-------|---------|-------------|
-| 1→2 | +1×risk | Move to breakeven |
-| 2→3 | +2.5×risk | Hold at +1×risk |
-| 3→4 | +4×risk | Chandelier: HH − 3×ATR |
-| 4 extended | Price > 1.20×EMA21 | Trail EMA8 daily |
+| Stage      | Trigger            | Stop Action            |
+| ---------- | ------------------ | ---------------------- |
+| 1→2        | +1×risk            | Move to breakeven      |
+| 2→3        | +2.5×risk          | Hold at +1×risk        |
+| 3→4        | +4×risk            | Chandelier: HH − 3×ATR |
+| 4 extended | Price > 1.20×EMA21 | Trail EMA8 daily       |
 
 Short-side: inverted. Chandelier = LL + 3×ATR.
 
@@ -71,14 +71,14 @@ def interp(v, lo, hi, s_lo, s_hi):
 
 Phase 1 AI regime → 30 slots total. A-slots filled by A1 first, then A2.
 
-| Regime | A | B | C | D | E | F | G | H |
-|--------|---|---|---|---|---|---|---|---|
-| bull_strong | 8 | 6 | 4 | 0 | 0 | 0 | 8 | 4 |
-| bull_moderate | 8 | 6 | 4 | 0 | 0 | 0 | 8 | 4 |
-| neutral | 6 | 5 | 5 | 4 | 4 | 0 | 3 | 3 |
-| bear_moderate | 4 | 4 | 4 | 5 | 5 | 2 | 0 | 6 |
-| bear_strong | 2 | 0 | 4 | 6 | 6 | 8 | 0 | 4 |
-| extreme_vix | 0 | 0 | 0 | 3 | 3 | 12 | 0 | 12 |
+| Regime        | A   | B   | C   | D   | E   | F   | G   | H   |
+| ------------- | --- | --- | --- | --- | --- | --- | --- | --- |
+| bull_strong   | 8   | 6   | 4   | 0   | 0   | 0   | 8   | 4   |
+| bull_moderate | 8   | 6   | 4   | 0   | 0   | 0   | 8   | 4   |
+| neutral       | 6   | 5   | 5   | 4   | 4   | 0   | 3   | 3   |
+| bear_moderate | 4   | 4   | 4   | 5   | 5   | 2   | 0   | 6   |
+| bear_strong   | 2   | 0   | 4   | 6   | 6   | 8   | 0   | 4   |
+| extreme_vix   | 0   | 0   | 0   | 3   | 3   | 12  | 0   | 12  |
 
 Strategies with 0 slots skip Phase 2 entirely.
 
@@ -92,35 +92,35 @@ A has two internal sub-modes. A-slots are filled by A1 first; remaining slots us
 
 ### Pre-filter (shared)
 
-| Filter | Condition |
-|--------|-----------|
-| RS_pct | ≥ 50th (hard gate) |
-| Price | > EMA200 |
-| 3-month return | ≥ −20% |
-| Market cap | ≥ $2B |
-| Avg vol 20d | ≥ 100K |
+| Filter         | Condition          |
+| -------------- | ------------------ |
+| RS_pct         | ≥ 50th (hard gate) |
+| Price          | > EMA200           |
+| 3-month return | ≥ −20%             |
+| Market cap     | ≥ $2B              |
+| Avg vol 20d    | ≥ 100K             |
 
 ### TC — Trend Context (max 5.0)
 
-| RS_pct | Score | EMA Structure | Score | 52w High proximity | Score |
-|--------|-------|---------------|-------|--------------------|-------|
-| ≥90th | 2.0 | Price>EMA50×1.05 | +1.0 | ≤5% | 1.0 |
-| 75–90th | 1.5–2.0 | Price>EMA200 | +0.5 | 5–15% | interp→0 |
-| 60–75th | 1.0–1.5 | EMA50>EMA200 | +0.5 | >15% | 0 |
-| 50–60th | 0.5–1.0 | | | | |
-| <50th | reject | | | | |
+| RS_pct  | Score   | EMA Structure    | Score | 52w High proximity | Score    |
+| ------- | ------- | ---------------- | ----- | ------------------ | -------- |
+| ≥90th   | 2.0     | Price>EMA50×1.05 | +1.0  | ≤5%                | 1.0      |
+| 75–90th | 1.5–2.0 | Price>EMA200     | +0.5  | 5–15%              | interp→0 |
+| 60–75th | 1.0–1.5 | EMA50>EMA200     | +0.5  | >15%               | 0        |
+| 50–60th | 0.5–1.0 |                  |       |                    |          |
+| <50th   | reject  |                  |       |                    |          |
 
 ### CQ — Consolidation Quality (max 4.0)
 
 Pattern detection (first match wins):
 
-| Pattern | Requirements | Base Score |
-|---------|--------------|------------|
-| VCP | 15–60d, range<12%, >50% days ±2.5%, last 5d vol<70% avg, ≥2 waves | 0.80–1.00 |
-| High tight flag | Prior +30% in ≤8w, pullback 8–30%, flag 2–6w | 0.61–0.72 |
-| Flat base | Range<15%, EMA21 slope<0.3×ATR/5d, 3–15w | 0.55–0.75 |
-| Ascending | ≥3 higher lows, range 10–25%, 4–12w | 0.62 |
-| Loose | Range<20%, ≥10d | 0.15–0.40 |
+| Pattern         | Requirements                                                      | Base Score |
+| --------------- | ----------------------------------------------------------------- | ---------- |
+| VCP             | 15–60d, range<12%, >50% days ±2.5%, last 5d vol<70% avg, ≥2 waves | 0.80–1.00  |
+| High tight flag | Prior +30% in ≤8w, pullback 8–30%, flag 2–6w                      | 0.61–0.72  |
+| Flat base       | Range<15%, EMA21 slope<0.3×ATR/5d, 3–15w                          | 0.55–0.75  |
+| Ascending       | ≥3 higher lows, range 10–25%, 4–12w                               | 0.62       |
+| Loose           | Range<20%, ≥10d                                                   | 0.15–0.40  |
 
 ```
 cq_base = pattern_score × 3.0
@@ -130,24 +130,24 @@ CQ = min(cq_base + duration_bonus, 4.0)
 
 ### A1: BS — Breakout Strength (max 4.0)
 
-| Breakout % above pivot | Score | Vol / avg20d | Score |
-|------------------------|-------|--------------|-------|
-| ≥5% | 2.5 | ≥3.0× | 1.5 |
-| 3–5% | 2.0–2.5 | 2–3× | 1.0–1.5 |
-| 2–3% | 1.5–2.0 | 1.5–2× | 0.5–1.0 |
-| 1–2% | 0.5–1.5 | 1–1.5× | 0–0.5 |
-| <1% | 0–0.5 | <1× | 0 |
+| Breakout % above pivot | Score   | Vol / avg20d | Score   |
+| ---------------------- | ------- | ------------ | ------- |
+| ≥5%                    | 2.5     | ≥3.0×        | 1.5     |
+| 3–5%                   | 2.0–2.5 | 2–3×         | 1.0–1.5 |
+| 2–3%                   | 1.5–2.0 | 1.5–2×       | 0.5–1.0 |
+| 1–2%                   | 0.5–1.5 | 1–1.5×       | 0–0.5   |
+| <1%                    | 0–0.5   | <1×          | 0       |
 
-### A2: CP — Compression Score (max 4.0) *(replaces BS)*
+### A2: CP — Compression Score (max 4.0) _(replaces BS)_
 
 A2 triggers when price is still inside base, within 3% of pivot. CP replaces BS.
 
 | Vol contraction (last 5d avg / avg20d) | Score | Range contraction (last 5d range / 20d ATR) | Score |
-|----------------------------------------|-------|---------------------------------------------|-------|
-| <50% | 1.5 | <50% | 1.5 |
-| 50–65% | 0.8 | 50–70% | 0.8 |
-| 65–80% | 0.3 | 70–90% | 0.3 |
-| >80% | 0 | >90% | 0 |
+| -------------------------------------- | ----- | ------------------------------------------- | ----- |
+| <50%                                   | 1.5   | <50%                                        | 1.5   |
+| 50–65%                                 | 0.8   | 50–70%                                      | 0.8   |
+| 65–80%                                 | 0.3   | 70–90%                                      | 0.3   |
+| >80%                                   | 0     | >90%                                        | 0     |
 
 Wave count bonus: +1.0 if ≥3 contraction waves detected.
 Proximity gate: within 1.5% of pivot = full score; 1.5–3% = interpolate to 0; >3% = reject A2.
@@ -158,28 +158,28 @@ Proximity gate: within 1.5% of pivot = full score; 1.5–3% = interpolate to 0; 
 
 **A1 VC:**
 
-| Base vol (last 5d / avg20d) | Score | Breakout vol | Score | CLV | Score |
-|-----------------------------|-------|--------------|-------|-----|-------|
-| <0.65 | 2.0 | ≥3× | 1.5 | ≥0.85 | 0.5 |
-| 0.65–0.80 | 0.8–2.0 | 2–3× | 1.0–1.5 | 0.65–0.85 | 0–0.5 |
-| 0.80–1.00 | 0.2–0.8 | 1.5–2× | 0.5–1.0 | <0.65 | 0 |
-| >1.00 | 0.2 (floor) | <1.5× | 0–0.5 | | |
+| Base vol (last 5d / avg20d) | Score       | Breakout vol | Score   | CLV       | Score |
+| --------------------------- | ----------- | ------------ | ------- | --------- | ----- |
+| <0.65                       | 2.0         | ≥3×          | 1.5     | ≥0.85     | 0.5   |
+| 0.65–0.80                   | 0.8–2.0     | 2–3×         | 1.0–1.5 | 0.65–0.85 | 0–0.5 |
+| 0.80–1.00                   | 0.2–0.8     | 1.5–2×       | 0.5–1.0 | <0.65     | 0     |
+| >1.00                       | 0.2 (floor) | <1.5×        | 0–0.5   |           |       |
 
 **A2 VC:**
 
 | Last 5d avg vol / avg20d | Score | CLV last 5d avg | Score |
-|--------------------------|-------|-----------------|-------|
-| <50% | 3.0 | ≥0.70 | +1.0 |
-| 50–65% | 2.0 | <0.70 | 0 |
-| 65–80% | 1.0 | | |
-| >80% | 0 | | |
+| ------------------------ | ----- | --------------- | ----- |
+| <50%                     | 3.0   | ≥0.70           | +1.0  |
+| 50–65%                   | 2.0   | <0.70           | 0     |
+| 65–80%                   | 1.0   |                 |       |
+| >80%                     | 0     |                 |       |
 
 ### Bonus Pool (max 1.5)
 
-| Bonus | Max | Condition |
-|-------|-----|-----------|
-| Sector leadership | 0.5 | Sector ETF RS≥80th AND >EMA50 |
-| Earnings catalyst | 0.5 | 7–21 days to earnings |
+| Bonus                   | Max | Condition                                       |
+| ----------------------- | --- | ----------------------------------------------- |
+| Sector leadership       | 0.5 | Sector ETF RS≥80th AND >EMA50                   |
+| Earnings catalyst       | 0.5 | 7–21 days to earnings                           |
 | Accumulation divergence | 0.5 | OBV rising while price flat (linreg divergence) |
 
 ### Entry / Exit
@@ -188,6 +188,7 @@ Proximity gate: within 1.5% of pivot = full score; 1.5–3% = interpolate to 0; 
 **Entry (A2)**: Price within 3% of pivot, Vol dry-up confirmed, wait for pivot break to execute
 
 **Stop**:
+
 ```python
 if pattern in ('vcp', 'flat_base', 'ascending'): stop = platform_low × 0.98
 elif pattern == 'high_tight_flag':               stop = flag_low × 0.985
@@ -205,24 +206,24 @@ stop = max(stop, entry × 0.92)  # 8% floor
 
 ### Pre-filter
 
-| Filter | Condition |
-|--------|-----------|
+| Filter      | Condition  |
+| ----------- | ---------- |
 | EMA21 slope | S_norm > 0 |
-| Price | > EMA21 |
-| Market cap | ≥ $2B |
-| Avg vol 20d | ≥ 100K |
+| Price       | > EMA21    |
+| Market cap  | ≥ $2B      |
+| Avg vol 20d | ≥ 100K     |
 
 ### TI — Trend Intensity (max 5.0)
 
 `S_norm = (EMA21_today − EMA21_5d) / ATR14`
 
-| S_norm | Score |
-|--------|-------|
-| >1.2 | 5.0 |
+| S_norm  | Score   |
+| ------- | ------- |
+| >1.2    | 5.0     |
 | 0.8–1.2 | 4.0–5.0 |
 | 0.4–0.8 | 2.0–4.0 |
-| 0–0.4 | 0–2.0 |
-| <0 | reject |
+| 0–0.4   | 0–2.0   |
+| <0      | reject  |
 
 Penalty: −0.5 per EMA21 touch in 20d (max −1.0)
 
@@ -230,30 +231,30 @@ Penalty: −0.5 per EMA21 touch in 20d (max −1.0)
 
 Requirements: Price>EMA21, pullback<8% from high, price within 1.5% of EMA8.
 
-| Factor | Condition | Score |
-|--------|-----------|-------|
-| Range tightness | <5% | 2.0 |
-| | 5–8% | 1.0–2.0 |
-| EMA8 support | Within 1% | 2.0 |
-| | 1–1.5% | 1.0–2.0 |
-| No gap-down in pullback | Gap <0.8×ATR | 1.0 |
+| Factor                  | Condition    | Score   |
+| ----------------------- | ------------ | ------- |
+| Range tightness         | <5%          | 2.0     |
+|                         | 5–8%         | 1.0–2.0 |
+| EMA8 support            | Within 1%    | 2.0     |
+|                         | 1–1.5%       | 1.0–2.0 |
+| No gap-down in pullback | Gap <0.8×ATR | 1.0     |
 
 ### VC — Volume Confirmation (max 5.0)
 
 `Volume_Dry = vol_today/vol_20d < 0.7` | `Volume_Surge = vol_today/vol_20d > 1.5`
 
-| Pattern | Score |
-|---------|-------|
-| Dry-up + surge | 5.0 |
-| Surge only | 3.0 |
-| Dry-up only | 2.0 |
-| Neither | 0 |
+| Pattern        | Score |
+| -------------- | ----- |
+| Dry-up + surge | 5.0   |
+| Surge only     | 3.0   |
+| Dry-up only    | 2.0   |
+| Neither        | 0     |
 
 ### BONUS (max 2.0)
 
-| Factor | Score | Condition |
-|--------|-------|-----------|
-| Sector ETF | 0–1.0 | Sector ETF > EMA21 + positive slope |
+| Factor               | Score | Condition                                                            |
+| -------------------- | ----- | -------------------------------------------------------------------- |
+| Sector ETF           | 0–1.0 | Sector ETF > EMA21 + positive slope                                  |
 | Momentum persistence | 0–1.0 | Stock 5d return > SPY 5d return by >2% → 1.0; by 1–2% → 0.5; ≤0% → 0 |
 
 ### Entry / Exit
@@ -270,21 +271,21 @@ Requirements: Price>EMA21, pullback<8% from high, price within 1.5% of EMA8.
 
 ### Pre-filter
 
-| Filter | Condition |
-|--------|-----------|
-| Price vs EMA50 | Within ±15% |
+| Filter          | Condition                  |
+| --------------- | -------------------------- |
+| Price vs EMA50  | Within ±15%                |
 | Support touches | ≥3 in 60d **OR** ≥2 in 30d |
-| Market cap | ≥ $2B |
-| Avg vol 20d | ≥ 100K |
+| Market cap      | ≥ $2B                      |
+| Avg vol 20d     | ≥ 100K                     |
 
 ### SQ — Support Quality (max 4.0)
 
-| EMA Structure | Score |
-|---------------|-------|
-| Price>EMA50 AND EMA8>EMA21 | 4.0 |
-| Price>EMA50 only | 2.5 |
-| Price<EMA50 AND EMA8>EMA21 (bear bounce) | 1.5 |
-| Neither | 0 |
+| EMA Structure                            | Score |
+| ---------------------------------------- | ----- |
+| Price>EMA50 AND EMA8>EMA21               | 4.0   |
+| Price>EMA50 only                         | 2.5   |
+| Price<EMA50 AND EMA8>EMA21 (bear bounce) | 1.5   |
+| Neither                                  | 0     |
 
 Bonus: +0.5 if ≥4 prior touches in 90d (capped at 4.0)
 
@@ -292,35 +293,35 @@ Bonus: +0.5 if ≥4 prior touches in 90d (capped at 4.0)
 
 Climax = down-day vol > 2.5×avg20d within last 5d.
 
-| Pattern | Score |
-|---------|-------|
-| Climax + dry-up + surge | 5.0 |
-| Dry-up + surge | 4.0 |
-| Surge only | 2.5 |
-| Dry-up only | 1.5 |
-| None | 0 |
+| Pattern                 | Score |
+| ----------------------- | ----- |
+| Climax + dry-up + surge | 5.0   |
+| Dry-up + surge          | 4.0   |
+| Surge only              | 2.5   |
+| Dry-up only             | 1.5   |
+| None                    | 0     |
 
 ### RB — Rebound (max 6.0)
 
 **Depth (0–2.5)**: Hard gate: depth must be ≥2% to score at all.
 
-| Depth | Score |
-|-------|-------|
-| <2% | 0 (hard gate) |
-| 2–4% | 2.0–2.5 (peak at 3%) |
-| 4–7% | 1.5–2.5 |
-| 7–10% | 0.5–1.5 |
-| >10% | 0 |
+| Depth | Score                |
+| ----- | -------------------- |
+| <2%   | 0 (hard gate)        |
+| 2–4%  | 2.0–2.5 (peak at 3%) |
+| 4–7%  | 1.5–2.5              |
+| 7–10% | 0.5–1.5              |
+| >10%  | 0                    |
 
 **Reclaim speed (0–2.5)**:
 
 | Days to reclaim support | Score |
-|-------------------------|-------|
-| 1d | 2.5 |
-| 2d | 2.0 |
-| 3d | 1.5 |
-| 4d | 1.0 |
-| ≥5d | 0 |
+| ----------------------- | ----- |
+| 1d                      | 2.5   |
+| 2d                      | 2.0   |
+| 3d                      | 1.5   |
+| 4d                      | 1.0   |
+| ≥5d                     | 0     |
 
 **Sector (0–1.0)**: Sector>EMA21=1.0, EMA21–EMA50=0.5, <EMA50=0
 
@@ -338,51 +339,51 @@ Climax = down-day vol > 2.5×avg20d within last 5d.
 
 ### Pre-filter
 
-| Filter | Condition |
-|--------|-----------|
-| Price vs EMA50 | ≤ EMA50×1.05 |
-| EMA8 | ≤ EMA21×1.02 |
-| Near 60d high | Within 8% |
-| Market cap | ≥ $2B |
-| Avg vol 20d | ≥ 100K |
-| Dollar volume | > $30M avg20d |
+| Filter         | Condition     |
+| -------------- | ------------- |
+| Price vs EMA50 | ≤ EMA50×1.05  |
+| EMA8           | ≤ EMA21×1.02  |
+| Near 60d high  | Within 8%     |
+| Market cap     | ≥ $2B         |
+| Avg vol 20d    | ≥ 100K        |
+| Dollar volume  | > $30M avg20d |
 
 ### TQ — Trend Quality (max 4.0)
 
-| EMA Alignment | Score | Sector ETF | Score |
-|---------------|-------|------------|-------|
-| Price<EMA50 AND EMA8<EMA21 | 2.5 | <EMA50 declining | 1.5 |
-| Price<EMA50 only | 1.5 | EMA50–EMA200 | 0.8 |
-| Price>EMA50 but EMA8<EMA21 | 1.0 | >EMA50 | 0 |
-| Price>EMA50 AND EMA8>EMA21 | 0 | | |
+| EMA Alignment              | Score | Sector ETF       | Score |
+| -------------------------- | ----- | ---------------- | ----- |
+| Price<EMA50 AND EMA8<EMA21 | 2.5   | <EMA50 declining | 1.5   |
+| Price<EMA50 only           | 1.5   | EMA50–EMA200     | 0.8   |
+| Price>EMA50 but EMA8<EMA21 | 1.0   | >EMA50           | 0     |
+| Price>EMA50 AND EMA8>EMA21 | 0     |                  |       |
 
 ### RL — Resistance Level (max 4.0)
 
-| Touches (90d) | Score | Interval | Score | Width | Score |
-|---------------|-------|----------|-------|-------|-------|
-| ≥5 | 1.5 | ≥14d | 1.5 | 1–2.5×ATR | 1.0 |
-| 4 | 1.2 | 7–14d | 0.8–1.5 | 0.5–1×ATR | 0.5 |
-| 3 | 0.8 | 5–7d | 0.3–0.8 | >3×ATR | 0.3 |
-| 2 | 0.3 | <5d | 0 | | |
+| Touches (90d) | Score | Interval | Score   | Width     | Score |
+| ------------- | ----- | -------- | ------- | --------- | ----- |
+| ≥5            | 1.5   | ≥14d     | 1.5     | 1–2.5×ATR | 1.0   |
+| 4             | 1.2   | 7–14d    | 0.8–1.5 | 0.5–1×ATR | 0.5   |
+| 3             | 0.8   | 5–7d     | 0.3–0.8 | >3×ATR    | 0.3   |
+| 2             | 0.3   | <5d      | 0       |           |       |
 
 ### DS — Distribution Signs (max 4.0)
 
 | Heavy-vol up-days (vol>1.5×avg, closes lower) | Score |
-|------------------------------------------------|-------|
-| ≥3 | 2.0 |
-| 2 | 1.3 |
-| 1 | 0.6 |
+| --------------------------------------------- | ----- |
+| ≥3                                            | 2.0   |
+| 2                                             | 1.3   |
+| 1                                             | 0.6   |
 
 Price action (cap 2.0): shooting star/bearish engulfing=+1.0, failed breakout=+1.0, multiple upper wicks=+0.5, faded gap-up=+0.5
 
 ### VC — Volume Confirmation (max 3.0)
 
-| Breakdown vol / avg20d | Score | Follow-through |
-|------------------------|-------|----------------|
-| ≥2.5× | 2.0 | +1.0 if 2nd down-day within 2 sessions |
-| 1.8–2.5× | 1.3–2.0 | |
-| 1.2–1.8× | 0.5–1.3 | |
-| <1.2× | 0 | |
+| Breakdown vol / avg20d | Score   | Follow-through                         |
+| ---------------------- | ------- | -------------------------------------- |
+| ≥2.5×                  | 2.0     | +1.0 if 2nd down-day within 2 sessions |
+| 1.8–2.5×               | 1.3–2.0 |                                        |
+| 1.2–1.8×               | 0.5–1.3 |                                        |
+| <1.2×                  | 0       |                                        |
 
 ### Entry / Exit
 
@@ -400,50 +401,50 @@ Price action (cap 2.0): shooting star/bearish engulfing=+1.0, failed breakout=+1
 
 ### Pre-filter
 
-| Filter | Condition |
-|--------|-----------|
+| Filter       | Condition  |
+| ------------ | ---------- |
 | Near 60d low | Within 10% |
-| Avg vol 20d | ≥ 150K |
-| Market cap | ≥ $2.5B |
-| Listed age | > 180 days |
+| Avg vol 20d  | ≥ 150K     |
+| Market cap   | ≥ $2.5B    |
+| Listed age   | > 180 days |
 
 ### TQ — Trend Quality (max 4.0)
 
-| EMA Structure | Score |
-|---------------|-------|
-| Price<EMA50 AND EMA8<EMA21 | 2.5 |
-| Price<EMA200, EMA8 crossing EMA21 | 2.0 |
-| Price<EMA50 only | 1.5 |
-| Price>EMA50 | 0 |
+| EMA Structure                     | Score |
+| --------------------------------- | ----- |
+| Price<EMA50 AND EMA8<EMA21        | 2.5   |
+| Price<EMA200, EMA8 crossing EMA21 | 2.0   |
+| Price<EMA50 only                  | 1.5   |
+| Price>EMA50                       | 0     |
 
 ### AL — Accumulation Level (max 4.0)
 
-| Touches (90d) | Score | Min interval | Score | Width | Score |
-|---------------|-------|--------------|-------|-------|-------|
-| ≥5 | 1.5 | ≥14d | 1.5 | 1–2.5×ATR | 1.0 |
-| 4 | 1.2 | 7–14d | 0.8–1.5 | 0.5–1×ATR | 0.5 |
-| 3 | 0.8 | 5–7d | 0.3–0.8 | >3×ATR | 0.3 |
-| 2 | 0.3 | <5d | 0 | | |
+| Touches (90d) | Score | Min interval | Score   | Width     | Score |
+| ------------- | ----- | ------------ | ------- | --------- | ----- |
+| ≥5            | 1.5   | ≥14d         | 1.5     | 1–2.5×ATR | 1.0   |
+| 4             | 1.2   | 7–14d        | 0.8–1.5 | 0.5–1×ATR | 0.5   |
+| 3             | 0.8   | 5–7d         | 0.3–0.8 | >3×ATR    | 0.3   |
+| 2             | 0.3   | <5d          | 0       |           |       |
 
 ### AS — Accumulation Signs (max 4.0)
 
-| Up-day vol ratio (up-day vol / avg20d) | Score |
-|----------------------------------------|-------|
-| >2.0× | 2.0 |
-| 1.5–2.0× | 1.5–2.0 |
-| 1.2–1.5× | 0.8–1.5 |
-| 1.0–1.2× | 0.3–0.8 |
+| Up-day vol ratio (up-day vol / avg20d) | Score   |
+| -------------------------------------- | ------- |
+| >2.0×                                  | 2.0     |
+| 1.5–2.0×                               | 1.5–2.0 |
+| 1.2–1.5×                               | 0.8–1.5 |
+| 1.0–1.2×                               | 0.3–0.8 |
 
 Price action (cap 2.0): hammer/bullish engulfing=+1.0, failed breakdown=+1.0, higher lows=+0.5, tight range=+0.5
 
 ### VC — Volume Confirmation (max 3.0)
 
-| Breakout vol / avg20d | Score | Follow-through |
-|-----------------------|-------|----------------|
-| ≥2.5× | 2.0 | +1.0 if 2nd up-day within 2 sessions |
-| 1.8–2.5× | 1.3–2.0 | |
-| 1.2–1.8× | 0.5–1.3 | |
-| <1.2× | 0 | |
+| Breakout vol / avg20d | Score   | Follow-through                       |
+| --------------------- | ------- | ------------------------------------ |
+| ≥2.5×                 | 2.0     | +1.0 if 2nd up-day within 2 sessions |
+| 1.8–2.5×              | 1.3–2.0 |                                      |
+| 1.2–1.8×              | 0.5–1.3 |                                      |
+| <1.2×                 | 0       |                                      |
 
 ### Entry / Exit
 
@@ -460,44 +461,44 @@ Price action (cap 2.0): hammer/bullish engulfing=+1.0, failed breakdown=+1.0, hi
 
 ### Pre-filter
 
-| Filter | Condition |
-|--------|-----------|
-| RSI14 | < 25 |
-| Price vs EMA50 | < EMA50 − 3×ATR |
+| Filter              | Condition                                               |
+| ------------------- | ------------------------------------------------------- |
+| RSI14               | < 25                                                    |
+| Price vs EMA50      | < EMA50 − 3×ATR                                         |
 | Gaps down OR streak | ≥2 gap-downs in last 5d **OR** ≥5 consecutive down-days |
-| Dollar volume | > $50M avg20d |
-| Listed | > 50 days |
-| VIX | 15–35 (reject <15; Tier B cap if >35) |
+| Dollar volume       | > $50M avg20d                                           |
+| Listed              | > 50 days                                               |
+| VIX                 | 15–35 (reject <15; Tier B cap if >35)                   |
 
 ### MO — Momentum Overextension (max 5.0)
 
-| RSI14 | Score | Distance below EMA50 | Score |
-|-------|-------|-----------------------|-------|
-| <12 | 3.0 | >25% | 2.0 |
-| 12–15 | 2.5–3.0 | 20–25% | 1.5–2.0 |
-| 15–18 | 2.0–2.5 | 15–20% | 1.0–1.5 |
-| 18–25 | 0.5–2.0 | 10–15% | 0.5–1.0 |
-| >25 | 0 | <10% | 0 |
+| RSI14 | Score   | Distance below EMA50 | Score   |
+| ----- | ------- | -------------------- | ------- |
+| <12   | 3.0     | >25%                 | 2.0     |
+| 12–15 | 2.5–3.0 | 20–25%               | 1.5–2.0 |
+| 15–18 | 2.0–2.5 | 15–20%               | 1.0–1.5 |
+| 18–25 | 0.5–2.0 | 10–15%               | 0.5–1.0 |
+| >25   | 0       | <10%                 | 0       |
 
 ### EX — Extension Level (max 6.0)
 
-| (EMA50 − price) / ATR | Score | Gap-down days (5d) | Score | Down-day streak | Score |
-|-----------------------|-------|--------------------|-------|-----------------|-------|
-| >8× | 3.0 | ≥4 | 2.0 | ≥7 | 1.0 |
-| 6–8× | 2.0–3.0 | 3 | 1.5 | 5–6 | 0.6 |
-| 4–6× | 1.0–2.0 | 2 | 1.0 | 3–4 | 0.3 |
-| <4× | 0–1.0 | | | | |
+| (EMA50 − price) / ATR | Score   | Gap-down days (5d) | Score | Down-day streak | Score |
+| --------------------- | ------- | ------------------ | ----- | --------------- | ----- |
+| >8×                   | 3.0     | ≥4                 | 2.0   | ≥7              | 1.0   |
+| 6–8×                  | 2.0–3.0 | 3                  | 1.5   | 5–6             | 0.6   |
+| 4–6×                  | 1.0–2.0 | 2                  | 1.0   | 3–4             | 0.3   |
+| <4×                   | 0–1.0   |                    |       |                 |       |
 
 ### VC — Volume Confirmation (max 4.0)
 
-| Vol / avg20d | Score |
-|--------------|-------|
-| >5× | 3.0 |
-| 4–5× | 2.5–3.0 |
-| 3–4× | 2.0–2.5 |
-| 2–3× | 1.0–2.0 |
-| 1.5–2× | 0.3–1.0 |
-| <1.5× | 0 |
+| Vol / avg20d | Score   |
+| ------------ | ------- |
+| >5×          | 3.0     |
+| 4–5×         | 2.5–3.0 |
+| 3–4×         | 2.0–2.5 |
+| 2–3×         | 1.0–2.0 |
+| 1.5–2×       | 0.3–1.0 |
+| <1.5×        | 0       |
 
 Bonus: +1.0 if CLV>0.65 AND vol>1.5×avg20d (capitulation candle confirmation)
 
@@ -516,23 +517,24 @@ Bonus: +1.0 if CLV>0.65 AND vol>1.5×avg20d (capitulation candle confirmation)
 
 ### Pre-filter
 
-| Filter | Condition |
-|--------|-----------|
-| Earnings gap | ≥5% on earnings day |
-| Days since earnings | See eligibility table below |
-| Dollar volume (gap day) | > $100M |
-| Market cap | ≥ $2B |
-| Price | > $10 |
+| Filter                  | Condition                   |
+| ----------------------- | --------------------------- |
+| Earnings gap            | ≥5% on earnings day         |
+| Days since earnings     | See eligibility table below |
+| Dollar volume (gap day) | > $100M                     |
+| Market cap              | ≥ $2B                       |
+| Price                   | > $10                       |
 
 **Eligibility by gap size:**
 
 | Gap Size | Max Days Eligible |
-|----------|-------------------|
-| ≥10% | 1–5 |
-| 7–10% | 1–3 |
-| 5–7% | 1–2 |
+| -------- | ----------------- |
+| ≥10%     | 1–5               |
+| 7–10%    | 1–3               |
+| 5–7%     | 1–2               |
 
 **Direction**:
+
 ```python
 if gap_pct > 0 and price_holding_above_gap_zone: direction = 'LONG'
 elif gap_pct < 0 and price_holding_below_gap_zone: direction = 'SHORT'
@@ -541,39 +543,39 @@ else: reject
 
 ### GS — Gap Strength (max 5.0)
 
-| Gap % | Long | Short | Gap type bonus |
-|-------|------|-------|----------------|
-| ≥10% | 3.0 | 2.5 | Beat/miss vs est: +1.0 |
-| 7–10% | 2.0–3.0 | 2.0–2.5 | Guidance change: +1.0 |
-| 5–7% | 1.0–2.0 | 1.5–2.0 | One-time event: +0.5 |
+| Gap % | Long    | Short   | Gap type bonus         |
+| ----- | ------- | ------- | ---------------------- |
+| ≥10%  | 3.0     | 2.5     | Beat/miss vs est: +1.0 |
+| 7–10% | 2.0–3.0 | 2.0–2.5 | Guidance change: +1.0  |
+| 5–7%  | 1.0–2.0 | 1.5–2.0 | One-time event: +0.5   |
 
 ### QC — Quality of Consolidation (max 4.0)
 
 | Days since gap | Score | Consolidation range | Score |
-|----------------|-------|---------------------|-------|
-| 1–2 | 2.0 | <3% | 1.5 |
-| 3–4 | 1.5 | 3–5% | 1.0 |
-| 5+ | 0.5 | 5–8% | 0.5 |
-| | | >8% | 0 |
+| -------------- | ----- | ------------------- | ----- |
+| 1–2            | 2.0   | <3%                 | 1.5   |
+| 3–4            | 1.5   | 3–5%                | 1.0   |
+| 5+             | 0.5   | 5–8%                | 0.5   |
+|                |       | >8%                 | 0     |
 
 ### TC — Trend Context (max 3.0)
 
-| Pre-earnings trend | Score |
-|--------------------|-------|
-| Aligned with gap direction | 2.0 |
-| Neutral | 1.0 |
-| Counter-trend | 0.5 |
+| Pre-earnings trend         | Score |
+| -------------------------- | ----- |
+| Aligned with gap direction | 2.0   |
+| Neutral                    | 1.0   |
+| Counter-trend              | 0.5   |
 
 Sector alignment bonus: +1.0 if sector ETF confirms gap direction
 
 ### VC — Volume Confirmation (max 3.0)
 
 | Gap day vol / avg20d | Score | Consolidation vol | Score |
-|----------------------|-------|-------------------|-------|
-| >5× | 2.0 | Below average | 1.0 |
-| 3–5× | 1.5 | Average | 0.5 |
-| 2–3× | 1.0 | Above average | 0 |
-| <2× | 0 | | |
+| -------------------- | ----- | ----------------- | ----- |
+| >5×                  | 2.0   | Below average     | 1.0   |
+| 3–5×                 | 1.5   | Average           | 0.5   |
+| 2–3×                 | 1.0   | Above average     | 0     |
+| <2×                  | 0     |                   |       |
 
 ### Entry / Exit
 
@@ -592,57 +594,57 @@ Sector alignment bonus: +1.0 if sector ETF confirms gap direction
 
 ### Pre-filter
 
-| Filter | Condition |
-|--------|-----------|
-| RS_pct | ≥ 80th for ≥5 consecutive days |
-| Price | > EMA21 |
-| Market cap | ≥ $3B |
-| Avg vol 20d | ≥ 200K |
+| Filter      | Condition                      |
+| ----------- | ------------------------------ |
+| RS_pct      | ≥ 80th for ≥5 consecutive days |
+| Price       | > EMA21                        |
+| Market cap  | ≥ $3B                          |
+| Avg vol 20d | ≥ 200K                         |
 
 ### RD — RS Divergence (max 4.0, incl. SPY divergence bonus)
 
-| RS_pct | Score | Stock 10d return − SPY 10d return | Bonus |
-|--------|-------|-----------------------------------|-------|
-| ≥95th | 4.0 | >+10% | +1.5 |
-| 90–95th | 3.0–4.0 | +5–10% | +1.0–1.5 |
-| 85–90th | 2.0–3.0 | +2–5% | +0.5–1.0 |
-| 80–85th | 1.0–2.0 | <+2% | 0 |
-| <80th | 0 | | |
+| RS_pct  | Score   | Stock 10d return − SPY 10d return | Bonus    |
+| ------- | ------- | --------------------------------- | -------- |
+| ≥95th   | 4.0     | >+10%                             | +1.5     |
+| 90–95th | 3.0–4.0 | +5–10%                            | +1.0–1.5 |
+| 85–90th | 2.0–3.0 | +2–5%                             | +0.5–1.0 |
+| 80–85th | 1.0–2.0 | <+2%                              | 0        |
+| <80th   | 0       |                                   |          |
 
-*(RD capped at 4.0 after bonus)*
+_(RD capped at 4.0 after bonus)_
 
 ### SH — Support Holding (max 4.0)
 
 Evaluated during SPY down-days in last 10d:
 
-| Condition | Score |
-|-----------|-------|
-| Held above EMA8 during SPY weakness | 1.5 |
-| Held above EMA21 | 1.0 |
-| No SPY down-days in 10d (baseline) | 1.0 |
-| Brief EMA21 break, reclaimed same day | 0.5 |
-| Closed below EMA21 | 0 |
+| Condition                             | Score |
+| ------------------------------------- | ----- |
+| Held above EMA8 during SPY weakness   | 1.5   |
+| Held above EMA21                      | 1.0   |
+| No SPY down-days in 10d (baseline)    | 1.0   |
+| Brief EMA21 break, reclaimed same day | 0.5   |
+| Closed below EMA21                    | 0     |
 
 ### CQ — Consolidation Quality (max 3.0)
 
-| Relative volatility (stock ATR / SPY ATR) | Score | 10d range | Score |
-|-------------------------------------------|-------|-----------|-------|
-| <0.8 | 1.5 | <5% | 1.5 |
-| 0.8–1.2 | 0.8–1.5 | 5–8% | 1.0–1.5 |
-| 1.2–1.8 | 0.2–0.8 | 8–12% | 0.5–1.0 |
-| >1.8 | 0 | >12% | 0 |
+| Relative volatility (stock ATR / SPY ATR) | Score   | 10d range | Score   |
+| ----------------------------------------- | ------- | --------- | ------- |
+| <0.8                                      | 1.5     | <5%       | 1.5     |
+| 0.8–1.2                                   | 0.8–1.5 | 5–8%      | 1.0–1.5 |
+| 1.2–1.8                                   | 0.2–0.8 | 8–12%     | 0.5–1.0 |
+| >1.8                                      | 0       | >12%      | 0       |
 
 ### VC — Volume Confirmation (max 2.0)
 
 `accum_ratio = sum(vol, up-days, 15d) / sum(vol, down-days, 15d)`
 
-| accum_ratio | Score |
-|-------------|-------|
-| >2.0 | 2.0 |
-| 1.5–2.0 | 1.5–2.0 |
-| 1.2–1.5 | 0.8–1.5 |
-| 1.0–1.2 | 0.3–0.8 |
-| <1.0 | 0 |
+| accum_ratio | Score   |
+| ----------- | ------- |
+| >2.0        | 2.0     |
+| 1.5–2.0     | 1.5–2.0 |
+| 1.2–1.5     | 0.8–1.5 |
+| 1.0–1.2     | 0.3–0.8 |
+| <1.0        | 0       |
 
 ### Entry / Exit
 

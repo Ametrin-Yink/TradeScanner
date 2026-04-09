@@ -2,15 +2,15 @@
 
 ## 基本信息
 
-| 字段 | 值 |
-|------|-----|
-| **ID** | BUG-005 |
-| **严重程度** | P1 (High) |
-| **状态** | ✅ 已解决 |
-| **创建日期** | 2026-03-30 |
-| **解决日期** | 2026-03-30 |
-| **模块** | core/strategies/ |
-| **发现者** | Phase 0 测试循环 |
+| 字段         | 值               |
+| ------------ | ---------------- |
+| **ID**       | BUG-005          |
+| **严重程度** | P1 (High)        |
+| **状态**     | ✅ 已解决        |
+| **创建日期** | 2026-03-30       |
+| **解决日期** | 2026-03-30       |
+| **模块**     | core/strategies/ |
+| **发现者**   | Phase 0 测试循环 |
 
 ---
 
@@ -30,14 +30,15 @@ without an implementation for abstract methods
 
 ## 影响范围
 
-| 策略文件 | 状态 | 缺少方法 |
-|----------|------|----------|
-| `upthrust_rebound.py` | ❌ 损坏 | 3个方法 |
-| `range_support.py` | ❌ 损坏 | 4个方法 (含filter) |
-| `dtss.py` | ❌ 损坏 | 4个方法 (含filter) |
-| `parabolic.py` | ❌ 损坏 | 4个方法 (含filter) |
+| 策略文件              | 状态    | 缺少方法           |
+| --------------------- | ------- | ------------------ |
+| `upthrust_rebound.py` | ❌ 损坏 | 3个方法            |
+| `range_support.py`    | ❌ 损坏 | 4个方法 (含filter) |
+| `dtss.py`             | ❌ 损坏 | 4个方法 (含filter) |
+| `parabolic.py`        | ❌ 损坏 | 4个方法 (含filter) |
 
 **影响**：
+
 - `StrategyScreener` 无法初始化
 - 整个 Step 2 (策略筛选) 无法运行
 - Phase 0 测试无法完成
@@ -67,12 +68,14 @@ without an implementation for abstract methods
 ### 2. 修复 `UpthrustReboundStrategy`
 
 **添加方法**：
+
 - `filter(symbol, df) -> bool` - 带成交量否决检查的过滤
 - `calculate_dimensions(symbol, df) -> List[ScoringDimension]` - 3维度评分 (SQ, VD, RB)
 - `calculate_entry_exit(...)` - 计算入场/止损/目标价
 - `build_match_reasons(...)` - 构建可读匹配原因
 
 **评分维度**：
+
 - **SQ (Structure Quality)**: 0-5分，基于支撑位距离和质量
 - **VD (Volume Dry-up)**: 0-5分，成交量萎缩程度
 - **RB (Rebound Bias)**: 0-5分，反弹偏向性
@@ -80,12 +83,14 @@ without an implementation for abstract methods
 ### 3. 修复 `RangeSupportStrategy`
 
 **添加方法**：
+
 - `filter(symbol, df) -> bool` - 双向过滤（多/空）
 - `calculate_dimensions(symbol, df)` - 3维度评分 (PL, TS, VC)
 - `calculate_entry_exit(...)` - 基于S/R的入场/止损/目标
 - `build_match_reasons(...)`
 
 **评分维度**：
+
 - **PL (Platform Quality)**: 0-5分，平台质量
 - **TS (Test Strength)**: 0-5分，测试强度（支撑测试次数）
 - **VC (Volume Character)**: 0-5分，成交量特征
@@ -93,12 +98,14 @@ without an implementation for abstract methods
 ### 4. 修复 `DTSSStrategy`
 
 **添加方法**：
+
 - `filter(symbol, df) -> bool` - 基于市场方向的多/空过滤
 - `calculate_dimensions(symbol, df)` - 3维度评分 (PL, TS, VC)
 - `calculate_entry_exit(...)` - 基于60日高/低的入场/止损/目标
 - `build_match_reasons(...)`
 
 **评分维度**：
+
 - **PL (Price Level)**: 0-5分，价格水平（接近60日高/低）
 - **TS (Trend Structure)**: 0-5分，趋势结构（EMA排列）
 - **VC (Volume Confirmation)**: 0-5分，成交量确认
@@ -106,12 +113,14 @@ without an implementation for abstract methods
 ### 5. 修复 `ParabolicStrategy`
 
 **添加方法**：
+
 - `filter(symbol, df) -> bool` - 基于VIX和极端条件的过滤
 - `calculate_dimensions(symbol, df)` - 3维度评分 (MO, EX, VC)
 - `calculate_entry_exit(...)` - 基于近期高/低的入场/止损/目标
 - `build_match_reasons(...)`
 
 **评分维度**：
+
 - **MO (Momentum Extreme)**: 0-5分，动量极端（RSI）
 - **EX (Extension)**: 0-5分，偏离程度（价格vs EMA50）
 - **VC (Volume Climax)**: 0-5分，成交量高潮
@@ -163,14 +172,14 @@ Total symbols processed: 10
 
 ## 相关文件
 
-| 文件 | 变更 |
-|------|------|
-| `core/screener.py` | 删除重复 `__init__` |
-| `core/strategies/upthrust_rebound.py` | 添加 4 个方法 |
-| `core/strategies/range_support.py` | 添加 4 个方法 |
-| `core/strategies/dtss.py` | 添加 4 个方法 |
-| `core/strategies/parabolic.py` | 添加 4 个方法 |
-| `test_phase0.py` | 新增 Phase 0 测试脚本 |
+| 文件                                  | 变更                  |
+| ------------------------------------- | --------------------- |
+| `core/screener.py`                    | 删除重复 `__init__`   |
+| `core/strategies/upthrust_rebound.py` | 添加 4 个方法         |
+| `core/strategies/range_support.py`    | 添加 4 个方法         |
+| `core/strategies/dtss.py`             | 添加 4 个方法         |
+| `core/strategies/parabolic.py`        | 添加 4 个方法         |
+| `test_phase0.py`                      | 新增 Phase 0 测试脚本 |
 
 ---
 

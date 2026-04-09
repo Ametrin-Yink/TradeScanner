@@ -20,6 +20,7 @@ from core.stock_universe import StockUniverseManager, get_all_market_etfs
 from core.fetcher import DataFetcher
 from core.indicators import TechnicalIndicators
 from core.etf_prep import ETFPreCalculator
+from core.constants import SECTOR_ETFS
 from data.db import Database
 from config.settings import settings
 
@@ -855,21 +856,6 @@ class PreMarketPrep:
         Returns:
             ETF symbol or None
         """
-        SECTOR_ETFS = {
-            'Technology': 'XLK',
-            'Financials': 'XLF',
-            'Energy': 'XLE',
-            'Industrials': 'XLI',
-            'Consumer Staples': 'XLP',
-            'Consumer Discretionary': 'XLY',
-            'Materials': 'XLB',
-            'Utilities': 'XLU',
-            'Health Care': 'XLV',
-            'Biotechnology': 'XBI',
-            'Semiconductors': 'SMH',
-            'Software': 'IGV',
-            'Transportation': 'IYT',
-        }
         return SECTOR_ETFS.get(sector)
 
     def update_rs_percentiles(self) -> int:

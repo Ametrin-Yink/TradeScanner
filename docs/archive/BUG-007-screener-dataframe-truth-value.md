@@ -35,11 +35,13 @@ ValueError: The truth value of a DataFrame is ambiguous. Use a.empty, a.bool(), 
 Using Python's `or` operator with pandas DataFrames. When the first operand returns a DataFrame, Python tries to evaluate its truth value, which is ambiguous for DataFrames.
 
 **Line 95:**
+
 ```python
 self._spy_data = self._load_tier3_data('SPY') or self._get_data('SPY')
 ```
 
 **Line 122:**
+
 ```python
 df = market_data.get(symbol) or self._get_data(symbol)
 ```
@@ -49,6 +51,7 @@ df = market_data.get(symbol) or self._get_data(symbol)
 Changed both lines to use explicit None checks:
 
 **Line 95-98:**
+
 ```python
 # Before:
 self._spy_data = self._load_tier3_data('SPY') or self._get_data('SPY')
@@ -61,6 +64,7 @@ self._spy_data = spy_data
 ```
 
 **Line 122-123:**
+
 ```python
 # Before:
 df = market_data.get(symbol) or self._get_data(symbol)
@@ -72,6 +76,7 @@ if df is None:
 ```
 
 ## Files Modified
+
 - `core/screener.py` - Lines 95-98 and 122-123
 
 ## Verification

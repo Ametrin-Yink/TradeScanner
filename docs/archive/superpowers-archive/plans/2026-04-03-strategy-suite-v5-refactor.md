@@ -13,6 +13,7 @@
 ## File Structure Map
 
 ### New Files
+
 - `core/market_regime.py` - Regime detection and allocation table
 - `core/strategies/distribution_top.py` - Strategy E1 (short, split from DoubleTopBottom)
 - `core/strategies/accumulation_bottom.py` - Strategy E2 (long, split from DoubleTopBottom)
@@ -20,6 +21,7 @@
 - `core/strategies/relative_strength_long.py` - Strategy H (new, RS divergence)
 
 ### Modified Files
+
 - `data/db.py` - Migration for Tier 1 cache columns
 - `core/premarket_prep.py` - Add accum_ratio, earnings dates, gap detection
 - `core/strategies/base_strategy.py` - Regime-adaptive position sizing
@@ -37,6 +39,7 @@
 ## Task 1: Database Migration for Tier 1 Cache
 
 **Files:**
+
 - Modify: `data/db.py`
 - Test: Verify columns exist after migration
 
@@ -49,11 +52,11 @@ def migrate_tier1_cache_v5(self):
     """Add v5.0 columns to tier1_cache table."""
     conn = self.get_connection()
     cursor = conn.cursor()
-    
+
     # Check if columns exist
     cursor.execute("PRAGMA table_info(tier1_cache)")
     existing_columns = {row[1] for row in cursor.fetchall()}
-    
+
     new_columns = {
         'accum_ratio_15d': 'REAL',
         'days_to_earnings': 'INTEGER',
@@ -62,12 +65,12 @@ def migrate_tier1_cache_v5(self):
         'gap_direction': 'TEXT',
         'spy_regime': 'TEXT'
     }
-    
+
     for column, dtype in new_columns.items():
         if column not in existing_columns:
             cursor.execute(f"ALTER TABLE tier1_cache ADD COLUMN {column} {dtype}")
             logger.info(f"Added column {column} to tier1_cache")
-    
+
     conn.commit()
 ```
 
@@ -99,6 +102,7 @@ git commit -m "feat(db): add Tier 1 cache columns for v5.0 (accum_ratio, earning
 ## Task 2: Market Regime Detector
 
 **Files:**
+
 - Create: `core/market_regime.py`
 - Test: `tests/core/test_market_regime.py`
 
@@ -129,7 +133,7 @@ def test_regime_allocation_table_has_all_regimes():
 def test_extreme_vix_triggers_regardless_of_spy():
     """VIX > 30 should trigger extreme_vix even if SPY looks bullish."""
     detector = MarketRegimeDetector()
-    
+
     # Create bullish SPY but extreme VIX
     spy_df = pd.DataFrame({
         'close': [450.0] * 200,
@@ -137,7 +141,7 @@ def test_extreme_vix_triggers_regardless_of_spy():
         'low': [445.0] * 200
     })
     vix_df = pd.DataFrame({'close': [35.0]})  # Extreme
-    
+
     regime = detector.detect_regime(spy_df, vix_df)
     assert regime == 'extreme_vix'
 
@@ -145,7 +149,7 @@ def test_extreme_vix_triggers_regardless_of_spy():
 def test_bull_strong_detection():
     """SPY > EMA50 > EMA200 with low VIX = bull_strong."""
     detector = MarketRegimeDetector()
-    
+
     # Create upward trending SPY
     prices = list(range(400, 600))  # Uptrend
     spy_df = pd.DataFrame({
@@ -154,7 +158,7 @@ def test_bull_strong_detection():
         'low': [p - 5 for p in prices]
     })
     vix_df = pd.DataFrame({'close': [15.0]})  # Low fear
-    
+
     regime = detector.detect_regime(spy_df, vix_df)
     assert regime == 'bull_strong'
 ```
@@ -257,45 +261,45 @@ EXTREME_EXEMPT_STRATEGIES = ['CapitulationRebound', 'RelativeStrengthLong']
 
 class MarketRegimeDetector:
     """Detect market regime from SPY/VIX technicals."""
-    
+
     def detect_regime(self, spy_df: pd.DataFrame, vix_df: pd.DataFrame) -> str:
         """
         Detect market regime based on SPY EMAs and VIX level.
-        
+
         Priority:
         1. VIX > 30 → extreme_vix (regardless of SPY)
         2. SPY trend analysis for bull/bear/neutral
-        
+
         Args:
             spy_df: SPY OHLCV DataFrame (needs at least 200 days)
             vix_df: VIX DataFrame with 'close' column
-            
+
         Returns:
             Regime string from REGIME_ALLOCATION_TABLE keys
         """
         # Check VIX first
         vix_current = vix_df['close'].iloc[-1] if vix_df is not None and not vix_df.empty else 20.0
-        
+
         if vix_current > 30:
             logger.info(f"Regime: extreme_vix (VIX={vix_current:.1f})")
             return 'extreme_vix'
-        
+
         # Calculate SPY EMAs
         if spy_df is None or len(spy_df) < 200:
             logger.warning("Insufficient SPY data, defaulting to neutral")
             return 'neutral'
-        
+
         close = spy_df['close']
         ema8 = close.ewm(span=8, adjust=False).mean().iloc[-1]
         ema21 = close.ewm(span=21, adjust=False).mean().iloc[-1]
         ema50 = close.ewm(span=50, adjust=False).mean().iloc[-1]
         ema200 = close.ewm(span=200, adjust=False).mean().iloc[-1]
         current_price = close.iloc[-1]
-        
+
         # Check EMA50 slope (10 days ago vs now)
         ema50_10d_ago = close.ewm(span=50, adjust=False).mean().iloc[-10]
         ema50_rising = ema50 > ema50_10d_ago
-        
+
         # Determine regime
         if current_price > ema50 and ema50 > ema200:
             # Bull regime
@@ -312,17 +316,17 @@ class MarketRegimeDetector:
         else:
             # Neutral - price between EMAs or mixed alignment
             regime = 'neutral'
-        
+
         logger.info(f"Regime: {regime} (SPY=${current_price:.2f}, EMA50=${ema50:.2f}, EMA200=${ema200:.2f}, VIX={vix_current:.1f})")
         return regime
-    
+
     def get_allocation(self, regime: str) -> Dict[str, int]:
         """
         Get strategy slot allocation for a regime.
-        
+
         Args:
             regime: Regime string from detect_regime()
-            
+
         Returns:
             Dict mapping strategy names to slot counts
         """
@@ -331,16 +335,16 @@ class MarketRegimeDetector:
             logger.warning(f"Unknown regime '{regime}', using neutral")
             allocation = REGIME_ALLOCATION_TABLE['neutral']
         return allocation.copy()
-    
+
     def get_position_scalar(self, regime: str, direction: str, strategy_name: str) -> float:
         """
         Get position sizing scalar for regime/direction/strategy.
-        
+
         Args:
             regime: Regime string
             direction: 'long' or 'short'
             strategy_name: Strategy class NAME
-            
+
         Returns:
             Scalar multiplier (0.3 to 1.0)
         """
@@ -348,7 +352,7 @@ class MarketRegimeDetector:
         if regime == 'extreme_vix' and strategy_name in EXTREME_EXEMPT_STRATEGIES:
             logger.debug(f"Strategy {strategy_name} exempt from extreme scalar")
             return 1.0
-        
+
         scalar = REGIME_SCALARS.get(regime, {}).get(direction, 1.0)
         return scalar
 ```
@@ -372,6 +376,7 @@ git commit -m "feat(regime): add MarketRegimeDetector with allocation table and 
 ## Task 3: Enhanced Tier 1 Pre-Calculation
 
 **Files:**
+
 - Modify: `core/premarket_prep.py` (in `_calculate_tier1_metrics`)
 - Modify: `core/fetcher.py` (add earnings date fetching)
 - Test: Verify new fields populated
@@ -384,7 +389,7 @@ git commit -m "feat(regime): add MarketRegimeDetector with allocation table and 
 def fetch_earnings_date(self, symbol: str) -> Optional[str]:
     """
     Fetch next earnings date for symbol.
-    
+
     Returns:
         ISO date string (YYYY-MM-DD) or None
     """
@@ -392,23 +397,23 @@ def fetch_earnings_date(self, symbol: str) -> Optional[str]:
         import yfinance as yf
         ticker = yf.Ticker(symbol)
         earnings_dates = ticker.earnings_dates
-        
+
         if earnings_dates is None or earnings_dates.empty:
             return None
-        
+
         # Find first future earnings date
         from datetime import datetime
         today = datetime.now().date()
-        
+
         for date_idx in earnings_dates.index:
             if hasattr(date_idx, 'date'):
                 date = date_idx.date()
             else:
                 date = date_idx
-            
+
             if date >= today:
                 return date.isoformat()
-        
+
         return None
     except Exception as e:
         logger.debug(f"Failed to fetch earnings date for {symbol}: {e}")
@@ -425,22 +430,22 @@ def _calculate_tier1_metrics(self, symbol: str, df: pd.DataFrame) -> Optional[Di
     try:
         if len(df) < 50:
             return None
-        
+
         indicators = TechnicalIndicators(df, symbol=symbol)
         ind = indicators.calculate_all()
-        
+
         if not ind:
             return None
-        
+
         # ... existing calculations ...
-        
+
         # NEW: Calculate accum_ratio_15d (for Strategy H)
         accum_ratio = self._calculate_accum_ratio(df, days=15)
-        
+
         # NEW: Calculate gap metrics (for Strategy G)
         gap_1d_pct = (df['open'].iloc[-1] / df['close'].iloc[-2] - 1) if len(df) >= 2 else 0
         gap_direction = 'up' if gap_1d_pct > 0.02 else ('down' if gap_1d_pct < -0.02 else 'none')
-        
+
         # NEW: Fetch earnings date
         earnings_date = self.fetcher.fetch_earnings_date(symbol)
         days_to_earnings = None
@@ -449,9 +454,9 @@ def _calculate_tier1_metrics(self, symbol: str, df: pd.DataFrame) -> Optional[Di
             ed = datetime.fromisoformat(earnings_date).date()
             today = datetime.now().date()
             days_to_earnings = (ed - today).days
-        
+
         # ... existing metrics ...
-        
+
         return {
             # ... existing fields ...
             'accum_ratio_15d': accum_ratio,
@@ -468,29 +473,29 @@ def _calculate_tier1_metrics(self, symbol: str, df: pd.DataFrame) -> Optional[Di
 def _calculate_accum_ratio(self, df: pd.DataFrame, days: int = 15) -> float:
     """
     Calculate accumulation ratio: avg volume on up-days / avg volume on down-days.
-    
+
     Args:
         df: DataFrame with 'close' and 'volume'
         days: Lookback period
-        
+
     Returns:
         Accumulation ratio (1.0 = neutral, >1.0 = accumulation)
     """
     if len(df) < days:
         return 1.0
-    
+
     recent = df.tail(days).copy()
     recent['price_change'] = recent['close'].diff()
-    
+
     up_days = recent[recent['price_change'] > 0]
     down_days = recent[recent['price_change'] < 0]
-    
+
     avg_vol_up = up_days['volume'].mean() if len(up_days) > 0 else 0
     avg_vol_down = down_days['volume'].mean() if len(down_days) > 0 else 0
-    
+
     if avg_vol_down == 0:
         return 1.0
-    
+
     return avg_vol_up / avg_vol_down
 ```
 
@@ -530,6 +535,7 @@ git commit -m "feat(precalc): add accum_ratio, earnings dates, gap detection to 
 ## Task 4: Update Strategy Base Class for Regime-Adaptive Sizing
 
 **Files:**
+
 - Modify: `core/strategies/base_strategy.py`
 - Modify: `core/market_regime.py` (add helper import)
 
@@ -555,52 +561,52 @@ logger = logging.getLogger(__name__)
 
 class BaseStrategy(ABC):
     """Abstract base class for all trading strategies."""
-    
+
     NAME: str = ""
     STRATEGY_TYPE: 'StrategyType' = None
     DESCRIPTION: str = ""
     DIMENSIONS: List[str] = []
     MAX_SCORE: float = 15.0
     DIRECTION: str = 'long'  # 'long', 'short', or 'both'
-    
+
     TIER_S_MIN: float = 12.0
     TIER_A_MIN: float = 9.0
     TIER_B_MIN: float = 7.0
-    
+
     def __init__(self, fetcher=None, db=None):
         self.fetcher = fetcher
         self.db = db
         self.market_data: Dict[str, pd.DataFrame] = {}
         self.phase0_data: Dict[str, Dict] = {}
-    
+
     # ... existing abstract methods ...
-    
+
     def calculate_position_pct(self, tier: str, regime: str = 'neutral') -> float:
         """
         Calculate position size percentage with regime scalar.
-        
+
         Args:
             tier: 'S', 'A', 'B', or 'C'
             regime: Market regime from MarketRegimeDetector
-            
+
         Returns:
             Position size as decimal (e.g., 0.20 for 20%)
         """
         base = {'S': 0.20, 'A': 0.10, 'B': 0.05, 'C': 0.0}.get(tier, 0.0)
-        
+
         if base == 0.0:
             return 0.0
-        
+
         # Get scalar
         if regime == 'extreme_vix' and self.NAME in EXTREME_EXEMPT_STRATEGIES:
             scalar = 1.0
         else:
             scalar = REGIME_SCALARS.get(regime, {}).get(self.DIRECTION, 1.0)
-        
+
         final = base * scalar
         logger.debug(f"{self.NAME} position: tier={tier} base={base} regime={regime} scalar={scalar} final={final:.3f}")
         return final
-    
+
     # ... rest of existing methods unchanged ...
 ```
 
@@ -635,6 +641,7 @@ git commit -m "feat(strategies): add regime-adaptive position sizing to base cla
 ## Task 5: Update Strategy Registry with Clean A-H Naming
 
 **Files:**
+
 - Modify: `core/strategies/__init__.py`
 - Modify: `core/strategies/base_strategy.py` (update StrategyType enum)
 - Delete: `core/strategies/range_short.py` (obsolete D)
@@ -894,11 +901,12 @@ git commit -m "feat(strategies): clean A-H naming, remove legacy identifiers (EP
 
 ---
 
-*Plan continues in next message due to length...*
+_Plan continues in next message due to length..._
 
 ## Task 6: Update Screener for Regime Integration
 
 **Files:**
+
 - Modify: `core/screener.py`
 - Test: Verify regime-based allocation and skip logic
 
@@ -912,9 +920,9 @@ from core.strategies import STRATEGY_NAME_TO_LETTER
 
 class StrategyScreener:
     """Screen stocks using 8 trading strategies via plugin architecture."""
-    
+
     # ... existing constants ...
-    
+
     def screen_all(
         self,
         symbols: List[str],
@@ -924,29 +932,29 @@ class StrategyScreener:
     ) -> List[StrategyMatch]:
         """
         Screen all symbols using strategy plugins with regime-based allocation.
-        
+
         Phase 1: Get allocation from regime table
         Phase 2: Run only strategies with slots > 0
         Phase 3: Select exactly N per strategy (no backfill)
-        
+
         Args:
             symbols: List of stock symbols
             regime: Market regime from MarketRegimeDetector
             market_data: Optional pre-loaded market data
             batch_size: Batch size for processing
-            
+
         Returns:
             List of StrategyMatch (max 10 total, distributed per table)
         """
         self.market_data = market_data or {}
-        
+
         # Get allocation from table
         detector = MarketRegimeDetector()
         allocation = detector.get_allocation(regime)
-        
+
         logger.info(f"Regime: {regime}")
         logger.info(f"Allocation: {allocation}")
-        
+
         # Filter to active strategies (slots > 0)
         active_strategies = {}
         for stype, strategy in self._strategies.items():
@@ -958,17 +966,17 @@ class StrategyScreener:
                 logger.info(f"  {strategy.NAME} ({letter}): {slots} slots")
             else:
                 logger.info(f"  {strategy.NAME} ({letter}): SKIPPED (0 slots)")
-        
+
         # Run Phase 0 pre-calculation
         self._phase0_data = self._run_phase0_precalculation(symbols, self.market_data)
-        
+
         # Share data with active strategies
         for strategy in active_strategies.values():
             strategy.market_data = self.market_data
             strategy.phase0_data = self._phase0_data
             strategy.spy_return_5d = self._spy_return_5d
             strategy._spy_df = self._spy_data
-        
+
         # Phase 1: Screen with each active strategy
         all_candidates = []
         for stype, strategy in active_strategies.items():
@@ -976,12 +984,12 @@ class StrategyScreener:
             candidates = strategy.screen(symbols, max_candidates=max_slots)
             all_candidates.extend(candidates)
             logger.info(f"{strategy.NAME}: {len(candidates)} candidates (max {max_slots})")
-        
+
         # Phase 2: Allocate by table (strict, no backfill)
         selected = self._allocate_by_table(all_candidates, allocation, regime)
-        
+
         return selected
-    
+
     def _allocate_by_table(
         self,
         all_candidates: List[StrategyMatch],
@@ -991,41 +999,41 @@ class StrategyScreener:
         """
         Select exactly N candidates per strategy as per allocation table.
         No cross-strategy backfilling.
-        
+
         Args:
             all_candidates: All candidates from all strategies
             allocation: Slot allocation per strategy letter (A-H)
             regime: Current regime (for position sizing)
-            
+
         Returns:
             Selected candidates (may be < 10 if strategies underfilled)
         """
         selected = []
-        
+
         for letter, slots in allocation.items():
             if slots == 0:
                 continue
-            
+
             # Get strategy name from letter
             from core.strategies import STRATEGY_METADATA
             strategy_name = STRATEGY_METADATA.get(letter, {}).get('name', '')
-            
+
             # Get candidates for this strategy
             strategy_cands = [c for c in all_candidates if c.strategy == strategy_name]
-            
+
             # Sort by score descending
             strategy_cands.sort(key=lambda x: x.technical_snapshot.get('score', 0), reverse=True)
-            
+
             # Take top N
             for candidate in strategy_cands[:slots]:
                 candidate.regime = regime  # Set regime for position sizing
                 selected.append(candidate)
-            
+
             logger.info(f"[{letter}:{strategy_name}] Selected {min(len(strategy_cands), slots)}/{len(strategy_cands)} (target: {slots})")
-        
+
         # Sort final list by score
         selected.sort(key=lambda x: x.technical_snapshot.get('score', 0), reverse=True)
-        
+
         logger.info(f"Total selected: {len(selected)} candidates")
         return selected
 ```
@@ -1038,16 +1046,16 @@ class StrategyScreener:
 def screen(self, symbols: List[str], max_candidates: int = 5) -> List[StrategyMatch]:
     """
     Screen all symbols using this strategy.
-    
+
     Args:
         symbols: List of stock symbols
         max_candidates: Maximum candidates to return (from allocation table)
-        
+
     Returns:
         List of StrategyMatch objects (max max_candidates)
     """
     # ... existing implementation ...
-    
+
     # Change final return from [:5] to [:max_candidates]
     return sorted(matches, key=lambda x: x.confidence, reverse=True)[:max_candidates]
 ```
@@ -1064,6 +1072,7 @@ git commit -m "feat(screener): regime-based allocation, skip 0-slot strategies"
 ## Task 7: Update Scheduler for Regime-Based Workflow
 
 **Files:**
+
 - Modify: `scheduler.py`
 - Modify: `core/market_analyzer.py` (simplify to use regime)
 
@@ -1075,10 +1084,10 @@ git commit -m "feat(screener): regime-based allocation, skip 0-slot strategies"
 def get_regime_allocation(self, regime: str) -> Dict[str, int]:
     """
     Get allocation from regime table (replaces AI allocation).
-    
+
     Args:
         regime: Market regime from MarketRegimeDetector
-        
+
     Returns:
         Dict mapping strategy names to slot counts
     """
@@ -1098,7 +1107,7 @@ class CompleteScanner:
     def __init__(self):
         # ... existing init ...
         self.regime_detector = MarketRegimeDetector()
-        
+
         # Update strategy descriptions for v5.0
         self.STRATEGY_DESCRIPTIONS = {
             "MomentumBreakout": "VCP platform + volume breakout - momentum plays",
@@ -1110,58 +1119,58 @@ class CompleteScanner:
             "EarningsGap": "Post-earnings gap continuation - long/short",
             "RelativeStrengthLong": "RS divergence longs in bear markets"
         }
-    
+
     def _phase1_market_analysis(self) -> Dict:
         """
         Phase 1: Market Regime Detection (replaces sentiment).
-        
+
         Returns:
             Dict with 'regime' and 'allocation'
         """
         logger.info("\n" + "=" * 60)
         logger.info("PHASE 1: Market Regime Detection")
         logger.info("=" * 60)
-        
+
         phase_start = datetime.now()
-        
+
         try:
             # Get SPY and VIX data from Tier 3 cache
             spy_df = self.db.get_tier3_cache('SPY')
             vix_df = self.db.get_tier3_cache('VIX') or self.db.get_tier3_cache('VIXY')
-            
+
             # Detect regime
             regime = self.regime_detector.detect_regime(spy_df, vix_df)
             allocation = self.regime_detector.get_allocation(regime)
-            
+
             logger.info(f"Market regime: {regime}")
             logger.info(f"Strategy allocation: {allocation}")
-            
+
         except Exception as e:
             logger.error(f"Regime detection failed: {e}")
             regime = 'neutral'
             allocation = self.regime_detector.get_allocation('neutral')
-        
+
         duration = (datetime.now() - phase_start).total_seconds()
         self._phase_times['phase1'] = int(duration)
-        
+
         return {
             'regime': regime,
             'allocation': allocation
         }
-    
+
     def run_complete_workflow(self, ...):
         # ... existing setup ...
-        
+
         # Phase 1: Market Regime (replaces sentiment)
         phase1_result = self._phase1_market_analysis()
         regime = phase1_result['regime']
-        
+
         # Phase 2: Screen with regime
         candidates = self.screener.screen_all(
             symbols=symbols,
             regime=regime
         )
-        
+
         # ... rest unchanged ...
 ```
 
@@ -1177,6 +1186,7 @@ git commit -m "feat(scheduler): regime-based workflow, remove AI allocation"
 ## Task 8: Modify Strategy C (SupportBounce)
 
 **Files:**
+
 - Modify: `core/strategies/support_bounce.py`
 
 - [ ] **Step 1: Remove SPY > EMA200 gate, add regime-adaptive sizing**
@@ -1191,21 +1201,21 @@ class SupportBounceStrategy(BaseStrategy):
     - Regime-adaptive position sizing
     - Reclaim window 1-5 days continuous scoring
     """
-    
+
     NAME = "SupportBounce"
     STRATEGY_TYPE = StrategyType.UPTHRUST_REBOUND
     DESCRIPTION = "SupportBounce v5.0 - regime-adaptive false breakdown"
     DIMENSIONS = ['SQ', 'VD', 'RB']
     DIRECTION = 'long'
-    
+
     # ... existing PARAMS ...
-    
+
     def filter(self, symbol: str, df: pd.DataFrame) -> bool:
         """Filter - no SPY gate, wider depth range."""
         # ... remove SPY > EMA200 check ...
         # ... change depth range to 2-10% ...
         pass
-    
+
     def calculate_dimensions(self, symbol: str, df: pd.DataFrame) -> List[ScoringDimension]:
         """Score SQ, VD, RB with continuous reclaim scoring."""
         # ... modify reclaim to score 1-5 days continuously ...
@@ -1224,6 +1234,7 @@ git commit -m "feat(support_bounce): v5.0 remove SPY gate, regime-adaptive, cont
 ## Task 9: Modify Strategy F (CapitulationRebound)
 
 **Files:**
+
 - Modify: `core/strategies/capitulation_rebound.py`
 
 - [ ] **Step 1: Flip VIX filter, add exemption flag**
@@ -1239,40 +1250,40 @@ class CapitulationReboundStrategy(BaseStrategy):
     - VIX > 35 = Tier B max
     - Exempt from extreme regime scalar
     """
-    
+
     NAME = "CapitulationRebound"
     STRATEGY_TYPE = StrategyType.PARABOLIC
     DESCRIPTION = "CapitulationRebound v5.0 - VIX 15-35 window"
     DIMENSIONS = ['MO', 'EX', 'VC']
     DIRECTION = 'long'
-    
+
     # This strategy is exempt from extreme regime scalar
     EXTREME_EXEMPT = True
-    
+
     PARAMS = {
         # ... existing params ...
         'vix_min': 15,      # NEW: VIX < 15 = reject
         'vix_max_full': 35,  # VIX > 35 = Tier B cap
         'rsi_max': 22,       # Changed from 20
     }
-    
+
     def filter(self, symbol: str, df: pd.DataFrame) -> bool:
         """Filter with inverted VIX gate."""
         # Get VIX from phase0_data or fetch
         vix_data = self._get_vix_data()
         vix_current = vix_data['close'].iloc[-1] if vix_data is not None else 20.0
-        
+
         # VIX < 15 = reject (no fear = no capitulation)
         if vix_current < self.PARAMS['vix_min']:
             logger.debug(f"CR_REJ: {symbol} - VIX too low: {vix_current:.1f} < {self.PARAMS['vix_min']}")
             return False
-        
+
         # ... rest of filters ...
-        
+
         # VIX > 35 caps at Tier B
         if vix_current > self.PARAMS['vix_max_full']:
             self._tier_cap = 'B'  # Set instance flag for calculate_score
-        
+
         return True
 ```
 
@@ -1288,6 +1299,7 @@ git commit -m "feat(capitulation): v5.0 VIX filter inverted, extreme exempt, RSI
 ## Task 10: Create Strategy D (DistributionTop) - Reuse from DoubleTopBottom + RangeShort
 
 **Files:**
+
 - Create: `core/strategies/distribution_top.py` - NEW strategy D (short)
 - Reference: `core/strategies/double_top_bottom.py` - extract short/top logic
 - Reference: `core/strategies/range_short.py` - extract sector-weak pattern
@@ -1337,13 +1349,13 @@ class DistributionTopStrategy(BaseStrategy):
     Short-only distribution tops at multi-week highs.
     Combines DoubleTopBottom short logic + RangeShort sector-weak pattern.
     """
-    
+
     NAME = "DistributionTop"
     STRATEGY_TYPE = StrategyType.D
     DESCRIPTION = "DistributionTop v5.0 - short distribution patterns"
     DIMENSIONS = ['TQ', 'RL', 'DS', 'VC']
     DIRECTION = 'short'
-    
+
     PARAMS = {
         'min_dollar_volume': 50_000_000,
         'min_atr_pct': 0.015,
@@ -1356,56 +1368,56 @@ class DistributionTopStrategy(BaseStrategy):
         'breakout_threshold_atr': 0.3,
         'volume_veto_threshold': 1.5,
     }
-    
+
     def filter(self, symbol: str, df: pd.DataFrame) -> bool:
         """
         Filter for distribution top candidates.
-        
+
         Uses logic adapted from DoubleTopBottom (short side) and RangeShort.
         """
         if len(df) < self.PARAMS['min_listing_days']:
             return False
-        
+
         ind = TechnicalIndicators(df)
         ind.calculate_all()
-        
+
         current_price = df['close'].iloc[-1]
-        
+
         # Check dollar volume
         dollar_volume = current_price * df['volume'].iloc[-1]
         if dollar_volume < self.PARAMS['min_dollar_volume']:
             return False
-        
+
         # Check ADR
         adr_pct = ind.indicators.get('adr', {}).get('adr_pct', 0)
         if adr_pct < self.PARAMS['min_atr_pct']:
             return False
-        
+
         # EMA checks (from v5.0 spec)
         ema8 = ind.indicators.get('ema', {}).get('ema8', current_price)
         ema21 = ind.indicators.get('ema', {}).get('ema21', current_price)
         ema50 = ind.indicators.get('ema', {}).get('ema50', current_price)
-        
+
         # Price not strongly extended above EMA50
         if current_price > ema50 * self.PARAMS['max_distance_from_ema50']:
             return False
-        
+
         # EMA alignment - not in strong uptrend
         if ema8 > ema21 * self.PARAMS['ema_alignment_tolerance']:
             return False
-        
+
         # Near 60d high
         high_60d = df['high'].tail(60).max()
         if (high_60d - current_price) / high_60d > self.PARAMS['max_distance_from_60d_high']:
             return False
-        
+
         # Check for resistance level with touches (adapted from DoubleTopBottom)
         resistance_level = self._detect_resistance_level(df)
         if resistance_level is None:
             return False
-        
+
         return True
-    
+
     def _detect_resistance_level(self, df: pd.DataFrame) -> Optional[Dict]:
         """
         Detect resistance level with multiple touches.
@@ -1413,72 +1425,72 @@ class DistributionTopStrategy(BaseStrategy):
         """
         # Look for peaks in last 90 days
         highs = df['high'].tail(90)
-        
+
         # Find local maxima
         from scipy.signal import find_peaks
         peaks, _ = find_peaks(highs, distance=5)
-        
+
         if len(peaks) < 2:
             return None
-        
+
         peak_prices = highs.iloc[peaks].values
-        
+
         # Group peaks that are close in price (within 1 ATR)
         atr = TechnicalIndicators(df).indicators.get('atr', {}).get('atr14', df['close'].iloc[-1] * 0.02)
-        
+
         # Find cluster of peaks
         level_high = np.max(peak_prices)
         level_low = np.max(peak_prices[peak_prices >= level_high - atr * 2.5])
-        
+
         touches = len([p for p in peak_prices if level_high >= p >= level_low])
-        
+
         if touches < self.PARAMS['min_touches']:
             return None
-        
+
         return {
             'high': level_high,
             'low': level_low,
             'touches': touches,
             'width_atr': (level_high - level_low) / atr
         }
-    
+
     def calculate_dimensions(self, symbol: str, df: pd.DataFrame) -> List[ScoringDimension]:
         """
         Calculate TQ, RL, DS, VC per v5.0 spec.
-        
+
         Adapted from DoubleTopBottom dimensions, modified for v5.0.
         """
         ind = TechnicalIndicators(df)
         ind.calculate_all()
-        
+
         # TQ: Trend Quality (EMA alignment, sector weakness)
         tq_score = self._calculate_tq(ind, df)
-        
+
         # RL: Resistance Level (touch count, interval, width)
         rl_score = self._calculate_rl(df)
-        
+
         # DS: Distribution Signs (volume on up-days, exhaustion)
         ds_score = self._calculate_ds(df)
-        
+
         # VC: Volume Confirmation (breakdown surge, follow-through)
         vc_score = self._calculate_vc(df)
-        
+
         return [
             ScoringDimension(name='TQ', score=tq_score, max_score=4.0, details={}),
             ScoringDimension(name='RL', score=rl_score, max_score=4.0, details={}),
             ScoringDimension(name='DS', score=ds_score, max_score=4.0, details={}),
             ScoringDimension(name='VC', score=vc_score, max_score=3.0, details={}),
         ]
-    
+
     def _calculate_tq(self, ind: TechnicalIndicators, df: pd.DataFrame) -> float:
         """Trend Quality - EMA alignment and sector weakness."""
         current_price = df['close'].iloc[-1]
         ema8 = ind.indicators.get('ema', {}).get('ema8', current_price)
         ema21 = ind.indicators.get('ema', {}).get('ema21', current_price)
         ema50 = ind.indicators.get('ema', {}).get('ema50', current_price)
-        
+
         score = 0.0
-        
+
         # EMA alignment (0-2.5)
         if current_price < ema50 and ema8 < ema21:
             score += 2.5
@@ -1486,20 +1498,20 @@ class DistributionTopStrategy(BaseStrategy):
             score += 1.5
         elif current_price > ema50 and ema8 < ema21:
             score += 1.0
-        
+
         # Sector weakness would require sector data from phase0
         # For now, placeholder - can be enhanced with sector ETF data
-        
+
         return min(4.0, score)
-    
+
     def _calculate_rl(self, df: pd.DataFrame) -> float:
         """Resistance Level quality - touches, interval, width."""
         level = self._detect_resistance_level(df)
         if level is None:
             return 0.0
-        
+
         score = 0.0
-        
+
         # Touch count (0-1.5)
         touches = level['touches']
         if touches >= 5:
@@ -1510,7 +1522,7 @@ class DistributionTopStrategy(BaseStrategy):
             score += 0.8
         elif touches == 2:
             score += 0.3
-        
+
         # Width (0-1.0) - tighter is better
         width_atr = level['width_atr']
         if 1.0 <= width_atr <= 2.5:
@@ -1519,25 +1531,25 @@ class DistributionTopStrategy(BaseStrategy):
             score += 0.5
         elif width_atr > 3.0:
             score += 0.3
-        
+
         return min(4.0, score)
-    
+
     def _calculate_ds(self, df: pd.DataFrame) -> float:
         """Distribution Signs - heavy volume on up-days at resistance."""
         # Count up-days near resistance with high volume
         level = self._detect_resistance_level(df)
         if level is None:
             return 0.0
-        
+
         recent = df.tail(30)
         avg_volume = df['volume'].tail(20).mean()
-        
+
         heavy_vol_up_days = 0
         for idx, row in recent.iterrows():
             if row['close'] > row['open'] and row['volume'] > avg_volume * 1.5:
                 if abs(row['high'] - level['high']) / level['high'] < 0.02:
                     heavy_vol_up_days += 1
-        
+
         if heavy_vol_up_days >= 3:
             return 2.0
         elif heavy_vol_up_days == 2:
@@ -1545,17 +1557,17 @@ class DistributionTopStrategy(BaseStrategy):
         elif heavy_vol_up_days == 1:
             return 0.6
         return 0.0
-    
+
     def _calculate_vc(self, df: pd.DataFrame) -> float:
         """Volume Confirmation - breakdown surge and follow-through."""
         recent_volume = df['volume'].iloc[-1]
         avg_volume = df['volume'].tail(20).mean()
-        
+
         if avg_volume == 0:
             return 0.0
-        
+
         volume_ratio = recent_volume / avg_volume
-        
+
         # Breakdown volume (0-2.0)
         if volume_ratio >= 2.5:
             return 2.0
@@ -1564,23 +1576,23 @@ class DistributionTopStrategy(BaseStrategy):
         elif volume_ratio >= 1.2:
             return 0.5 + (volume_ratio - 1.2) / 0.6 * 0.8
         return 0.0
-    
-    def calculate_entry_exit(self, symbol: str, df: pd.DataFrame, 
-                            dimensions: List[ScoringDimension], 
+
+    def calculate_entry_exit(self, symbol: str, df: pd.DataFrame,
+                            dimensions: List[ScoringDimension],
                             score: float, tier: str) -> Tuple[float, float, float]:
         """Calculate entry, stop, target for short position."""
         current_price = df['close'].iloc[-1]
         ind = TechnicalIndicators(df)
         atr = ind.indicators.get('atr', {}).get('atr14', current_price * 0.02)
-        
+
         level = self._detect_resistance_level(df)
         resistance_high = level['high'] if level else df['high'].tail(20).max()
-        
+
         entry = round(current_price, 2)
         stop = round(min(resistance_high + 0.5 * atr, entry * 1.04), 2)
         risk = stop - entry
         target = round(entry - risk * 2.5, 2)
-        
+
         return entry, stop, target
 ```
 
@@ -1610,6 +1622,7 @@ git commit -m "feat(distribution_top): Strategy D v5.0 - adapted from DoubleTopB
 ## Task 11: Create Strategy E (AccumulationBottom) - Reuse from DoubleTopBottom
 
 **Files:**
+
 - Create: `core/strategies/accumulation_bottom.py` - NEW strategy E (long)
 - Reference: `core/strategies/double_top_bottom.py` - extract long/bottom logic
 - Keep: `core/strategies/double_top_bottom.py` for now (delete after E working)
@@ -1651,13 +1664,13 @@ class AccumulationBottomStrategy(BaseStrategy):
     Long-only accumulation bases at multi-week lows.
     Adapted from DoubleTopBottom long-side logic.
     """
-    
+
     NAME = "AccumulationBottom"
     STRATEGY_TYPE = StrategyType.E
     DESCRIPTION = "AccumulationBottom v5.0 - long accumulation patterns"
     DIMENSIONS = ['TQ', 'AL', 'AS', 'VC']
     DIRECTION = 'long'
-    
+
     PARAMS = {
         'min_dollar_volume': 50_000_000,
         'min_atr_pct': 0.015,
@@ -1668,79 +1681,79 @@ class AccumulationBottomStrategy(BaseStrategy):
         'min_touches': 2,
         'rsi_max': 40,             # RSI oversold threshold
     }
-    
+
     def filter(self, symbol: str, df: pd.DataFrame) -> bool:
         """Filter for accumulation bottom candidates."""
         if len(df) < self.PARAMS['min_listing_days']:
             return False
-        
+
         ind = TechnicalIndicators(df)
         ind.calculate_all()
-        
+
         current_price = df['close'].iloc[-1]
-        
+
         # Market cap check from phase0_data
         data = self.phase0_data.get(symbol, {})
         market_cap = data.get('market_cap', 0)
         if market_cap < self.PARAMS['min_market_cap']:
             return False
-        
+
         # Volume check
         avg_volume = df['volume'].tail(20).mean()
         if avg_volume < self.PARAMS['min_volume']:
             return False
-        
+
         # Near 60d low
         low_60d = df['low'].tail(60).min()
         if (current_price - low_60d) / low_60d > self.PARAMS['max_distance_from_60d_low']:
             return False
-        
+
         # RSI oversold
         rsi = ind.indicators.get('rsi', {}).get('rsi14', 50)
         if rsi > self.PARAMS['rsi_max']:
             return False
-        
+
         # Check for support level
         support_level = self._detect_support_level(df)
         if support_level is None:
             return False
-        
+
         return True
-    
+
     def _detect_support_level(self, df: pd.DataFrame) -> Optional[Dict]:
         """
         Detect support level with multiple touches.
         Adapted from DoubleTopBottom._detect_double_bottom() long-side logic.
         """
         lows = df['low'].tail(90)
-        
+
         # Find local minima
         from scipy.signal import find_peaks
         # Invert lows to find troughs
         troughs, _ = find_peaks(-lows.values, distance=5)
-        
+
         if len(troughs) < 2:
             return None
-        
+
         trough_prices = lows.iloc[troughs].values
-        
+
         # Cluster troughs
         atr = TechnicalIndicators(df).indicators.get('atr', {}).get('atr14', df['close'].iloc[-1] * 0.02)
-        
+
         level_low = np.min(trough_prices)
         level_high = np.min(trough_prices[trough_prices <= level_low + atr * 2.5])
-        
+
         touches = len([t for t in trough_prices if level_low <= t <= level_high])
-        
+
         if touches < self.PARAMS['min_touches']:
             return None
-        
+
         return {
             'low': level_low,
             'high': level_high,
             'touches': touches,
         }
-    
+
     def calculate_dimensions(self, symbol: str, df: pd.DataFrame) -> List[ScoringDimension]:
         """Calculate TQ, AL, AS, VC per v5.0 spec."""
         # Implementation mirroring DoubleTopBottom but for bottoms only
@@ -1763,12 +1776,12 @@ git add core/strategies/accumulation_bottom.py
 git commit -m "feat(accumulation_bottom): Strategy E v5.0 - adapted from DoubleTopBottom"
 ```
 
-
 ---
 
 ## Task 12: Create Strategy H (RelativeStrengthLong)
 
 **Files:**
+
 - Create: `core/strategies/relative_strength_long.py` - NEW strategy H
 
 - [ ] **Step 1: Implement Strategy H**
@@ -1792,33 +1805,33 @@ class RelativeStrengthLongStrategy(BaseStrategy):
     RS divergence longs in bear/neutral markets.
     Exempt from extreme regime scalar.
     """
-    
+
     NAME = "RelativeStrengthLong"
     STRATEGY_TYPE = StrategyType.H
     DESCRIPTION = "RelativeStrengthLong v5.0 - RS leaders in bear markets"
     DIMENSIONS = ['RD', 'SH', 'CQ', 'VC']
     DIRECTION = 'long'
-    
+
     PARAMS = {
         'min_rs_percentile': 80,
         'min_market_cap': 3e9,
         'min_volume': 200000,
         'max_distance_from_52w_high': 0.15,
     }
-    
+
     def filter(self, symbol: str, df: pd.DataFrame) -> bool:
         """Hard gate: Only in bear/neutral regimes. RS >= 80th."""
         regime = getattr(self, '_current_regime', 'neutral')
         if regime not in ['bear_moderate', 'bear_strong', 'extreme_vix', 'neutral']:
             return False
-        
+
         data = self.phase0_data.get(symbol, {})
         rs_pct = data.get('rs_percentile', 0)
         if rs_pct < self.PARAMS['min_rs_percentile']:
             return False
-        
+
         return True
-    
+
     def calculate_dimensions(self, symbol: str, df: pd.DataFrame) -> List[ScoringDimension]:
         """Calculate RD, SH, CQ, VC per v5.0 spec."""
         # Implementation per Strategy_Description_v5.md
@@ -1837,6 +1850,7 @@ git commit -m "feat(relative_strength_long): Strategy H v5.0 - RS divergence in 
 ## Task 13: Create Strategy G (EarningsGap)
 
 **Files:**
+
 - Create: `core/strategies/earnings_gap.py` - NEW strategy G
 
 - [ ] **Step 1: Implement Strategy G**
@@ -1859,33 +1873,33 @@ class EarningsGapStrategy(BaseStrategy):
     Strategy G: EarningsGap v5.0
     Post-earnings gap continuation (long or short).
     """
-    
+
     NAME = "EarningsGap"
     STRATEGY_TYPE = StrategyType.G
     DESCRIPTION = "EarningsGap v5.0 - post-earnings continuation"
     DIMENSIONS = ['GS', 'QC', 'TC', 'VC']
     DIRECTION = 'both'
-    
+
     PARAMS = {
         'min_gap_pct': 0.05,
         'max_days_post_earnings': 5,
         'min_dollar_volume_gap_day': 100e6,
     }
-    
+
     def filter(self, symbol: str, df: pd.DataFrame) -> bool:
         """Filter for earnings gap candidates."""
         data = self.phase0_data.get(symbol, {})
         days_to_earnings = data.get('days_to_earnings')
         gap_1d_pct = data.get('gap_1d_pct', 0)
-        
+
         if days_to_earnings is None or days_to_earnings > 0 or days_to_earnings < -5:
             return False
-        
+
         if abs(gap_1d_pct) < self.PARAMS['min_gap_pct']:
             return False
-        
+
         return True
-    
+
     def calculate_dimensions(self, symbol: str, df: pd.DataFrame) -> List[ScoringDimension]:
         """Calculate GS, QC, TC, VC per v5.0 spec."""
         # Implementation per Strategy_Description_v5.md
@@ -1904,6 +1918,7 @@ git commit -m "feat(earnings_gap): Strategy G v5.0 - post-earnings gap continuat
 ## Task 14: Modify Strategy A (MomentumBreakout)
 
 **Files:**
+
 - Modify: `core/strategies/momentum_breakout.py`
 
 - [ ] **Step 1: Add multi-pattern CQ and bonus pool**
@@ -1918,29 +1933,29 @@ class MomentumBreakoutStrategy(BaseStrategy):
     - TC promoted to primary gate (RS >= 50th)
     - Bonus pool (+3 max, clamped to 15)
     """
-    
+
     NAME = "MomentumBreakout"
     STRATEGY_TYPE = StrategyType.A
     DESCRIPTION = "MomentumBreakout v5.0 - multi-pattern momentum"
     DIMENSIONS = ['TC', 'CQ', 'BS', 'VC']
     DIRECTION = 'long'
-    
+
     PARAMS = {
         'min_rs_percentile': 50,
         'max_raw_score': 20.0,
         'bonus_max': 3.0,
     }
-    
+
     def filter(self, symbol: str, df: pd.DataFrame) -> bool:
         """TC hard gate: RS >= 50th percentile."""
         data = self.phase0_data.get(symbol, {})
         rs_pct = data.get('rs_percentile', 0)
-        
+
         if rs_pct < self.PARAMS['min_rs_percentile']:
             return False
-        
+
         return True
-    
+
     def calculate_dimensions(self, symbol: str, df: pd.DataFrame) -> List[ScoringDimension]:
         """Calculate TC, CQ, BS, VC + bonus pool."""
         # Implementation per Strategy_Description_v5.md
@@ -1959,6 +1974,7 @@ git commit -m "feat(momentum): v5.0 multi-pattern CQ, TC primary gate, bonus poo
 ## Self-Review Checklist
 
 ### Spec Coverage
+
 - [x] Regime detection with 6 regimes
 - [x] Phase 1 Allocation Table (10 slots, 8 strategies A-H)
 - [x] 0-slot strategies skip screening
@@ -1977,12 +1993,14 @@ git commit -m "feat(momentum): v5.0 multi-pattern CQ, TC primary gate, bonus poo
 - [x] Strategy A: multi-pattern, bonus pool
 
 ### Placeholder Scan
+
 - [x] No TBD/TODO/fill in later
 - [x] All code blocks complete
 - [x] All file paths exact
 - [x] All commands with expected output
 
 ### Type Consistency
+
 - [x] `calculate_position_pct(self, tier: str, regime: str)` matches usage
 - [x] `StrategyMatch` has `regime` field
 - [x] `DIRECTION` class variable used consistently
