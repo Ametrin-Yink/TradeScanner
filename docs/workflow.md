@@ -126,7 +126,7 @@ Phase 6: Notifications (1 min)
 | ------ | ---------------------- | ----- | --------------------- | ------- |
 | A1     | MomentumBreakout       | Long  | TC, CQ, BS, VC, Bonus | 18.5    |
 | A2     | PreBreakoutCompression | Long  | TC, CQ, CP, VC, Bonus | 18.5    |
-| B      | PullbackEntry          | Long  | TI, RC, VC, Bonus     | 17.0    |
+| B      | PullbackEntry          | Long  | TI, RC, VC, Bonus     | 20.0    |
 | C      | SupportBounce          | Long  | SQ, VD, RB            | 15.0    |
 | D      | DistributionTop        | Short | TQ, RL, DS, VC        | 15.0    |
 | E      | AccumulationBottom     | Long  | TQ, AL, AS, VC        | 15.0    |

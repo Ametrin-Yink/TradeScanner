@@ -12,11 +12,11 @@ logger = logging.getLogger(__name__)
 
 
 class PullbackEntryStrategy(BaseStrategy):
-    """Strategy B: PullbackEntry v7.0 - Pullback to EMA with 4D scoring."""
+    """Strategy B: PullbackEntry v7.2 - Pullback to EMA with 6D scoring."""
 
     NAME = "PullbackEntry"
     STRATEGY_TYPE = StrategyType.B
-    DESCRIPTION = "PullbackEntry v5.0"
+    DESCRIPTION = "PullbackEntry v7.2"
     DIMENSIONS = ['TI', 'RC', 'VC', 'BONUS']
 
     # Strategy Parameters

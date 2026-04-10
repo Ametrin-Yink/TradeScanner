@@ -1121,11 +1121,12 @@ class TechnicalIndicators:
         lower_shadow = min(curr['open'], curr['close']) - curr['low']
         upper_shadow = curr['high'] - max(curr['open'], curr['close'])
 
+        # Cache CLV once (used for hammer check and strong CLV check)
+        clv = self.calculate_clv()
+
         # Signal 1: Hammer
-        if body_curr > 0 and lower_shadow >= 2 * body_curr:
-            clv = self.calculate_clv()
-            if clv > 0.5:
-                signals += 1
+        if body_curr > 0 and lower_shadow >= 2 * body_curr and clv > 0.5:
+            signals += 1
 
         # Signal 2: Bullish engulfing
         if prev['close'] < prev['open'] and curr['close'] > curr['open']:
@@ -1133,7 +1134,6 @@ class TechnicalIndicators:
                 signals += 1
 
         # Signal 3: Strong CLV (close in upper 30% of range)
-        clv = self.calculate_clv()
         if clv > 0.7:
             signals += 1
 
