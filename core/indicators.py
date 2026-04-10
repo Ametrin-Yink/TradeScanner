@@ -857,11 +857,18 @@ class TechnicalIndicators:
         """
         Calculate Retracement Structure score for Shoryuken v3.0.
 
+        Components:
+        - Tightness (0-3): 5-day range tightness
+        - Support (0-2): EMA8 support penetration
+        - Gap (0-1): Gap-down absence
+        - Depth (0-1): Minimum 3% pullback from recent high
+        - Reversal (0-1): Candle reversal patterns
+
         Returns:
             Dict with structure metrics and score
         """
         if len(self.df) < 10:
-            return {'score': 0, 'is_valid': False}
+            return {'total_score': 0, 'is_valid': False}
 
         recent_5d = self.df.tail(5)
         current_price = self.df['close'].iloc[-1]
@@ -895,17 +902,33 @@ class TechnicalIndicators:
             penetration = (ema8_support_level - low_min_val) / ema8_current
             support_score = max(0.0, 2.0 - penetration * 10)  # 10x multiplier for sensitivity
 
-        # MISMATCH FIX 2 (Strategy B): Gap-down scoring (doc line 240)
-        # Gap < 0.8×ATR gives 1.0 score, gap > 0.8×ATR gives 0 points
-        # This is a scoring component, not a binary filter
+        # Indicator C: Gap-down scoring (doc line 240)
         atr_data = self._calculate_atr(period=14)
         atr14 = atr_data.get('atr', 0)
         gap_estimate = 0.4 * atr14  # Conservative estimate of potential gap
         gap_limit = 0.8 * atr14
         gap_score = 1.0 if gap_estimate < gap_limit else 0.0
 
+        # Indicator D: Pullback depth (NEW: min 3% from recent 5d high)
+        recent_high_5d = recent_5d['high'].max()
+        pullback_depth = (recent_high_5d - low_min_val) / recent_high_5d if recent_high_5d > 0 else 0.0
+
+        if pullback_depth >= 0.05:
+            depth_score = 1.0  # Strong pullback, good entry opportunity
+        elif pullback_depth >= 0.03:
+            # Linear from 0.5 at 3% to 1.0 at 5%
+            depth_score = 0.5 + (pullback_depth - 0.03) / 0.02 * 0.5
+        elif pullback_depth >= 0.015:
+            # Linear from 0.0 at 1.5% to 0.5 at 3%
+            depth_score = max(0.0, (pullback_depth - 0.015) / 0.015 * 0.5)
+        else:
+            depth_score = 0.0  # Shallow pullback, not a real pullback trade
+
+        # Indicator E: Reversal candle patterns (NEW)
+        reversal_score = self._calculate_reversal_candle_score()
+
         # Round to 2 decimals
-        total_score = round(tightness_score + support_score + gap_score, 2)
+        total_score = round(tightness_score + support_score + gap_score + depth_score + reversal_score, 2)
 
         return {
             'tightness_score': tightness_score,
@@ -913,6 +936,10 @@ class TechnicalIndicators:
             'gap_score': gap_score,
             'gap_estimate': float(gap_estimate),
             'gap_limit': float(gap_limit),
+            'depth_score': depth_score,
+            'pullback_depth_pct': float(pullback_depth * 100),
+            'reversal_score': reversal_score,
+            'reversal_signals': self._get_reversal_signal_details(),
             'total_score': total_score,
             'price_range_pct': float(price_range * 100),
             'ema8_current': float(ema8_current),
@@ -950,9 +977,20 @@ class TechnicalIndicators:
             # Linear from 1.0 at 90% to 0 at 100%
             dry_score = max(0.0, 1.0 - (v_dry - 0.9) / 0.1)
 
-        # Indicator B: Today's volume surge (for trigger day) - 2 decimal precision
+        # Indicator B: Today's volume surge (for trigger day)
         vol_today = volume.iloc[-1]
         v_surge = vol_today / vol_20d if vol_20d > 0 else 1.0
+
+        # Indicator C: Distribution penalty (NEW)
+        # If volume surges AND price is down, this is distribution not accumulation
+        close_today = self.df['close'].iloc[-1]
+        open_today = self.df['open'].iloc[-1]
+        is_down_day = close_today < open_today
+
+        if v_surge > 1.5 and is_down_day:
+            distribution_penalty = -1.0  # Heavy selling on high volume = distribution
+        else:
+            distribution_penalty = 0.0
 
         if v_surge > 1.5:
             surge_score = 3.0  # Institutional return
@@ -964,13 +1002,15 @@ class TechnicalIndicators:
             surge_score = max(0.0, (v_surge - 1.0) / 0.2 * 1.5)
 
         # Round to 2 decimals
-        total_score = round(dry_score + surge_score, 2)
+        total_score = round(dry_score + surge_score + distribution_penalty, 2)
 
         return {
             'v_dry': float(v_dry),
             'dry_score': dry_score,
             'v_surge': float(v_surge),
             'surge_score': surge_score,
+            'distribution_penalty': distribution_penalty,
+            'is_distribution_day': bool(v_surge > 1.5 and is_down_day),
             'total_score': total_score,
             'vol_today': int(vol_today),
             'vol_20d_avg': int(vol_20d)
@@ -1048,6 +1088,86 @@ class TechnicalIndicators:
             'clv_current': round(clv_current, 2),
             'clv_prev': round(clv_prev, 2),
             'earnings_pause': False
+        }
+
+    def _calculate_reversal_candle_score(self) -> float:
+        """
+        Calculate reversal candle score (0-1 pts) for pullback entry.
+
+        Detects:
+        - Hammer: lower_shadow >= 2x body AND CLV > 0.5
+        - Bullish engulfing: current green candle engulfs previous red
+        - Strong CLV: CLV > 0.7 (close near high of range)
+
+        Scoring:
+        - 2+ signals → 1.0
+        - 1 signal → 0.5
+        - 0 signals → 0.0
+
+        Returns:
+            Score 0-1
+        """
+        if len(self.df) < 2:
+            return 0.0
+
+        signals = 0
+
+        # Current candle
+        curr = self.df.iloc[-1]
+        prev = self.df.iloc[-2]
+
+        body_curr = abs(curr['close'] - curr['open'])
+        range_curr = curr['high'] - curr['low']
+        lower_shadow = min(curr['open'], curr['close']) - curr['low']
+        upper_shadow = curr['high'] - max(curr['open'], curr['close'])
+
+        # Signal 1: Hammer
+        if body_curr > 0 and lower_shadow >= 2 * body_curr:
+            clv = self.calculate_clv()
+            if clv > 0.5:
+                signals += 1
+
+        # Signal 2: Bullish engulfing
+        if prev['close'] < prev['open'] and curr['close'] > curr['open']:
+            if curr['close'] >= prev['open'] and curr['open'] <= prev['close']:
+                signals += 1
+
+        # Signal 3: Strong CLV (close in upper 30% of range)
+        clv = self.calculate_clv()
+        if clv > 0.7:
+            signals += 1
+
+        if signals >= 2:
+            return 1.0
+        elif signals == 1:
+            return 0.5
+        else:
+            return 0.0
+
+    def _get_reversal_signal_details(self) -> Dict[str, any]:
+        """Return details about which reversal signals fired."""
+        if len(self.df) < 2:
+            return {'hammer': False, 'bullish_engulfing': False, 'strong_clv': False}
+
+        curr = self.df.iloc[-1]
+        prev = self.df.iloc[-2]
+
+        body_curr = abs(curr['close'] - curr['open'])
+        lower_shadow = min(curr['open'], curr['close']) - curr['low']
+        clv = self.calculate_clv()
+
+        hammer = body_curr > 0 and lower_shadow >= 2 * body_curr and clv > 0.5
+
+        bullish_engulfing = False
+        if prev['close'] < prev['open'] and curr['close'] > curr['open']:
+            if curr['close'] >= prev['open'] and curr['open'] <= prev['close']:
+                bullish_engulfing = True
+
+        return {
+            'hammer': hammer,
+            'bullish_engulfing': bullish_engulfing,
+            'strong_clv': clv > 0.7,
+            'clv': round(clv, 2)
         }
 
     def _calculate_clv_for_index(self, idx: int) -> float:

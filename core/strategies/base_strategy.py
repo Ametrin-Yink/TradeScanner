@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 STRATEGY_MAX_SCORES = {
     'MomentumBreakout': 18.5,
     'PreBreakoutCompression': 18.5,
-    'PullbackEntry': 17.0,
+    'PullbackEntry': 20.0,
     'SupportBounce': 15.0,
     'DistributionTop': 15.0,
     'AccumulationBottom': 15.0,
@@ -283,6 +283,8 @@ class BaseStrategy(ABC):
 
                 # Calculate entry/exit
                 entry, stop, target = self.calculate_entry_exit(symbol, df, dimensions, score, tier)
+                if entry is None:
+                    continue
 
                 # Calculate confidence
                 confidence = self.calculate_confidence(score, tier)

@@ -160,10 +160,11 @@ Proximity gate: within 1.5% of pivot = full score; 1.5–3% = interpolate to 0; 
 
 | Base vol (last 5d / avg20d) | Score       | Breakout vol | Score   | CLV       | Score |
 | --------------------------- | ----------- | ------------ | ------- | --------- | ----- |
-| <0.65                       | 2.0         | ≥3×          | 1.5     | ≥0.85     | 0.5   |
-| 0.65–0.80                   | 0.8–2.0     | 2–3×         | 1.0–1.5 | 0.65–0.85 | 0–0.5 |
-| 0.80–1.00                   | 0.2–0.8     | 1.5–2×       | 0.5–1.0 | <0.65     | 0     |
-| >1.00                       | 0.2 (floor) | <1.5×        | 0–0.5   |           |       |
+| <0.50                       | 2.0         | >=3.0x       | 1.5     | >=0.85    | 0.5   |
+| 0.50-0.65                   | 1.5-2.0     | 2-3x         | 1.0-1.5 | 0.65-0.85 | 0-0.5 |
+| 0.65-0.80                   | 0.8-1.5     | 1.5-2x       | 0.5-1.0 | <0.65     | 0     |
+| 0.80-1.00                   | 0.2-0.8     | 1-1.5x       | 0-0.5   |           |       |
+| >1.00                       | 0.2 (floor) | <1.0x        | 0       |           |       |
 
 **A2 VC:**
 
@@ -202,16 +203,14 @@ stop = max(stop, entry × 0.92)  # 8% floor
 
 ## Strategy B: PullbackEntry
 
-**Type**: Long | **Regime**: Bull, neutral | **Max Raw**: 17.0 | **Dimensions**: TI(5) + RC(5) + VC(5) + BONUS(2)
+**Type**: Long | **Regime**: Bull, neutral | **Max Raw**: 20.0 | **Dimensions**: TI(5) + RC(8) + VC(5) + BONUS(2)
 
 ### Pre-filter
 
-| Filter      | Condition  |
-| ----------- | ---------- |
-| EMA21 slope | S_norm > 0 |
-| Price       | > EMA21    |
-| Market cap  | ≥ $2B      |
-| Avg vol 20d | ≥ 100K     |
+Phase 0 already filters: market cap >= $2B, price $2-$3000, volume >= 100K.
+Phase 0.5 filters: price > EMA21, S_norm > 0 (uptrend confirmed).
+
+Strategy filter: price >= EMA21 \* 0.98 (2% tolerance for pullback wicks).
 
 ### TI — Trend Intensity (max 5.0)
 
@@ -223,44 +222,57 @@ stop = max(stop, entry × 0.92)  # 8% floor
 | 0.8–1.2 | 4.0–5.0 |
 | 0.4–0.8 | 2.0–4.0 |
 | 0–0.4   | 0–2.0   |
-| <0      | reject  |
+| <0      | 0       |
 
 Penalty: −0.5 per EMA21 touch in 20d (max −1.0)
 
-### RC — Retracement Composite (max 5.0)
+### RC — Retracement Composite (max 8.0)
 
-Requirements: Price>EMA21, pullback<8% from high, price within 1.5% of EMA8.
+Requirements: pullback > 1.5% from recent high (shallow pullbacks score 0 on depth).
 
-| Factor                  | Condition    | Score   |
-| ----------------------- | ------------ | ------- |
-| Range tightness         | <5%          | 2.0     |
-|                         | 5–8%         | 1.0–2.0 |
-| EMA8 support            | Within 1%    | 2.0     |
-|                         | 1–1.5%       | 1.0–2.0 |
-| No gap-down in pullback | Gap <0.8×ATR | 1.0     |
+| Factor                   | Condition              | Score    |
+| ------------------------ | ---------------------- | -------- |
+| Range tightness          | <4%                    | 3.0      |
+|                          | 4–8%                   | 1.0–3.0  |
+|                          | >8% (broken structure) | −2.0–1.0 |
+| EMA8 support             | Within 1.5%            | 2.0      |
+|                          | Penetration deeper     | 0–2.0    |
+| No gap-down in pullback  | Gap <0.8×ATR           | 1.0      |
+| Pullback depth           | >=5%                   | 1.0      |
+|                          | 3–5%                   | 0.5–1.0  |
+|                          | 1.5–3%                 | 0–0.5    |
+|                          | <1.5%                  | 0        |
+| Reversal candle patterns | 2+ signals             | 1.0      |
+|                          | 1 signal               | 0.5      |
+|                          | 0 signals              | 0        |
+
+Reversal signals: hammer (lower shadow >= 2x body + CLV > 0.5), bullish engulfing, strong CLV (> 0.7).
 
 ### VC — Volume Confirmation (max 5.0)
 
-`Volume_Dry = vol_today/vol_20d < 0.7` | `Volume_Surge = vol_today/vol_20d > 1.5`
+| Factor               | Condition                    | Score   |
+| -------------------- | ---------------------------- | ------- |
+| Volume dry-up        | V_dry < 0.7                  | 2.0     |
+|                      | V_dry 0.7–0.9                | 1.0–2.0 |
+|                      | V_dry 0.9–1.0                | 0–1.0   |
+| Volume surge         | V_surge > 1.5                | 3.0     |
+|                      | V_surge 1.2–1.5              | 0–3.0   |
+|                      | V_surge 1.0–1.2              | 0–1.5   |
+| Distribution penalty | V_surge > 1.5 AND price down | −1.0    |
 
-| Pattern        | Score |
-| -------------- | ----- |
-| Dry-up + surge | 5.0   |
-| Surge only     | 3.0   |
-| Dry-up only    | 2.0   |
-| Neither        | 0     |
+Distribution day: volume surging on a down-day signals institutional selling, not accumulation.
 
 ### BONUS (max 2.0)
 
-| Factor               | Score | Condition                                                            |
-| -------------------- | ----- | -------------------------------------------------------------------- |
-| Sector ETF           | 0–1.0 | Sector ETF > EMA21 + positive slope                                  |
-| Momentum persistence | 0–1.0 | Stock 5d return > SPY 5d return by >2% → 1.0; by 1–2% → 0.5; ≤0% → 0 |
+| Factor               | Score | Condition                                                           |
+| -------------------- | ----- | ------------------------------------------------------------------- |
+| Sector leadership    | 0–1.0 | Sector ETF RS>=80th AND >EMA50 → 0.7–1.0; RS>=80th only → 0.3       |
+| Momentum persistence | 0–1.0 | Stock 5d return > SPY 5d return by >2% → 1.0; by 1–2% → 0.5; else 0 |
 
 ### Entry / Exit
 
-**Entry**: Price>EMA21 positive slope; first touch/retest EMA8/21; vol dry-up or surge  
-**Stop**: `min(five_day_low, EMA21−ATR, entry−1.2×ATR)`  
+**Entry**: Price within EMA21 \* 0.98 tolerance; pullback > 3% from recent high preferred; vol dry-up or surge; reversal candle patterns scored in RC
+**Stop**: `min(five_day_low, EMA21−ATR, entry−1.2×ATR)`
 **Target**: `entry + 3.0 × (entry − stop)` | Stage 4 trailing uses EMA5
 
 ---
@@ -291,15 +303,15 @@ Bonus: +0.5 if ≥4 prior touches in 90d (capped at 4.0)
 
 ### VD — Volume Dynamics (max 5.0)
 
-Climax = down-day vol > 2.5×avg20d within last 5d.
+Code uses three-phase additive scoring:
 
-| Pattern                 | Score |
-| ----------------------- | ----- |
-| Climax + dry-up + surge | 5.0   |
-| Dry-up + surge          | 4.0   |
-| Surge only              | 2.5   |
-| Dry-up only             | 1.5   |
-| None                    | 0     |
+**Climax** (max 1.5): down-day vol vs avg20d within last 5d. `>=4.0x = 1.5`, `>=3.0x = 1.0`, `>=2.5x = 0.5`.
+
+**Dry-up** (max 2.0): recent avg vol vs avg20d. `<0.6x = 2.0`, `0.6-0.8x = 1.0-2.0`, `0.8-1.0x = 0-1.0`, `>1.0x = 0`.
+
+**Surge** (max 1.5): latest day vol vs avg20d. `>=3.0x = 1.5`, `>=2.0x = 1.0`, `>=1.5x = 0.5`.
+
+VD = sum of phase scores (capped at 5.0).
 
 ### RB — Rebound (max 6.0)
 
@@ -323,7 +335,7 @@ Climax = down-day vol > 2.5×avg20d within last 5d.
 | 4d                      | 1.0   |
 | ≥5d                     | 0     |
 
-**Sector (0–1.0)**: Sector>EMA21=1.0, EMA21–EMA50=0.5, <EMA50=0
+**Sector (0-1.0)**: Code uses EMA50 with 2% buffer: `>EMA50+2% = 1.0`, `within EMA50+/-2% = 0.5`, `<EMA50-2% = 0`.
 
 ### Entry / Exit
 
@@ -350,12 +362,14 @@ Climax = down-day vol > 2.5×avg20d within last 5d.
 
 ### TQ — Trend Quality (max 4.0)
 
-| EMA Alignment              | Score | Sector ETF       | Score |
-| -------------------------- | ----- | ---------------- | ----- |
-| Price<EMA50 AND EMA8<EMA21 | 2.5   | <EMA50 declining | 1.5   |
-| Price<EMA50 only           | 1.5   | EMA50–EMA200     | 0.8   |
-| Price>EMA50 but EMA8<EMA21 | 1.0   | >EMA50           | 0     |
-| Price>EMA50 AND EMA8>EMA21 | 0     |                  |       |
+Code implements EMA alignment only (max 2.5 actual, dimension reserves 4.0):
+
+| EMA Alignment              | Score |
+| -------------------------- | ----- |
+| Price<EMA50 AND EMA8<EMA21 | 2.5   |
+| Price<EMA50 only           | 1.5   |
+| Price>EMA50 but EMA8<EMA21 | 1.0   |
+| Price>EMA50 AND EMA8>EMA21 | 0     |
 
 ### RL — Resistance Level (max 4.0)
 
@@ -410,12 +424,14 @@ Price action (cap 2.0): shooting star/bearish engulfing=+1.0, failed breakout=+1
 
 ### TQ — Trend Quality (max 4.0)
 
-| EMA Structure                     | Score |
-| --------------------------------- | ----- |
-| Price<EMA50 AND EMA8<EMA21        | 2.5   |
-| Price<EMA200, EMA8 crossing EMA21 | 2.0   |
-| Price<EMA50 only                  | 1.5   |
-| Price>EMA50                       | 0     |
+| EMA Structure                             | Score |
+| ----------------------------------------- | ----- |
+| Price<EMA50 AND EMA8<EMA21                | 2.5   |
+| Price<EMA50 only (EMA8>=EMA21)            | 1.5   |
+| Price>=EMA50 AND Price<EMA200, EMA8≈EMA21 | 2.0   |
+| Price>=EMA200                             | 0     |
+
+Note: The crossing condition (EMA8≈EMA21, within 1%) only scores 2.0 when price >= EMA50. If price < EMA50, the EMA8<EMA21 branch (2.5) or `Price<EMA50 only` branch (1.5) catches it first.
 
 ### AL — Accumulation Level (max 4.0)
 
@@ -470,24 +486,28 @@ Price action (cap 2.0): hammer/bullish engulfing=+1.0, failed breakdown=+1.0, hi
 | Listed              | > 50 days                                               |
 | VIX                 | 15–35 (reject <15; Tier B cap if >35)                   |
 
-### MO — Momentum Overextension (max 5.0)
+### MO -- Momentum Overextension (max 5.0)
 
-| RSI14 | Score   | Distance below EMA50 | Score   |
-| ----- | ------- | -------------------- | ------- |
-| <12   | 3.0     | >25%                 | 2.0     |
-| 12–15 | 2.5–3.0 | 20–25%               | 1.5–2.0 |
-| 15–18 | 2.0–2.5 | 15–20%               | 1.0–1.5 |
-| 18–25 | 0.5–2.0 | 10–15%               | 0.5–1.0 |
-| >25   | 0       | <10%                 | 0       |
+Code uses ATR multiples for distance scoring, not percentage:
+
+| RSI14 | Score   | Distance below EMA50 (ATR multiples) | Score   |
+| ----- | ------- | ------------------------------------ | ------- |
+| <12   | 3.0     | >10x ATR                             | 2.0     |
+| 12-15 | 2.5-3.0 | 7-10x ATR                            | 1.5-2.0 |
+| 15-18 | 2.0-2.5 | 5-7x ATR                             | 1.0-1.5 |
+| 18-25 | 0.5-2.0 | 3-5x ATR                             | 0-1.0   |
+| >25   | 0       | <3x ATR                              | 0       |
+
+Also: +2.0 for bullish RSI divergence detected.
 
 ### EX — Extension Level (max 6.0)
 
-| (EMA50 − price) / ATR | Score   | Gap-down days (5d) | Score | Down-day streak | Score |
+| (EMA50 - price) / ATR | Score   | Gap-down days (5d) | Score | Down-day streak | Score |
 | --------------------- | ------- | ------------------ | ----- | --------------- | ----- |
-| >8×                   | 3.0     | ≥4                 | 2.0   | ≥7              | 1.0   |
-| 6–8×                  | 2.0–3.0 | 3                  | 1.5   | 5–6             | 0.6   |
-| 4–6×                  | 1.0–2.0 | 2                  | 1.0   | 3–4             | 0.3   |
-| <4×                   | 0–1.0   |                    |       |                 |       |
+| >8x                   | 3.0     | >=4                | 2.0   | >=5             | 1.0   |
+| 6-8x                  | 2.0-3.0 | 3                  | 1.5   | 3-4             | 0.5   |
+| 4-6x                  | 1.0-2.0 | 2                  | 1.0   |                 |       |
+| <4x                   | 0-1.0   |                    |       |                 |       |
 
 ### VC — Volume Confirmation (max 4.0)
 
@@ -613,17 +633,17 @@ Sector alignment bonus: +1.0 if sector ETF confirms gap direction
 
 _(RD capped at 4.0 after bonus)_
 
-### SH — Support Holding (max 4.0)
+### SH -- Support Holding (max 4.0)
 
-Evaluated during SPY down-days in last 10d:
+Evaluated during SPY down-days in last 10d. Code gives proportional credit:
 
-| Condition                             | Score |
-| ------------------------------------- | ----- |
-| Held above EMA8 during SPY weakness   | 1.5   |
-| Held above EMA21                      | 1.0   |
-| No SPY down-days in 10d (baseline)    | 1.0   |
-| Brief EMA21 break, reclaimed same day | 0.5   |
-| Closed below EMA21                    | 0     |
+- **EMA8 hold**: full 1.5 if held above EMA8 on ALL down-days; partial = `1.5 * (held_count / num_down_days)`
+- **EMA21 hold**: full 1.0 if held above EMA21 on ALL down-days; partial = `1.0 * (held_count / num_down_days)`
+- **No SPY down-days in 10d**: baseline 1.0
+- **Brief EMA21 break, reclaimed same day**: 0.5
+- **Closed below EMA21**: 0
+
+Max possible: 2.5 (EMA8 + EMA21 full hold) + 1.0 baseline = 3.5, but capped by dimension max.
 
 ### CQ — Consolidation Quality (max 3.0)
 

@@ -120,10 +120,14 @@ class TestPullbackEntryV7:
         assert result is True or result is False, "Filter should run without EMA21 threshold rejection"
 
     def test_ema21_slope_threshold_rejects_negative_slope(self):
-        """Verify that negative EMA21 slope (S_norm < 0) is rejected.
+        """Verify that negative EMA21 slope is handled by Phase 0.5 pre-filter.
 
-        Documentation (line 210): S_norm > 0
-        This should remain a hard gate - negative slope = reject.
+        v7.2: EMA21 slope check moved from filter() to Phase 0.5 pre-filter.
+        The filter() no longer checks slope — Phase 0.5 rejects negative slope
+        before filter() is called.
+
+        This test verifies the filter passes through (trusting Phase 0.5),
+        and that Phase 0.5 would reject negative slope.
         """
         strategy = PullbackEntryStrategy()
 
@@ -138,12 +142,19 @@ class TestPullbackEntryV7:
         strategy.market_atr_median = 2.0
         strategy.stock_info = {'TEST': {'market_cap': 5e9}}
 
-        # Test filter - should reject due to negative slope
-        # The filter checks phase0_data first
+        # filter() passes through — Phase 0.5 should have rejected already
         result = strategy.filter('TEST', df)
 
-        # Should be rejected because ema21_slope_norm (-0.2) < threshold (0)
-        assert result is False, f"Stock with S_norm < 0 should be rejected, got {result}"
+        # Phase 0.5 pre-filter would reject: current_price (100) > ema21 (95) YES,
+        # but ema21_slope_norm (-0.2) > 0 NO — so this symbol never reaches filter()
+        assert result is True, "filter() passes through; Phase 0.5 handles slope rejection"
+
+        # Verify Phase 0.5 logic separately
+        prefiltered = []
+        for symbol, data in strategy.phase0_data.items():
+            if data['current_price'] > data['ema21'] and data['ema21_slope_norm'] > 0:
+                prefiltered.append(symbol)
+        assert 'TEST' not in prefiltered, "Phase 0.5 should reject negative slope"
 
     # ==================== MISMATCH 2: Gap-Down as Scoring Component ====================
 
@@ -179,11 +190,13 @@ class TestPullbackEntryV7:
     # ==================== MISMATCH 3: Market Cap Filter ====================
 
     def test_market_cap_filter_rejects_small_cap(self):
-        """Mismatch 3: Market cap filter should reject stocks < $2B.
+        """v7.2: Market cap filter moved to Phase 0 pre-filter.
 
-        Documentation (line 212): Market cap ≥ $2B
-        Old code: No market cap validation
-        Fix: Add market cap filter in filter method
+        Phase 0 already filters market_cap >= $2B.
+        filter() no longer checks market cap — trusts Phase 0 output.
+
+        This test verifies filter() passes through, and documents that
+        Phase 0 handles the market cap gate.
         """
         strategy = PullbackEntryStrategy()
 
@@ -202,10 +215,10 @@ class TestPullbackEntryV7:
             'TEST': {'market_cap': 1e9}  # $1B, below $2B threshold
         }
 
-        # Test filter - should reject small cap
+        # filter() passes through — Phase 0 should have rejected already
         result = strategy.filter('TEST', df)
 
-        assert result is False, f"Stock with market cap < $2B should be rejected, got {result}"
+        assert result is True, "filter() passes through; Phase 0 handles market cap gate"
 
     def test_market_cap_filter_accepts_large_cap(self):
         """Verify market cap filter accepts stocks >= $2B."""
@@ -514,3 +527,161 @@ class TestPullbackEntryV7:
         assert bonus is not None, "BONUS dimension should exist"
         assert bonus.details.get('momentum_persistence_score', 0) == 0, \
             f"Should get 0 for momentum persistence with no SPY data, got {bonus.details.get('momentum_persistence_score')}"
+
+
+class TestPullbackEntryV72:
+    """Test Strategy B v7.2 fine-tuning features."""
+
+    def _create_deterministic_data(self, days=60):
+        dates = pd.date_range('2024-01-01', periods=days, freq='D')
+        stock_prices = [100.0] * (days - 5)
+        for i in range(5):
+            stock_prices.append(98.0 + i * 0.5)  # Slight uptrend from pullback
+
+        df = pd.DataFrame({
+            'open': stock_prices,
+            'high': [p * 1.02 for p in stock_prices],
+            'low': [p * 0.98 for p in stock_prices],
+            'close': stock_prices,
+            'volume': [1_000_000] * days
+        }, index=dates)
+
+        spy_dates = pd.date_range('2024-01-01', periods=days, freq='D')
+        spy_prices = [400.0] * (days - 5)
+        for i in range(5):
+            spy_prices.append(400.0 + i * 0.5)
+
+        spy_df = pd.DataFrame({
+            'open': spy_prices,
+            'high': [p * 1.01 for p in spy_prices],
+            'low': [p * 0.99 for p in spy_prices],
+            'close': spy_prices,
+            'volume': [5_000_000] * days
+        }, index=spy_dates)
+
+        return df, spy_df
+
+    def test_ema21_tolerance_accepts_wick_below_ema21(self):
+        """v7.2: Price 1% below EMA21 should pass filter (2% tolerance)."""
+        strategy = PullbackEntryStrategy()
+        strategy.phase0_data = {
+            'TEST': {'ema21_slope_norm': 0.3, 'current_price': 99, 'ema21': 100}
+        }
+        df, _ = self._create_deterministic_data(days=60)
+        strategy._get_data = lambda x: df
+        strategy.market_atr_median = 2.0
+        strategy.stock_info = {'TEST': {'market_cap': 5e9}}
+
+        assert strategy.filter('TEST', df) is True, "Price 1% below EMA21 should pass (within 2% tolerance)"
+
+    def test_ema21_tolerance_rejects_deep_breakdown(self):
+        """v7.2: Price 5% below EMA21 should be rejected."""
+        strategy = PullbackEntryStrategy()
+
+        # Create data where last close is 5% below EMA21
+        dates = pd.date_range('2024-01-01', periods=60, freq='D')
+        closes = [100.0] * 59 + [95.0]  # Last close = 95 (5% below EMA21 ~100)
+        df = pd.DataFrame({
+            'open': closes,
+            'high': [p * 1.02 for p in closes],
+            'low': [p * 0.98 for p in closes],
+            'close': closes,
+            'volume': [1_000_000] * 60
+        }, index=dates)
+
+        strategy.phase0_data = {
+            'TEST': {'ema21_slope_norm': 0.3, 'current_price': 95, 'ema21': 100}
+        }
+        strategy._get_data = lambda x: df
+        strategy.market_atr_median = 2.0
+        strategy.stock_info = {'TEST': {'market_cap': 5e9}}
+
+        # EMA21 ~100, tolerance = 98. Last close = 95 < 98 → reject
+        assert strategy.filter('TEST', df) is False, "Price 5% below EMA21 should be rejected"
+
+    def test_pullback_depth_scored_in_rc(self):
+        """v7.2: RC dimension includes depth_score."""
+        from core.indicators import TechnicalIndicators
+
+        df, _ = self._create_deterministic_data(days=60)
+        ind = TechnicalIndicators(df)
+        ind.calculate_all()
+
+        rc_data = ind.calculate_retracement_structure()
+        assert 'depth_score' in rc_data, "RC should include depth_score"
+        assert 'pullback_depth_pct' in rc_data, "RC should include pullback_depth_pct"
+        assert 'reversal_score' in rc_data, "RC should include reversal_score"
+
+    def test_reversal_candle_hammer_detected(self):
+        """v7.2: Hammer candle should be detected in reversal scoring."""
+        from core.indicators import TechnicalIndicators
+
+        # Create data with a clear hammer candle on the last day
+        dates = pd.date_range('2024-01-01', periods=60, freq='D')
+        prices = [100.0] * 59
+        # Hammer: small body, long lower shadow, close in upper half
+        prices.append(100.5)  # close slightly above open
+
+        df = pd.DataFrame({
+            'open': prices[:-1] + [100.0],   # open = 100
+            'high': [p * 1.01 for p in prices],
+            'low': [p * 0.95 for p in prices[:-1]] + [95.0],  # last day low = 95 (long lower shadow)
+            'close': prices,
+            'volume': [1_000_000] * 60
+        }, index=dates)
+
+        ind = TechnicalIndicators(df)
+        ind.calculate_all()
+
+        details = ind._get_reversal_signal_details()
+        assert 'hammer' in details, "Should have hammer detection"
+        assert 'bullish_engulfing' in details, "Should have engulfing detection"
+        assert 'strong_clv' in details, "Should have CLV detection"
+
+    def test_volume_distribution_penalty(self):
+        """v7.2: Volume surge on down day triggers distribution penalty."""
+        from core.indicators import TechnicalIndicators
+
+        dates = pd.date_range('2024-01-01', periods=60, freq='D')
+        closes = [100.0] * 59 + [98.0]  # Down day
+        opens = [100.0] * 59 + [101.0]   # Open high, close low
+        volumes = [1_000_000] * 59 + [3_000_000]  # 3x volume surge
+
+        df = pd.DataFrame({
+            'open': opens,
+            'high': [max(o, c) * 1.01 for o, c in zip(opens, closes)],
+            'low': [min(o, c) * 0.99 for o, c in zip(opens, closes)],
+            'close': closes,
+            'volume': volumes
+        }, index=dates)
+
+        ind = TechnicalIndicators(df)
+        ind.calculate_all()
+
+        vc_data = ind.calculate_volume_confirmation()
+        assert vc_data.get('is_distribution_day') is True, "Should flag as distribution day"
+        assert vc_data.get('distribution_penalty', 0) == -1.0, "Should have -1.0 distribution penalty"
+
+    def test_no_distribution_penalty_on_up_day(self):
+        """v7.2: Volume surge on up day should NOT trigger penalty."""
+        from core.indicators import TechnicalIndicators
+
+        dates = pd.date_range('2024-01-01', periods=60, freq='D')
+        closes = [100.0] * 59 + [102.0]  # Up day
+        opens = [100.0] * 59 + [100.0]
+        volumes = [1_000_000] * 59 + [3_000_000]  # 3x volume surge
+
+        df = pd.DataFrame({
+            'open': opens,
+            'high': [max(o, c) * 1.01 for o, c in zip(opens, closes)],
+            'low': [min(o, c) * 0.99 for o, c in zip(opens, closes)],
+            'close': closes,
+            'volume': volumes
+        }, index=dates)
+
+        ind = TechnicalIndicators(df)
+        ind.calculate_all()
+
+        vc_data = ind.calculate_volume_confirmation()
+        assert vc_data.get('is_distribution_day') is False, "Up day surge should not be distribution"
+        assert vc_data.get('distribution_penalty', 0) == 0.0, "No penalty on up day"

@@ -63,61 +63,47 @@ class PullbackEntryStrategy(BaseStrategy):
         """
         Screen all symbols with Phase 0 pre-filter using cached data.
 
-        v7.1: Uses phase0_data for fast pre-filtering, only fetches DataFrames
-        for symbols that pass the pre-filter.
+        v7.2: Consolidated screening — shared batch preparation and finalization.
         """
-        # Phase 0: Use cached phase0_data for fast pre-filter
-        logger.info("PullbackEntry: Using Phase 0 cached data for pre-filter...")
-
         phase0_data = getattr(self, 'phase0_data', {})
-        if not phase0_data:
-            logger.warning("PullbackEntry: No phase0_data available, falling back to full scan")
-            return self._screen_full_scan(symbols, max_candidates)
 
-        # Phase 0.5: Pre-filter using cached EMA21 data
-        logger.info("PullbackEntry: Phase 0.5 - Pre-filtering by EMA21 trend (cached)...")
-        prefiltered_symbols = []
+        if phase0_data:
+            # Phase 0.5: Pre-filter using cached EMA21 data
+            logger.info("PullbackEntry: Phase 0.5 - Pre-filtering by EMA21 trend (cached)...")
+            prefiltered_symbols = []
 
-        for symbol in symbols:
-            if symbol not in phase0_data:
-                continue
-            data = phase0_data[symbol]
+            for symbol in symbols:
+                data = phase0_data.get(symbol, {})
+                try:
+                    current_price = data.get('current_price', 0)
+                    ema21 = data.get('ema21', 0)
+                    ema21_slope_norm = data.get('ema21_slope_norm', 0)
 
-            try:
-                current_price = data.get('current_price', 0)
-                ema21 = data.get('ema21', 0)
-
-                # Skip invalid data
-                if current_price <= 0 or ema21 <= 0:
+                    if current_price > 0 and ema21 > 0 and current_price > ema21 and ema21_slope_norm > 0:
+                        prefiltered_symbols.append(symbol)
+                except Exception as e:
+                    logger.debug(f"Error pre-filtering {symbol}: {e}")
                     continue
 
-                # v7.0: Check price above EMA21 (line 211)
-                if current_price <= ema21:
-                    continue
+            logger.info(f"PullbackEntry: {len(prefiltered_symbols)}/{len(symbols)} passed EMA21 trend pre-filter")
+            if not prefiltered_symbols:
+                return []
 
-                # v7.0: Check S_norm > 0 (line 210, 225)
-                # S_norm = (EMA21_today − EMA21_5d) / ATR14
-                ema21_slope_norm = data.get('ema21_slope_norm', 0)
-                if ema21_slope_norm > 0:
-                    # Uptrend confirmed - fetch full data for this symbol
-                    prefiltered_symbols.append(symbol)
+            symbol_data = self._batch_prepare_symbols(prefiltered_symbols)
+        else:
+            # Fallback: no phase0_data, scan all symbols
+            logger.warning("PullbackEntry: No phase0_data, falling back to full scan")
+            symbol_data = self._batch_prepare_symbols(symbols)
 
-            except Exception as e:
-                logger.debug(f"Error pre-filtering {symbol}: {e}")
-                continue
-
-        logger.info(f"PullbackEntry: {len(prefiltered_symbols)}/{len(symbols)} passed EMA21 trend pre-filter")
-
-        if not prefiltered_symbols:
-            logger.info("PullbackEntry: No symbols passed pre-filter")
+        if not symbol_data:
             return []
 
-        # Now fetch data only for pre-filtered symbols
-        return self._process_prefiltered_symbols(prefiltered_symbols, max_candidates)
+        matches = super().screen(list(symbol_data.keys()), max_candidates=max_candidates)
+        return self._finalize_screening(matches, max_candidates)
 
-    def _process_prefiltered_symbols(self, symbols: List[str], max_candidates: int) -> List[StrategyMatch]:
-        """Process pre-filtered symbols - fetch data and calculate ATR median."""
-        logger.info("PullbackEntry: Processing pre-filtered symbols...")
+    def _batch_prepare_symbols(self, symbols: List[str]) -> Dict[str, Dict]:
+        """Fetch DataFrames, compute indicators, market ATR median, and sector info."""
+        logger.info(f"PullbackEntry: Batch preparing {len(symbols)} symbols...")
 
         all_atrs = []
         symbol_data = {}
@@ -142,13 +128,13 @@ class PullbackEntryStrategy(BaseStrategy):
 
         if not all_atrs:
             logger.warning("PullbackEntry: No valid ATR data found")
-            return []
+            return {}
 
         self.market_atr_median = sorted(all_atrs)[len(all_atrs) // 2]
         logger.info(f"PullbackEntry: Market ATR median = {self.market_atr_median:.2f}, "
                     f"Processing {len(symbol_data)} symbols")
 
-        # Get industry data for sector context
+        # Fetch sector info
         try:
             if self.fetcher:
                 self.stock_info = self.fetcher.fetch_batch_stock_info(list(symbol_data.keys()))
@@ -161,113 +147,12 @@ class PullbackEntryStrategy(BaseStrategy):
             self.stock_info = {}
             self.sector_counts = {}
 
-        # Cache market data for use in filter/calculate_dimensions
+        # Cache market data for filter/calculate_dimensions
         self.market_data = {sym: data['df'] for sym, data in symbol_data.items()}
+        return symbol_data
 
-        # Call parent screen method
-        matches = super().screen(list(symbol_data.keys()), max_candidates=max_candidates)
-
-        # Sort by confidence and limit to 5 per tier for diversity
-        scored_candidates = []
-        for match in matches:
-            scored_candidates.append({
-                'match': match,
-                'score': match.technical_snapshot.get('score', 0),
-                'tier': match.technical_snapshot.get('tier', 'C')
-            })
-
-        scored_candidates.sort(key=lambda x: x['score'], reverse=True)
-
-        # Limit 5 per tier
-        tier_limits = {'S': 5, 'A': 5, 'B': 5}
-        tier_current = {'S': 0, 'A': 0, 'B': 0}
-
-        filtered_matches = []
-        for cand in scored_candidates:
-            tier = cand['tier']
-            if tier in tier_current and tier_current[tier] >= tier_limits[tier]:
-                continue
-            tier_current[tier] = tier_current.get(tier, 0) + 1
-            filtered_matches.append(cand['match'])
-
-        return filtered_matches
-
-    def _screen_full_scan(self, symbols: List[str], max_candidates: int) -> List[StrategyMatch]:
-        """Fallback: Full scan without phase0_data (original behavior)."""
-        logger.info("PullbackEntry: Calculating market statistics (fallback)...")
-
-        all_atrs = []
-        symbol_data = {}
-
-        for symbol in symbols:
-            df = self._get_data(symbol)
-            if df is None or len(df) < self.PARAMS['min_data_days']:
-                continue
-
-            ind = TechnicalIndicators(df)
-            ind.calculate_all()
-
-            atr = ind.indicators.get('atr', {}).get('atr', 0)
-            if atr > 0:
-                all_atrs.append(atr)
-
-            symbol_data[symbol] = {'df': df, 'ind': ind}
-
-        if not all_atrs:
-            logger.warning("PullbackEntry: No valid ATR data found")
-            return []
-
-        self.market_atr_median = sorted(all_atrs)[len(all_atrs) // 2]
-        logger.info(f"PullbackEntry: Market ATR median = {self.market_atr_median:.2f}, "
-                    f"Processing {len(symbol_data)} symbols")
-
-        # Phase 0.5: Pre-filter by EMA21 trend (price > EMA21 and slope > 0)
-        logger.info("PullbackEntry: Phase 0.5 - Pre-filtering by EMA21 trend...")
-        prefiltered_symbols = []
-        symbols_to_remove = []
-
-        for symbol, data in list(symbol_data.items()):
-            try:
-                df = data['df']
-                ind = data['ind']
-
-                current_price = df['close'].iloc[-1]
-                ema21 = ind.indicators.get('ema', {}).get('ema21', 0)
-
-                ema21_5d_ago = df['close'].ewm(span=21).mean().iloc[-6] if len(df) >= 6 else ema21 * 0.99
-                ema_slope = ema21 - ema21_5d_ago if ema21 and ema21_5d_ago else 0
-
-                if current_price > ema21 and ema_slope > 0:
-                    prefiltered_symbols.append(symbol)
-                else:
-                    symbols_to_remove.append(symbol)
-            except Exception as e:
-                logger.debug(f"Error pre-filtering {symbol}: {e}")
-                symbols_to_remove.append(symbol)
-                continue
-
-        for symbol in symbols_to_remove:
-            symbol_data.pop(symbol, None)
-
-        logger.info(f"PullbackEntry: {len(prefiltered_symbols)}/{len(symbol_data) + len(prefiltered_symbols)} passed EMA21 trend pre-filter")
-
-        # Get industry data for sector context
-        try:
-            if self.fetcher:
-                self.stock_info = self.fetcher.fetch_batch_stock_info(list(symbol_data.keys()))
-                self.sector_counts = {}
-                for info in self.stock_info.values():
-                    sector = info.get('sector', 'Unknown')
-                    self.sector_counts[sector] = self.sector_counts.get(sector, 0) + 1
-        except Exception as e:
-            logger.warning(f"Could not fetch sector data: {e}")
-            self.stock_info = {}
-            self.sector_counts = {}
-
-        self.market_data = {sym: data['df'] for sym, data in symbol_data.items()}
-
-        matches = super().screen(list(symbol_data.keys()), max_candidates=max_candidates)
-
+    def _finalize_screening(self, matches: List[StrategyMatch], max_candidates: int) -> List[StrategyMatch]:
+        """Sort by score and limit candidates per tier for diversity."""
         scored_candidates = []
         for match in matches:
             scored_candidates.append({
@@ -293,74 +178,36 @@ class PullbackEntryStrategy(BaseStrategy):
 
     def filter(self, symbol: str, df: pd.DataFrame) -> bool:
         """
-        Filter symbols based on PullbackEntry criteria with Phase 0 fast pre-filter.
+        Filter symbols based on PullbackEntry criteria.
+
+        Phase 0 already filters: market cap >= $2B, price $2-$3000, volume >= 100K
+        Phase 0.5 already filters: price > EMA21, ema21_slope_norm > 0
+
+        This filter only checks:
+        1. DataFrame validity + minimum rows (strategy-specific: 50 days)
+        2. Price within EMA21 tolerance band (allows pullback wicks below EMA21)
         """
-        # Validate DataFrame before processing
+        # Validate DataFrame
         if not validate_dataframe(df, min_rows=self.PARAMS.get('min_data_days', 50)):
             logger.debug(f"Pullback_REJ: {symbol} - Invalid DataFrame")
             return False
 
-        # Phase 0: Fast pre-filter using cached data (O(1) checks before expensive calculations)
+        current_price = df['close'].iloc[-1]
         phase0_data = getattr(self, 'phase0_data', {})
         data = phase0_data.get(symbol, {})
 
-        current_price = df['close'].iloc[-1]
-
-        # Skip penny stocks and extreme prices
-        if current_price < 2.0 or current_price > 3000.0:
-            return False
-
-        # Skip low volume stocks (avg volume < 100K)
-        avg_volume = df['volume'].tail(20).mean()
-        if avg_volume < 100000:
-            return False
-
-        # Skip insufficient data
-        if len(df) < self.PARAMS['min_data_days']:
-            return False
-
-        # MISMATCH FIX 3: Market cap filter (doc line 212): Market cap ≥ $2B
-        market_cap = self.stock_info.get(symbol, {}).get('market_cap', 0)
-        if market_cap > 0 and market_cap < 2e9:
-            logger.debug(f"Pullback_REJ: {symbol} - Market cap ${market_cap/1e9:.2f}B < $2B")
-            return False
-
-        # Use pre-calculated EMA21 slope from phase0_data
-        ema21_slope_norm = data.get('ema21_slope_norm')
-        if ema21_slope_norm is None or ema21_slope_norm < self.PARAMS['ema21_slope_threshold']:
-            logger.debug(f"Pullback_REJ: {symbol} - EMA21 slope {ema21_slope_norm:.2f} < threshold")
-            return False
-
-        # v7.0: Price > EMA21 (doc line 211)
+        # Price within EMA21 tolerance band (pullbacks can wick slightly below EMA21)
         ema21 = data.get('ema21', 0)
-        if ema21 <= 0 or current_price <= ema21:
-            logger.debug(f"Pullback_REJ: {symbol} - Price {current_price:.2f} <= EMA21 {ema21:.2f}")
+        ema21_tolerance = ema21 * 0.98  # 2% tolerance
+        if ema21 <= 0 or current_price < ema21_tolerance:
+            logger.debug(f"Pullback_REJ: {symbol} - Price {current_price:.2f} < EMA21*0.98 {ema21_tolerance:.2f}")
             return False
-
-        ind = TechnicalIndicators(df)
-        ind.calculate_all()
-
-        # Calculate TI score for filtering (uses slope internally)
-        ti_data = ind.calculate_normalized_ema_slope(self.market_atr_median)
-        ti_score = ti_data['score']
-
-        # Filter out weak trends
-        if ti_score == 0:
-            return False
-
-        # Filter out poor structure
-        rc_data = ind.calculate_retracement_structure()
-        if rc_data['total_score'] <= 0:
-            return False
-
-        # MISMATCH FIX 2: Gap-down is scoring component (doc line 240), not binary filter
-        # Removed: gap veto filter - gap is now scored in RC dimension (0 pts if > 0.8×ATR, 1.0 if < 0.8×ATR)
 
         return True
 
     def calculate_dimensions(self, symbol: str, df: pd.DataFrame) -> List[ScoringDimension]:
         """
-        Calculate 4-dimensional scoring (TI, RS, VC, Bonus).
+        Calculate 4-dimensional scoring (TI, RC, VC, BONUS).
 
         Args:
             symbol: Stock symbol
@@ -407,17 +254,21 @@ class PullbackEntryStrategy(BaseStrategy):
             }
         ))
 
-        # Dimension 2: Retracement Structure (RC) - 0-5 points
+        # Dimension 2: Retracement Structure (RC) — 0-8 points
         rc_data = ind.calculate_retracement_structure()
         rc_score = rc_data['total_score']
         dimensions.append(ScoringDimension(
             name='RC',
             score=rc_score,
-            max_score=5.0,
+            max_score=8.0,
             details={
                 'tightness_score': rc_data.get('tightness_score', 0),
                 'support_score': rc_data.get('support_score', 0),
-                'gap_score': rc_data.get('gap_score', 0),  # MISMATCH FIX 2: Gap-down scoring
+                'gap_score': rc_data.get('gap_score', 0),
+                'depth_score': rc_data.get('depth_score', 0),
+                'pullback_depth_pct': rc_data.get('pullback_depth_pct', 0),
+                'reversal_score': rc_data.get('reversal_score', 0),
+                'reversal_signals': rc_data.get('reversal_signals', {}),
                 'price_range_pct': rc_data.get('price_range_pct', 0),
                 'ema8_current': rc_data.get('ema8_current', 0),
                 'low_min': rc_data.get('low_min', 0)
@@ -436,6 +287,8 @@ class PullbackEntryStrategy(BaseStrategy):
                 'dry_score': vc_data.get('dry_score', 0),
                 'v_surge': vc_data.get('v_surge', 0),
                 'surge_score': vc_data.get('surge_score', 0),
+                'distribution_penalty': vc_data.get('distribution_penalty', 0),
+                'is_distribution_day': vc_data.get('is_distribution_day', False),
                 'vol_today': vc_data.get('vol_today', 0),
                 'vol_20d_avg': vc_data.get('vol_20d_avg', 0)
             }
@@ -452,6 +305,9 @@ class PullbackEntryStrategy(BaseStrategy):
         # v7.0: Momentum persistence vs SPY (0-1.0) - replaces gap veto bonus
         # Rewards presence of relative strength, not absence of badness
         momentum_persistence_score = self._calculate_momentum_persistence(symbol, df)
+
+        # Cache details once instead of calling 3 times
+        momentum_details = self._calculate_momentum_persistence_details(symbol, df)
         bonus_score += momentum_persistence_score
 
         dimensions.append(ScoringDimension(
@@ -462,9 +318,9 @@ class PullbackEntryStrategy(BaseStrategy):
                 'sector': sector,
                 'sector_leadership_score': sector_leadership_score,
                 'momentum_persistence_score': momentum_persistence_score,
-                'stock_5d_return': self._calculate_momentum_persistence_details(symbol, df).get('stock_5d_return', 0),
-                'spy_5d_return': self._calculate_momentum_persistence_details(symbol, df).get('spy_5d_return', 0),
-                'outperformance_pct': self._calculate_momentum_persistence_details(symbol, df).get('outperformance_pct', 0)
+                'stock_5d_return': momentum_details.get('stock_5d_return', 0),
+                'spy_5d_return': momentum_details.get('spy_5d_return', 0),
+                'outperformance_pct': momentum_details.get('outperformance_pct', 0)
             }
         ))
 
