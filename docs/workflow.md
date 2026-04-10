@@ -1,7 +1,7 @@
 # Daily Report Generation Workflow
 
-**Version**: 6.0  
-**Last Updated**: 2026-04
+**Version**: 7.0  
+**Last Updated**: 2026-04-09
 
 ---
 
@@ -13,11 +13,11 @@ The Trade Scanner runs daily at 3 AM ET to analyze US stocks (market cap ≥$2B)
 
 ## 3-Tier Pre-Calculation Architecture
 
-| Tier                       | What                                                                                                                                                                    | When                  | Stored        |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- | ------------- |
-| Tier 1 (Universal)         | Price, Volume, EMAs (8/21/50/200), ATR/ADR, returns (3m/6m/12m/5d), RS scores, 52w metrics, accum_ratio_15d, days_to_earnings, earnings_date, gap_1d_pct, gap_direction | All symbols at 3 AM   | `tier1_cache` |
-| Tier 2 (Strategy-specific) | VCP detection, S/R levels, RSI divergence, EMA slopes                                                                                                                   | Lazy during screening | Not cached    |
-| Tier 3 (Market Data)       | SPY, QQQ, IWM, VIXY, UVXY, sector ETFs (pickled DataFrames)                                                                                                             | Once at 3 AM, shared  | `tier3_cache` |
+| Tier                       | What                                                                                                                                                                                                                                                                             | When                  | Stored        |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- | ------------- |
+| Tier 1 (Universal)         | Price, Volume, EMAs (8/21/50/200), ATR/ADR, returns (3m/6m/12m/5d), RS scores, 52w metrics, accum_ratio_15d, days_to_earnings, earnings_date, gap_1d_pct, gap_direction, VCP detection, S/R levels, consecutive_down_days, rs_consecutive_days_80, ema21_slope_norm, sector info | All symbols at 3 AM   | `tier1_cache` |
+| Tier 2 (Strategy-specific) | Detailed pattern scoring, resistance touches, volume dynamics, distribution signs                                                                                                                                                                                                | Lazy during screening | Not cached    |
+| Tier 3 (Market Data)       | SPY, QQQ, IWM, VIXY, UVXY, sector ETFs (pickled DataFrames)                                                                                                                                                                                                                      | Once at 3 AM, shared  | `tier3_cache` |
 
 ---
 
@@ -39,7 +39,7 @@ Phase 1: AI Market Regime (3-5 min)
 
 Phase 2: Strategy Screening (10-15 min)
 ├── Load cached Tier 1/3 data
-├── Apply 8 strategies with regime-based allocation
+├── Apply 9 strategies with regime-based allocation
 ├── Skip strategies with 0 slots
 ├── Handle duplicates (keep highest technical score)
 ├── Lazy Tier 2 calculations
@@ -80,52 +80,70 @@ Phase 6: Notifications (1 min)
 1. Load `nasdaq_stocklist_screener.csv` → `stocks` table (category='stocks' or 'market_index_etf')
 2. Fetch market data from yfinance (incremental, rate-limited)
 3. Pre-filter: market cap ≥$2B, price $2-$3000, avg vol ≥100K
-4. Calculate Tier 1 metrics for qualifying stocks
+4. Calculate Tier 1 metrics for qualifying stocks:
+   - Price, volume, EMAs (8/21/50/200), ATR/ADR
+   - Returns (3m/6m/12m/5d), RS scores (percentile rank vs SPY)
+   - 52-week high/low metrics, accum_ratio_15d
+   - days_to_earnings, earnings_date, earnings surprise data
+   - gap_1d_pct, gap_direction
+   - VCP detection (pattern type, platform low, pivot)
+   - Support/resistance levels (touch counts, levels)
+   - consecutive_down_days, rs_consecutive_days_80
+   - ema21_slope_norm, sector info
+   - G-strategy eligibility (has_earnings_gap)
 
 ### Phase 1: AI Market Regime (market_regime.py, market_analyzer.py)
 
 **Outputs**: Regime string, allocation dict, AI confidence, reasoning
 
-**Regime Table** (30 slots):
+**Process**:
 
-| Regime        | A   | B   | C   | D   | E   | F   | G   | H   |
-| ------------- | --- | --- | --- | --- | --- | --- | --- | --- |
-| bull_strong   | 8   | 6   | 4   | 0   | 0   | 0   | 8   | 4   |
-| bull_moderate | 8   | 6   | 4   | 0   | 0   | 0   | 8   | 4   |
-| neutral       | 6   | 5   | 5   | 4   | 4   | 0   | 3   | 3   |
-| bear_moderate | 4   | 4   | 4   | 5   | 5   | 2   | 0   | 6   |
-| bear_strong   | 0   | 0   | 4   | 6   | 6   | 8   | 0   | 6   |
-| extreme_vix   | 0   | 0   | 0   | 3   | 3   | 12  | 0   | 12  |
+1. Load SPY, VIX from Tier 3 cached data
+2. Tavily search (3 queries: US stock market, S&P 500, VIX)
+3. AI classifies regime via DashScope (technical indicators + news sentiment)
+4. Get allocation from regime table (30 slots total)
 
 **Validation**: VIX > 30 → force extreme_vix
+
+**Regime Allocation Table** (30 slots, A1/A2 split):
+
+| Regime        | A1  | A2  | B   | C   | D   | E   | F   | G   | H   |
+| ------------- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| bull_strong   | 4   | 4   | 6   | 4   | 0   | 0   | 8   | 4   |
+| bull_moderate | 4   | 4   | 6   | 4   | 0   | 0   | 8   | 4   |
+| neutral       | 3   | 3   | 5   | 5   | 4   | 4   | 0   | 3   | 3   |
+| bear_moderate | 2   | 2   | 4   | 4   | 5   | 5   | 2   | 0   | 6   |
+| bear_strong   | 1   | 1   | 0   | 4   | 6   | 6   | 8   | 0   | 4   |
+| extreme_vix   | 0   | 0   | 0   | 0   | 3   | 3   | 12  | 0   | 12  |
 
 ### Phase 2: Strategy Screening (screener.py)
 
 **Outputs**: Up to 30 StrategyMatch objects
 
-**Strategies**:
+**Strategies** (9 total, A split into A1/A2):
 
-| Letter | Name                 | Type  | Dimensions        |
-| ------ | -------------------- | ----- | ----------------- |
-| A      | MomentumBreakout     | Long  | TC, CQ, BS, VC    |
-| B      | PullbackEntry        | Long  | TI, RC, VC, BONUS |
-| C      | SupportBounce        | Long  | SQ, VD, RB        |
-| D      | DistributionTop      | Short | TQ, RL, DS, VC    |
-| E      | AccumulationBottom   | Long  | TQ, AL, AS, VC    |
-| F      | CapitulationRebound  | Long  | MO, EX, VC        |
-| G      | EarningsGap          | Both  | GS, QC, TC, VC    |
-| H      | RelativeStrengthLong | Long  | RD, SH, CQ, VC    |
+| Letter | Name                   | Type  | Dimensions            | Max Raw |
+| ------ | ---------------------- | ----- | --------------------- | ------- |
+| A1     | MomentumBreakout       | Long  | TC, CQ, BS, VC, Bonus | 18.5    |
+| A2     | PreBreakoutCompression | Long  | TC, CQ, CP, VC, Bonus | 18.5    |
+| B      | PullbackEntry          | Long  | TI, RC, VC, Bonus     | 17.0    |
+| C      | SupportBounce          | Long  | SQ, VD, RB            | 15.0    |
+| D      | DistributionTop        | Short | TQ, RL, DS, VC        | 15.0    |
+| E      | AccumulationBottom     | Long  | TQ, AL, AS, VC        | 15.0    |
+| F      | CapitulationRebound    | Long  | MO, EX, VC            | 15.0    |
+| G      | EarningsGap            | Both  | GS, QC, TC, VC        | 15.0    |
+| H      | RelativeStrengthLong   | Long  | RD, SH, CQ, VC        | 13.0    |
 
 **Regime-Adaptive Position Sizing**:
 
 | Regime        | Long | Short | Exemptions    |
 | ------------- | ---- | ----- | ------------- |
-| bull_strong   | 1.0× | 0.3×  | None          |
-| bull_moderate | 1.0× | 0.3×  | None          |
-| neutral       | 0.8× | 0.8×  | None          |
-| bear_moderate | 0.5× | 1.0×  | None          |
-| bear_strong   | 0.5× | 1.0×  | None          |
-| extreme_vix   | 0.3× | 0.5×  | F, H get 1.0× |
+| bull_strong   | 1.0x | 0.3x  | None          |
+| bull_moderate | 1.0x | 0.3x  | None          |
+| neutral       | 0.8x | 0.8x  | None          |
+| bear_moderate | 0.5x | 1.0x  | None          |
+| bear_strong   | 0.5x | 1.0x  | None          |
+| extreme_vix   | 0.3x | 0.5x  | F, H get 1.0x |
 
 ### Phase 3: AI Confidence Scoring (ai_confidence_scorer.py, selector.py)
 

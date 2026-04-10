@@ -1,6 +1,6 @@
-# Strategy Description v7.0
+# Strategy Description v8.0
 
-**Version**: 7.0 | **Updated**: 2026-04 | **Strategies**: 8 (A–H, A has A1/A2 sub-modes)
+**Version**: 8.0 | **Updated**: 2026-04-09 | **Strategies**: 8 (A-H, A has A1/A2 sub-modes)
 
 ---
 
@@ -86,19 +86,20 @@ Strategies with 0 slots skip Phase 2 entirely.
 
 ## Strategy A: MomentumBreakout
 
-**Type**: Long | **Regime**: Bull, neutral | **Max Raw**: 18.5 | **Dimensions**: TC(5) + CQ(4) + BS or CP(4) + VC(4) + Bonus(1.5)
+**Type**: Long | **Regime**: Bull, neutral | **Max Raw**: 18.5 (A1) / 17.5 (A2) | **Dimensions**: TC(5) + CQ(4) + BS or CP(4) + VC(4) + Bonus(0.5-1.5)
 
 A has two internal sub-modes. A-slots are filled by A1 first; remaining slots use A2.
 
 ### Pre-filter (shared)
 
-| Filter         | Condition          |
-| -------------- | ------------------ |
-| RS_pct         | ≥ 50th (hard gate) |
-| Price          | > EMA200           |
-| 3-month return | ≥ −20%             |
-| Market cap     | ≥ $2B              |
-| Avg vol 20d    | ≥ 100K             |
+| Filter            | Condition                           |
+| ----------------- | ----------------------------------- |
+| RS_pct            | ≥ 50th (hard gate, both A1/A2)      |
+| Price             | > EMA200                            |
+| 3-month return    | ≥ −20%                             |
+| Market cap        | ≥ $2B (Phase 0 prefilter)           |
+| Avg vol 20d       | ≥ 100K                            |
+| Pivot proximity   | ≤ 3% above platform_high (A2 only) |
 
 ### TC — Trend Context (max 5.0)
 
@@ -116,11 +117,11 @@ Pattern detection (first match wins):
 
 | Pattern         | Requirements                                                      | Base Score |
 | --------------- | ----------------------------------------------------------------- | ---------- |
-| VCP             | 15–60d, range<12%, >50% days ±2.5%, last 5d vol<70% avg, ≥2 waves | 0.80–1.00  |
-| High tight flag | Prior +30% in ≤8w, pullback 8–30%, flag 2–6w                      | 0.61–0.72  |
-| Flat base       | Range<15%, EMA21 slope<0.3×ATR/5d, 3–15w                          | 0.55–0.75  |
-| Ascending       | ≥3 higher lows, range 10–25%, 4–12w                               | 0.62       |
-| Loose           | Range<20%, ≥10d                                                   | 0.15–0.40  |
+| VCP             | 21–60d, range<12%, >50% days ±2.5%, last 5d vol<70% avg, ≥2 progressively smaller waves | 0.80–1.00  |
+| High tight flag | Prior +80% in ≤8w, pullback 10–25%, flag 3–5w, vol dry-up            | 0.61–0.72  |
+| Flat base       | Range<15%, EMA21 slope<0.3×ATR/5d, 5–15w (35–105d), vol dry-up     | 0.55–0.75  |
+| Ascending       | ≥3 higher lows, range 10–25%, 4–12w, prior advance ≥20%              | 0.62       |
+| Loose           | Range<20%, ≥21d                                                   | 0.15–0.40  |
 
 ```
 cq_base = pattern_score × 3.0
@@ -130,29 +131,34 @@ CQ = min(cq_base + duration_bonus, 4.0)
 
 ### A1: BS — Breakout Strength (max 4.0)
 
-| Breakout % above pivot | Score   | Vol / avg20d | Score   |
-| ---------------------- | ------- | ------------ | ------- |
-| ≥5%                    | 2.5     | ≥3.0×        | 1.5     |
-| 3–5%                   | 2.0–2.5 | 2–3×         | 1.0–1.5 |
-| 2–3%                   | 1.5–2.0 | 1.5–2×       | 0.5–1.0 |
-| 1–2%                   | 0.5–1.5 | 1–1.5×       | 0–0.5   |
-| <1%                    | 0–0.5   | <1×          | 0       |
+Price-only breakout measurement. Volume moved to VC.
+
+| Breakout % above pivot | Score   |
+| ---------------------- | ------- |
+| ≥5%                    | 4.0     |
+| 3–5%                   | 3.0–4.0 |
+| 2–3%                   | 2.0–3.0 |
+| 1–2%                   | 1.0–2.0 |
+| 0–1%                   | 0.5–1.0 |
+| ≤0%                    | 0       |
 
 ### A2: CP — Compression Score (max 4.0) _(replaces BS)_
 
-A2 triggers when price is still inside base, within 3% of pivot. CP replaces BS.
+A2 triggers when price is still inside base. CP measures price compression only (volume in VC).
 
-| Vol contraction (last 5d avg / avg20d) | Score | Range contraction (last 5d range / 20d ATR) | Score |
-| -------------------------------------- | ----- | ------------------------------------------- | ----- |
-| <50%                                   | 1.5   | <50%                                        | 1.5   |
-| 50–65%                                 | 0.8   | 50–70%                                      | 0.8   |
-| 65–80%                                 | 0.3   | 70–90%                                      | 0.3   |
-| >80%                                   | 0     | >90%                                        | 0     |
+| Range contraction (last 5d range / 20d ATR) | Score | Wave count | Score |
+| ------------------------------------------- | ----- | ---------- | ----- |
+| <50%                                        | 1.5   | ≥3 waves   | 1.5   |
+| 50–70%                                      | 0.8   | 2 waves    | 0.8   |
+| >70%                                        | 0     | 1 wave     | 0.3   |
 
-Wave count bonus: +1.0 if ≥3 contraction waves detected.
-Proximity gate: within 1.5% of pivot = full score; 1.5–3% = interpolate to 0; >3% = reject A2.
+| Proximity to pivot | Score |
+| ------------------ | ----- |
+| <1.5%              | 1.0   |
+| 1.5–3%             | 0.5–1.0 (interpolate) |
+| >3%                | 0     |
 
-`CP = vol_score + range_score + wave_bonus (max 4.0)`
+`CP = range_score + wave_score + proximity_score (max 4.0)`
 
 ### VC — Volume Confirmation (max 4.0)
 
@@ -160,10 +166,10 @@ Proximity gate: within 1.5% of pivot = full score; 1.5–3% = interpolate to 0; 
 
 | Base vol (last 5d / avg20d) | Score       | Breakout vol | Score   | CLV       | Score |
 | --------------------------- | ----------- | ------------ | ------- | --------- | ----- |
-| <0.50                       | 2.0         | >=3.0x       | 1.5     | >=0.85    | 0.5   |
-| 0.50-0.65                   | 1.5-2.0     | 2-3x         | 1.0-1.5 | 0.65-0.85 | 0-0.5 |
-| 0.65-0.80                   | 0.8-1.5     | 1.5-2x       | 0.5-1.0 | <0.65     | 0     |
-| 0.80-1.00                   | 0.2-0.8     | 1-1.5x       | 0-0.5   |           |       |
+| <0.50                       | 1.5         | >=3.0x       | 1.5     | >=0.85    | 1.0   |
+| 0.50-0.65                   | 1.0-1.5     | 2-3x         | 1.0-1.5 | 0.70-0.85 | 0.5-1.0 |
+| 0.65-0.80                   | 0.5-1.0     | 1.5-2x       | 0.5-1.0 | 0.50-0.70 | 0.2-0.5 |
+| 0.80-1.00                   | 0.2-0.5     | 1-1.5x       | 0-0.5   | <0.50     | 0     |
 | >1.00                       | 0.2 (floor) | <1.0x        | 0       |           |       |
 
 **A2 VC:**
@@ -175,18 +181,19 @@ Proximity gate: within 1.5% of pivot = full score; 1.5–3% = interpolate to 0; 
 | 65–80%                   | 1.0   |                 |       |
 | >80%                     | 0     |                 |       |
 
-### Bonus Pool (max 1.5)
+### Bonus Pool
 
-| Bonus                   | Max | Condition                                       |
-| ----------------------- | --- | ----------------------------------------------- |
-| Sector leadership       | 0.5 | Sector ETF RS≥80th AND >EMA50                   |
-| Earnings catalyst       | 0.5 | 7–21 days to earnings                           |
-| Accumulation divergence | 0.5 | OBV rising while price flat (linreg divergence) |
+| Bonus                   | Max  | Condition                                       |
+| ----------------------- | ---- | ----------------------------------------------- |
+| Sector leadership       | 0.5  | Sector ETF RS≥80th AND >EMA50 (A1 only)         |
+| Earnings catalyst       | 0.5  | 7–21 days to earnings (A1 only)                 |
+| Accumulation divergence | 0.5  | OBV rising while price flat (A1 only)           |
+| Position strength       | 0.5  | Price in top 30% of 60d range (A2 only)         |
 
 ### Entry / Exit
 
 **Entry (A1)**: Price>pivot×1.01, Vol>1.5×avg20d, CLV≥0.65, prefer after 10:30 AM ET  
-**Entry (A2)**: Price within 3% of pivot, Vol dry-up confirmed, wait for pivot break to execute
+**Entry (A2)**: Entry at platform_high (pivot breakout level). Reject if no volume dry-up (vol_5d/vol_20d ≥0.80)
 
 **Stop**:
 

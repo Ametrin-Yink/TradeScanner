@@ -44,8 +44,39 @@ class PreBreakoutCompressionStrategy(MomentumBreakoutStrategy):
     }
 
     def calculate_score(self, dimensions: List[ScoringDimension], df: pd.DataFrame = None, symbol: str = None) -> Tuple[float, str]:
-        """A2 uses base class normalization (not A1's bonus-based scoring)."""
-        return BaseStrategy.calculate_score(self, dimensions, df, symbol)
+        """A2 scoring with position bonus. Max: 17.0 dimensions + 0.5 position = 17.5."""
+        from .base_strategy import normalize_score
+
+        base_score = sum(d.score for d in dimensions)
+
+        # Position bonus: 0.5 when price is in top 30% of 60d range
+        position_bonus = 0.0
+        if df is not None and len(df) >= 60:
+            high_60d = df['high'].tail(60).max()
+            low_60d = df['low'].tail(60).min()
+            range_60d = high_60d - low_60d
+            current_price = df['close'].iloc[-1]
+            if range_60d > 0:
+                position_in_range = (current_price - low_60d) / range_60d
+                if position_in_range >= 0.70:
+                    position_bonus = 0.5
+
+        raw_score = base_score + position_bonus
+
+        # Normalize using A1's 18.5 (A2 max 17.5 is close enough for fair comparison)
+        normalized_score = normalize_score(raw_score, self.NAME)
+        final_score = min(normalized_score, 15.0)
+
+        if final_score >= self.TIER_S_MIN:
+            tier = 'S'
+        elif final_score >= self.TIER_A_MIN:
+            tier = 'A'
+        elif final_score >= self.TIER_B_MIN:
+            tier = 'B'
+        else:
+            tier = 'C'
+
+        return final_score, tier
 
     def filter(self, symbol: str, df: pd.DataFrame) -> bool:
         """A2 filter: consolidation near highs, not yet broken out."""
@@ -88,17 +119,6 @@ class PreBreakoutCompressionStrategy(MomentumBreakoutStrategy):
             logger.debug(f"A2_REJ: {symbol} - Invalid 60d high/low")
             return False
 
-        distance_from_high = (high_60d - current_price) / high_60d
-        if distance_from_high > 0.05:
-            logger.debug(f"A2_REJ: {symbol} - Too far from 60d high: {distance_from_high:.1%}")
-            return False
-
-        range_60d = high_60d - low_60d
-        position_in_range = (current_price - low_60d) / range_60d if range_60d > 0 else 0
-        if position_in_range < 0.40:
-            logger.debug(f"A2_REJ: {symbol} - In lower {position_in_range:.0%} of 60d range")
-            return False
-
         platform = ind.detect_vcp_platform(
             lookback_range=self.PARAMS['platform_lookback'],
             max_range_pct=self.PARAMS['platform_max_range'],
@@ -110,8 +130,14 @@ class PreBreakoutCompressionStrategy(MomentumBreakoutStrategy):
             if distance_from_pivot > 0.03:
                 logger.debug(f"A2_REJ: {symbol} - Distance from pivot {distance_from_pivot:.1%} > 3%")
                 return False
+        else:
+            pivot = high_60d
+            distance_from_pivot = (current_price - pivot) / pivot
+            if distance_from_pivot > 0.03:
+                logger.debug(f"A2_REJ: {symbol} - Distance from 60d pivot {distance_from_pivot:.1%} > 3%")
+                return False
 
-        logger.debug(f"A2_PASS: {symbol} - Consolidation near highs (dist:{distance_from_high:.1%}, pos:{position_in_range:.0%})")
+        logger.debug(f"A2_PASS: {symbol} - Consolidation near highs")
         return True
 
     def calculate_dimensions(self, symbol: str, df: pd.DataFrame) -> List[ScoringDimension]:
@@ -127,6 +153,11 @@ class PreBreakoutCompressionStrategy(MomentumBreakoutStrategy):
             concentration_threshold=self.PARAMS['concentration_threshold']
         )
 
+        # Cache platform for reuse in entry/exit and match reasons
+        if not hasattr(self, '_platform_cache'):
+            self._platform_cache = {}
+        self._platform_cache[symbol] = platform
+
         if not platform:
             high_60d = df['high'].tail(60).max()
             low_60d = df['low'].tail(60).min()
@@ -136,22 +167,10 @@ class PreBreakoutCompressionStrategy(MomentumBreakoutStrategy):
                 'platform_low': low_60d,
                 'platform_range_pct': (high_60d - low_60d) / high_60d if high_60d > 0 else 0.15,
                 'platform_days': 60,
-                'concentration_ratio': 0.30,
+                'concentration_ratio': 0.0,
                 'volume_contraction_ratio': 1.0,
-                'contraction_quality': 0.3,
+                'contraction_quality': 0.0,
             }
-            pattern_type = 'loose'
-        else:
-            range_pct = platform.get('platform_range_pct', 0.15)
-            conc = platform.get('concentration_ratio', 0.3)
-            if range_pct < 0.08 and conc > 0.60:
-                pattern_type = 'VCP'
-            elif range_pct < 0.05 and platform.get('platform_days', 60) <= 20:
-                pattern_type = 'HTF'
-            elif range_pct < 0.10 and conc > 0.55:
-                pattern_type = 'flat'
-            else:
-                pattern_type = 'loose'
 
         platform_high = platform['platform_high']
         platform_range_pct = platform['platform_range_pct']
@@ -177,7 +196,7 @@ class PreBreakoutCompressionStrategy(MomentumBreakoutStrategy):
             }
         ))
 
-        _, cq_score = self._detect_consolidation_pattern(ind, df, platform)
+        pattern_type, cq_score = self._detect_consolidation_pattern(ind, df, platform)
         dimensions.append(ScoringDimension(
             name='CQ',
             score=cq_score,
@@ -186,7 +205,7 @@ class PreBreakoutCompressionStrategy(MomentumBreakoutStrategy):
                 'pattern_type': pattern_type,
                 'platform_range_pct': platform_range_pct,
                 'concentration_ratio': platform['concentration_ratio'],
-                'contraction_quality': platform.get('contraction_quality', 0.3)
+                'contraction_quality': platform.get('contraction_quality', 0.0)
             }
         ))
 
@@ -196,7 +215,6 @@ class PreBreakoutCompressionStrategy(MomentumBreakoutStrategy):
             score=cp_score,
             max_score=4.0,
             details={
-                'volume_contraction': platform['volume_contraction_ratio'],
                 'range_contraction': platform_range_pct,
                 'distance_from_pivot': breakout_pct,
             }
@@ -247,26 +265,14 @@ class PreBreakoutCompressionStrategy(MomentumBreakoutStrategy):
         return min(4.0, vc_score)
 
     def _calculate_cp(self, df: pd.DataFrame, platform: Dict) -> float:
-        """Compression Score (CP) - Max 4.0."""
+        """Compression Score (CP) - Max 4.0. Price compression only (volume in VC)."""
         cp_score = 0.0
 
-        vol_5d = df['volume'].tail(5).mean()
-        vol_20d = df['volume'].tail(20).mean()
-        vol_contract = vol_5d / vol_20d if vol_20d > 0 else 1.0
-
-        if vol_contract < 0.50:
-            cp_score += 1.5
-        elif vol_contract < 0.65:
-            cp_score += 0.8
-        elif vol_contract < 0.80:
-            cp_score += 0.3
-
+        # 1. Range compression (0-1.5 pts)
         high_5d = df['high'].tail(5).max()
         low_5d = df['low'].tail(5).min()
         range_5d = high_5d - low_5d
-
         atr_20d = df['high'].tail(20).max() - df['low'].tail(20).min()
-
         range_ratio = range_5d / atr_20d if atr_20d > 0 else 1.0
 
         if range_ratio < 0.50:
@@ -274,12 +280,16 @@ class PreBreakoutCompressionStrategy(MomentumBreakoutStrategy):
         elif range_ratio < 0.70:
             cp_score += 0.8
 
+        # 2. Wave count (0-1.5 pts)
         wave_count = self._count_contraction_waves(df, platform)
         if wave_count >= 3:
-            cp_score += 1.0
+            cp_score += 1.5
         elif wave_count >= 2:
-            cp_score += 0.5
+            cp_score += 0.8
+        elif wave_count >= 1:
+            cp_score += 0.3
 
+        # 3. Proximity to pivot (0-1.0 pts)
         platform_high = platform['platform_high']
         current_price = df['close'].iloc[-1]
         distance = abs(current_price - platform_high) / platform_high
@@ -320,19 +330,50 @@ class PreBreakoutCompressionStrategy(MomentumBreakoutStrategy):
         score: float,
         tier: str
     ) -> Tuple[float, float, float]:
-        """Calculate entry, stop, and target prices for pre-breakout setup."""
+        """Calculate entry, stop, and target prices for pre-breakout setup.
+
+        v8.0 Fix: Entry at pivot breakout level, not current price.
+        Add validation: reject if no compression detected.
+        """
         ind = TechnicalIndicators(df)
-        platform = ind.detect_vcp_platform(
-            lookback_range=self.PARAMS['platform_lookback'],
-            max_range_pct=self.PARAMS['platform_max_range'],
-            concentration_threshold=self.PARAMS['concentration_threshold']
-        )
+
+        # Use cached platform if available
+        platform = getattr(self, '_platform_cache', {}).get(symbol)
+        if platform is None:
+            platform = ind.detect_vcp_platform(
+                lookback_range=self.PARAMS['platform_lookback'],
+                max_range_pct=self.PARAMS['platform_max_range'],
+                concentration_threshold=self.PARAMS['concentration_threshold']
+            )
 
         current_price = df['close'].iloc[-1]
-        platform_low = platform['platform_low'] if platform else df['low'].tail(20).min()
-        platform_high = platform['platform_high'] if platform else df['high'].tail(20).max()
 
-        entry = round(current_price, 2)
+        # Validate: need a platform or valid 60d range
+        if not platform:
+            high_60d = df['high'].tail(60).max()
+            low_60d = df['low'].tail(60).min()
+            if high_60d <= 0 or low_60d <= 0 or high_60d == low_60d:
+                return None, None, None
+            platform_high = high_60d
+            platform_low = low_60d
+        else:
+            platform_high = platform['platform_high']
+            platform_low = platform['platform_low']
+
+        # Validate: volume dry-up required (vol_5d/vol_20d < 0.80)
+        vol_5d = df['volume'].tail(5).mean()
+        vol_20d = df['volume'].tail(20).mean()
+        dry_up_ratio = vol_5d / vol_20d if vol_20d > 0 else 1.0
+        if dry_up_ratio >= 0.80:
+            logger.debug(f"A2_ENTRY_REJ: {symbol} - No volume dry-up ({dry_up_ratio:.2f} >= 0.80)")
+            return None, None, None
+
+        # Entry at pivot (breakout trigger), not current price
+        if current_price >= platform_high:
+            entry = round(current_price, 2)  # breakout already happened
+        else:
+            entry = round(platform_high, 2)  # buy stop at pivot
+
         stop = platform_low * 0.97
         stop = max(stop, entry * 0.92)
         stop = round(stop, 2)
@@ -363,11 +404,15 @@ class PreBreakoutCompressionStrategy(MomentumBreakoutStrategy):
         position_pct = self.calculate_position_pct(tier)
 
         ind = TechnicalIndicators(df)
-        platform = ind.detect_vcp_platform(
-            lookback_range=self.PARAMS['platform_lookback'],
-            max_range_pct=self.PARAMS['platform_max_range'],
-            concentration_threshold=self.PARAMS['concentration_threshold']
-        )
+
+        # Use cached platform if available
+        platform = getattr(self, '_platform_cache', {}).get(symbol)
+        if platform is None:
+            platform = ind.detect_vcp_platform(
+                lookback_range=self.PARAMS['platform_lookback'],
+                max_range_pct=self.PARAMS['platform_max_range'],
+                concentration_threshold=self.PARAMS['concentration_threshold']
+            )
 
         pattern_type = cq.details.get('pattern_type', 'VCP') if cq else 'VCP'
         distance_from_pivot = cp.details.get('distance_from_pivot', 0) * 100
@@ -382,6 +427,9 @@ class PreBreakoutCompressionStrategy(MomentumBreakoutStrategy):
 
     def screen(self, symbols: List[str], max_candidates: int = 5) -> List[StrategyMatch]:
         """Screen all symbols with Phase 0 pre-filter for A2."""
+        # Clear platform cache for new screening run
+        self._platform_cache = {}
+
         prefiltered = []
 
         phase0_data = getattr(self, 'phase0_data', None)

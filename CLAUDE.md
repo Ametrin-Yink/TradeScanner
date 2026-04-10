@@ -16,7 +16,7 @@ Automated US stock trading opportunity scanner analyzing stocks with market cap 
 
 ### 2. Subagent Strategy
 
-- Use subagents liberally to keep main context window clean
+- Use subagents actively to keep main context window clean
 - Offload research, exploration, and parallel analysis to subagents For complex problems, throw more compute at it via subagents
 - One task per subagent for focused execution
 
