@@ -92,14 +92,14 @@ A has two internal sub-modes. A-slots are filled by A1 first; remaining slots us
 
 ### Pre-filter (shared)
 
-| Filter            | Condition                           |
-| ----------------- | ----------------------------------- |
-| RS_pct            | ≥ 50th (hard gate, both A1/A2)      |
-| Price             | > EMA200                            |
-| 3-month return    | ≥ −20%                             |
-| Market cap        | ≥ $2B (Phase 0 prefilter)           |
-| Avg vol 20d       | ≥ 100K                            |
-| Pivot proximity   | ≤ 3% above platform_high (A2 only) |
+| Filter          | Condition                          |
+| --------------- | ---------------------------------- |
+| RS_pct          | ≥ 50th (hard gate, both A1/A2)     |
+| Price           | > EMA200                           |
+| 3-month return  | ≥ −20%                             |
+| Market cap      | ≥ $2B (Phase 0 prefilter)          |
+| Avg vol 20d     | ≥ 100K                             |
+| Pivot proximity | ≤ 3% above platform_high (A2 only) |
 
 ### TC — Trend Context (max 5.0)
 
@@ -115,13 +115,13 @@ A has two internal sub-modes. A-slots are filled by A1 first; remaining slots us
 
 Pattern detection (first match wins):
 
-| Pattern         | Requirements                                                      | Base Score |
-| --------------- | ----------------------------------------------------------------- | ---------- |
+| Pattern         | Requirements                                                                            | Base Score |
+| --------------- | --------------------------------------------------------------------------------------- | ---------- |
 | VCP             | 21–60d, range<12%, >50% days ±2.5%, last 5d vol<70% avg, ≥2 progressively smaller waves | 0.80–1.00  |
-| High tight flag | Prior +80% in ≤8w, pullback 10–25%, flag 3–5w, vol dry-up            | 0.61–0.72  |
-| Flat base       | Range<15%, EMA21 slope<0.3×ATR/5d, 5–15w (35–105d), vol dry-up     | 0.55–0.75  |
-| Ascending       | ≥3 higher lows, range 10–25%, 4–12w, prior advance ≥20%              | 0.62       |
-| Loose           | Range<20%, ≥21d                                                   | 0.15–0.40  |
+| High tight flag | Prior +80% in ≤8w, pullback 10–25%, flag 3–5w, vol dry-up                               | 0.61–0.72  |
+| Flat base       | Range<15%, EMA21 slope<0.3×ATR/5d, 5–15w (35–105d), vol dry-up                          | 0.55–0.75  |
+| Ascending       | ≥3 higher lows, range 10–25%, 4–12w, prior advance ≥20%                                 | 0.62       |
+| Loose           | Range<20%, ≥21d                                                                         | 0.15–0.40  |
 
 ```
 cq_base = pattern_score × 3.0
@@ -152,11 +152,11 @@ A2 triggers when price is still inside base. CP measures price compression only 
 | 50–70%                                      | 0.8   | 2 waves    | 0.8   |
 | >70%                                        | 0     | 1 wave     | 0.3   |
 
-| Proximity to pivot | Score |
-| ------------------ | ----- |
-| <1.5%              | 1.0   |
+| Proximity to pivot | Score                 |
+| ------------------ | --------------------- |
+| <1.5%              | 1.0                   |
 | 1.5–3%             | 0.5–1.0 (interpolate) |
-| >3%                | 0     |
+| >3%                | 0                     |
 
 `CP = range_score + wave_score + proximity_score (max 4.0)`
 
@@ -164,13 +164,13 @@ A2 triggers when price is still inside base. CP measures price compression only 
 
 **A1 VC:**
 
-| Base vol (last 5d / avg20d) | Score       | Breakout vol | Score   | CLV       | Score |
-| --------------------------- | ----------- | ------------ | ------- | --------- | ----- |
-| <0.50                       | 1.5         | >=3.0x       | 1.5     | >=0.85    | 1.0   |
+| Base vol (last 5d / avg20d) | Score       | Breakout vol | Score   | CLV       | Score   |
+| --------------------------- | ----------- | ------------ | ------- | --------- | ------- |
+| <0.50                       | 1.5         | >=3.0x       | 1.5     | >=0.85    | 1.0     |
 | 0.50-0.65                   | 1.0-1.5     | 2-3x         | 1.0-1.5 | 0.70-0.85 | 0.5-1.0 |
 | 0.65-0.80                   | 0.5-1.0     | 1.5-2x       | 0.5-1.0 | 0.50-0.70 | 0.2-0.5 |
-| 0.80-1.00                   | 0.2-0.5     | 1-1.5x       | 0-0.5   | <0.50     | 0     |
-| >1.00                       | 0.2 (floor) | <1.0x        | 0       |           |       |
+| 0.80-1.00                   | 0.2-0.5     | 1-1.5x       | 0-0.5   | <0.50     | 0       |
+| >1.00                       | 0.2 (floor) | <1.0x        | 0       |           |         |
 
 **A2 VC:**
 
@@ -183,12 +183,12 @@ A2 triggers when price is still inside base. CP measures price compression only 
 
 ### Bonus Pool
 
-| Bonus                   | Max  | Condition                                       |
-| ----------------------- | ---- | ----------------------------------------------- |
-| Sector leadership       | 0.5  | Sector ETF RS≥80th AND >EMA50 (A1 only)         |
-| Earnings catalyst       | 0.5  | 7–21 days to earnings (A1 only)                 |
-| Accumulation divergence | 0.5  | OBV rising while price flat (A1 only)           |
-| Position strength       | 0.5  | Price in top 30% of 60d range (A2 only)         |
+| Bonus                   | Max | Condition                               |
+| ----------------------- | --- | --------------------------------------- |
+| Sector leadership       | 0.5 | Sector ETF RS≥80th AND >EMA50 (A1 only) |
+| Earnings catalyst       | 0.5 | 7–21 days to earnings (A1 only)         |
+| Accumulation divergence | 0.5 | OBV rising while price flat (A1 only)   |
+| Position strength       | 0.5 | Price in top 30% of 60d range (A2 only) |
 
 ### Entry / Exit
 
@@ -290,65 +290,119 @@ Distribution day: volume surging on a down-day signals institutional selling, no
 
 ### Pre-filter
 
-| Filter          | Condition                  |
-| --------------- | -------------------------- |
-| Price vs EMA50  | Within ±15%                |
-| Support touches | ≥3 in 60d **OR** ≥2 in 30d |
-| Market cap      | ≥ $2B                      |
-| Avg vol 20d     | ≥ 100K                     |
+Phase 0.5 lightweight filter: support exists AND price within 10% of support.
+Full validation (touches, EMA50, ADR, volume) happens in Phase 1 filter.
+
+| Filter      | Condition                      |
+| ----------- | ------------------------------ |
+| Support     | At least 1 support below price |
+| Depth       | ≤ 10% from nearest support     |
+| Market cap  | ≥ $2B                          |
+| Avg vol 20d | ≥ 100K                         |
 
 ### SQ — Support Quality (max 4.0)
 
-| EMA Structure                            | Score |
-| ---------------------------------------- | ----- |
-| Price>EMA50 AND EMA8>EMA21               | 4.0   |
-| Price>EMA50 only                         | 2.5   |
-| Price<EMA50 AND EMA8>EMA21 (bear bounce) | 1.5   |
-| Neither                                  | 0     |
+| Factor          | Condition        | Score           |
+| --------------- | ---------------- | --------------- |
+| Touch frequency | ≥3 touches       | 2.0 (× recency) |
+|                 | 2 touches        | 1.3 (× recency) |
+|                 | 1 touch          | 0.7 (× recency) |
+| Bounce strength | avg ≥2.0%        | 2.0             |
+|                 | avg ≥1.0%        | 1.3             |
+|                 | avg >0%          | 0.7             |
+| Sector alpha    | ETF near support | 1.0 (bonus)     |
 
-Bonus: +0.5 if ≥4 prior touches in 90d (capped at 4.0)
+Recency decay: ≤30d=1.0, ≤60d=0.7, ≤90d=0.5, >90d=0.3.
+
+Note: Distance scoring moved to RB to avoid double-counting.
 
 ### VD — Volume Dynamics (max 5.0)
 
-Code uses three-phase additive scoring:
+Three-phase additive scoring:
 
-**Climax** (max 1.5): down-day vol vs avg20d within last 5d. `>=4.0x = 1.5`, `>=3.0x = 1.0`, `>=2.5x = 0.5`.
+**Phase 1 — Breakdown Volume** (max 1.5): Volume on the breakdown dip.
+Low volume = false breakdown = bullish. High volume = real breakdown = 0.
 
-**Dry-up** (max 2.0): recent avg vol vs avg20d. `<0.6x = 2.0`, `0.6-0.8x = 1.0-2.0`, `0.8-1.0x = 0-1.0`, `>1.0x = 0`.
+| Vol ratio (breakdown day / avg20d) | Score |
+| ---------------------------------- | ----- |
+| <0.8x                              | 1.5   |
+| 0.8–1.0x                           | 1.0   |
+| ≥1.5x                              | 0     |
 
-**Surge** (max 1.5): latest day vol vs avg20d. `>=3.0x = 1.5`, `>=2.0x = 1.0`, `>=1.5x = 0.5`.
+**Phase 2 — Dry-up** (max 1.5): Current volume vs avg20d.
+
+| Vol ratio | Score                 |
+| --------- | --------------------- |
+| <0.4x     | 1.5                   |
+| 0.4–0.6x  | 1.0–1.5 (interpolate) |
+| ≥0.6x     | 0                     |
+
+**Phase 3 — Surge** (max 2.0): Recent volume expansion on reclaim.
+
+| Vol ratio | Score                 |
+| --------- | --------------------- |
+| ≥3.0x     | 2.0                   |
+| 2.0–3.0x  | 1.0–2.0 (interpolate) |
+| <2.0x     | 0                     |
 
 VD = sum of phase scores (capped at 5.0).
 
+Veto: If current vol >2.0x avg20d AND CLV <0.30 → falling knife → reject.
+
 ### RB — Rebound (max 6.0)
 
-**Depth (0–2.5)**: Hard gate: depth must be ≥2% to score at all.
+**Reclaim timing (0–2.0)**:
 
-| Depth | Score                |
-| ----- | -------------------- |
-| <2%   | 0 (hard gate)        |
-| 2–4%  | 2.0–2.5 (peak at 3%) |
-| 4–7%  | 1.5–2.5              |
-| 7–10% | 0.5–1.5              |
-| >10%  | 0                    |
+| Days since false breakdown | Score                 |
+| -------------------------- | --------------------- |
+| ≤1d                        | 2.0                   |
+| 2–3d                       | 1.0–1.5 (interpolate) |
+| ≥4d                        | 0 (expired)           |
 
-**Reclaim speed (0–2.5)**:
+**Candle shape (0–1.0)**: Lower shadow / total range.
 
-| Days to reclaim support | Score |
-| ----------------------- | ----- |
-| 1d                      | 2.5   |
-| 2d                      | 2.0   |
-| 3d                      | 1.5   |
-| 4d                      | 1.0   |
-| ≥5d                     | 0     |
+| Shadow % | Score        |
+| -------- | ------------ |
+| ≥60%     | 1.0 (hammer) |
+| 40–60%   | 0.7          |
+| 30–40%   | 0.4          |
+| <30%     | 0            |
 
-**Sector (0-1.0)**: Code uses EMA50 with 2% buffer: `>EMA50+2% = 1.0`, `within EMA50+/-2% = 0.5`, `<EMA50-2% = 0`.
+**CLV position (0–1.0)**:
+
+| CLV     | Score |
+| ------- | ----- |
+| ≥0.7    | 1.0   |
+| 0.5–0.7 | 0.7   |
+| 0.4–0.5 | 0.4   |
+| <0.4    | 0     |
+
+**Depth quality (0–1.0)**: Distance from support (replaces SQ distance scoring).
+
+| Depth | Score |
+| ----- | ----- |
+| <1%   | 1.0   |
+| 1–2%  | 0.7   |
+| 2–5%  | 0.4   |
+| ≥5%   | 0     |
+
+Hard gate: depth must be ≥2% for RB to score at all.
+
+**Sector alignment (0–1.0)**: Sector ETF vs its EMA50.
+
+| ETF vs EMA50 | Score |
+| ------------ | ----- |
+| >EMA50+2%    | 1.0   |
+| EMA50±2%     | 0.5   |
+| <EMA50−2%    | 0     |
 
 ### Entry / Exit
 
-**Entry**: Close>support+0.3×ATR, Vol≥1.5×avg20d, CLV≥0.60, not within 5d of earnings  
-**Stop**: `max(support_low−0.5×ATR, entry×0.94)`  
-**Target**: `entry + 2.5 × (entry − stop)` (2.0R in bear)
+**Entry**: Reclaim confirmation: if false breakdown ≤1d ago, enter at prior candle close. Otherwise limit at `nearest_support + 0.1×ATR`.
+
+**Stop**: Breakdown wick low − 0.25×ATR. Fallback: `support − 0.5×ATR`.
+
+**Target**: Nearest resistance or `entry + 2.0×(entry − stop)`, whichever is closer.
 
 ---
 

@@ -1,9 +1,8 @@
-"""Strategy E: 支撑回踩买入 (Support Rebound Buy) - Near support with volume contraction."""
+"""Strategy C: Support Bounce - Near support with volume contraction, false breakdown entry."""
 from ..scoring_utils import calculate_clv
 from ..constants import SECTOR_ETFS
 from typing import Dict, List, Optional, Tuple, Any
 import logging
-from datetime import datetime
 
 import pandas as pd
 
@@ -16,15 +15,19 @@ logger = logging.getLogger(__name__)
 
 class SupportBounceStrategy(BaseStrategy):
     """
-    Strategy C: SupportBounce v5.0
-    - Removed SPY > EMA200 hard gate (regime-adaptive position sizing instead)
+    Strategy C: SupportBounce v8.0
+    - Regime-adaptive position sizing (no SPY gate)
     - Depth range 2-10% for support distance
-    - Continuous 1-5 day reclaim scoring for RB dimension
+    - Continuous 1-3 day reclaim scoring for RB dimension
+    - S/R cached per symbol (no redundant recalculation)
+    - Volume Phase 1: low volume on breakdown = bullish (false breakdown)
+    - Entry at reclaim confirmation or limit at support
+    - Stop at breakdown wick low, target at resistance or 2R
     """
 
     NAME = "SupportBounce"
-    STRATEGY_TYPE = StrategyType.C  # Changed from UPTHRUST_REBOUND
-    DESCRIPTION = "SupportBounce v5.0 - regime-adaptive false breakdown"
+    STRATEGY_TYPE = StrategyType.C
+    DESCRIPTION = "SupportBounce v8.0 - regime-adaptive false breakdown"
     DIMENSIONS = ['SQ', 'VD', 'RB']
     DIRECTION = 'long'
 
@@ -37,41 +40,38 @@ class SupportBounceStrategy(BaseStrategy):
         'min_touches_30d': 2,
         'target_r_multiplier': 2.0,
         'support_tolerance_atr': 0.5,
-        'time_stop_days': 5,
-        'time_stop_clv_min': 0.4,
         'max_reclaim_days': 5,
         'volume_veto_threshold': 2.0,
         'clv_veto_threshold': 0.3,
     }
 
     def __init__(self, fetcher=None, db=None, config=None):
-        """Initialize with sector ETF data cache."""
+        """Initialize with sector ETF data cache and S/R cache."""
         super().__init__(fetcher=fetcher, db=db, config=config)
         self.sector_etf_data = {}
         self.stock_info = {}
+        self._sr_cache: Dict[str, Dict] = {}
 
     def screen(self, symbols: List[str], max_candidates: int = 5) -> List[StrategyMatch]:
         """
-        Screen all symbols with Phase 0 pre-filter.
-        - Support exists and within 10% (v5.0: removed SPY > EMA200 gate, depth range 2-10%)
+        Screen all symbols with lightweight Phase 0 pre-filter.
+        Pre-filter only checks: support exists, price within max distance.
+        Full validation (touches, EMA50, ADR, volume) happens in filter().
         """
-        # v5.0: SPY > EMA200 gate removed - regime-adaptive position sizing instead
-        logger.info("SupportBounce: Phase 0 - Support Bounce v5.0 (no SPY gate)")
+        logger.info("SupportBounce: Phase 0 - Pre-filtering by support existence...")
 
-        # Pre-filter by support existence and distance
         prefiltered = []
-        logger.info("SupportBounce: Phase 0.5 - Pre-filtering by support...")
 
         for symbol in symbols:
             try:
                 df = self._get_data(symbol)
                 if df is None or len(df) < self.PARAMS['min_listing_days']:
-                    logger.debug(f"U&R_REJ: {symbol} - Insufficient data")
+                    logger.debug(f"SupportBounce_REJ: {symbol} - Insufficient data")
                     continue
 
                 current_price = df['close'].iloc[-1]
 
-                # Calculate S/R with tolerance
+                # Single S/R calculation, cached
                 calc = SupportResistanceCalculator(df)
                 sr_levels = calc.calculate_all()
                 supports = sr_levels.get('support', [])
@@ -80,7 +80,6 @@ class SupportBounceStrategy(BaseStrategy):
                     logger.debug(f"SupportBounce_REJ: {symbol} - No support levels found")
                     continue
 
-                # Find nearest support
                 supports_below = [s for s in supports if s < current_price]
                 if not supports_below:
                     logger.debug(f"SupportBounce_REJ: {symbol} - No support below price {current_price:.2f}")
@@ -89,23 +88,12 @@ class SupportBounceStrategy(BaseStrategy):
                 nearest_support = max(supports_below)
                 distance_pct = (current_price - nearest_support) / current_price
 
-                # v7.0: Max depth 10% (no minimum - doc only requires within ±15% of EMA50)
                 max_depth = self.PARAMS['max_distance_from_support']
                 if distance_pct > max_depth:
                     logger.debug(f"SupportBounce_REJ: {symbol} - Depth {distance_pct:.2%} > {max_depth:.0%}")
                     continue
 
-                # v7.0: Check touch count (≥3 in 60d OR ≥2 in 30d)
-                touches_60d = calc.count_touches(nearest_support, lookback=60)
-                touches_30d = calc.count_touches(nearest_support, lookback=30)
-                min_touches_60d = self.PARAMS['min_touches_60d']
-                min_touches_30d = self.PARAMS['min_touches_30d']
-
-                if touches_60d < min_touches_60d and touches_30d < min_touches_30d:
-                    logger.debug(f"SupportBounce_REJ: {symbol} - Insufficient touches (60d={touches_60d}, 30d={touches_30d})")
-                    continue
-
-                logger.debug(f"SupportBounce_PASS: {symbol} - Support at {nearest_support:.2f}, depth {distance_pct:.2%}, touches_60d={touches_60d}, touches_30d={touches_30d}")
+                logger.debug(f"SupportBounce_PASS: {symbol} - Support at {nearest_support:.2f}, depth {distance_pct:.2%}")
                 prefiltered.append(symbol)
 
             except Exception as e:
@@ -138,8 +126,21 @@ class SupportBounceStrategy(BaseStrategy):
         except Exception as e:
             logger.warning(f"Could not load sector ETF data: {e}")
 
+    def _get_sr_levels(self, df: pd.DataFrame) -> Dict:
+        """Get cached S/R levels, compute once per DataFrame."""
+        if 'levels' not in self._sr_cache:
+            calc = SupportResistanceCalculator(df)
+            self._sr_cache['levels'] = calc.calculate_all()
+            self._sr_cache['calc'] = calc
+        return self._sr_cache['levels']
+
+    def _get_sr_calculator(self, df: pd.DataFrame):
+        """Get cached S/R calculator instance."""
+        self._get_sr_levels(df)
+        return self._sr_cache['calc']
+
     def filter(self, symbol: str, df: pd.DataFrame) -> bool:
-        """Filter for SupportBounce candidates per v7.0 spec."""
+        """Filter for SupportBounce candidates per v8.0 spec."""
         if len(df) < self.PARAMS['min_listing_days']:
             return False
 
@@ -151,22 +152,19 @@ class SupportBounceStrategy(BaseStrategy):
 
         current_price = df['close'].iloc[-1]
 
-        # v7.0: Price vs EMA50 within ±15% (doc line 275)
+        # Price vs EMA50 within +/-15%
         ema50 = ind.indicators.get('ema', {}).get('ema50', current_price)
         ema50_distance = abs(current_price - ema50) / ema50 if ema50 > 0 else 1.0
         if ema50_distance > 0.15:
             logger.debug(f"SupportBounce_REJ: {symbol} - Price {ema50_distance:.1%} from EMA50 > 15%")
             return False
 
-        # Calculate S/R
-        calc = SupportResistanceCalculator(df)
-        sr_levels = calc.calculate_all()
-
+        # S/R from cache
+        sr_levels = self._get_sr_levels(df)
         supports = sr_levels.get('support', [])
         if not supports:
             return False
 
-        # Find nearest support (highest support below price)
         supports_below = [s for s in supports if s < current_price]
         if not supports_below:
             return False
@@ -174,37 +172,34 @@ class SupportBounceStrategy(BaseStrategy):
         nearest_support = max(supports_below)
         distance_pct = abs(current_price - nearest_support) / current_price
 
-        # v7.0: Max depth 10% (no minimum depth gate)
         max_depth = self.PARAMS['max_distance_from_support']
         if distance_pct > max_depth:
             return False
 
-        # v7.0: Support touch requirement - ≥3 touches in 60d OR ≥2 touches in 30d
+        # Support touch requirement: >=3 touches in 60d OR >=2 touches in 30d
         atr = ind.indicators.get('atr', {}).get('atr', current_price * 0.02)
         support_touches = self._calculate_support_touches(df, nearest_support, atr)
         touch_dates = support_touches.get('touch_dates', [])
 
-        # Count touches in 60d and 30d windows
         touches_60d = len([d for d in touch_dates if d <= 60])
         touches_30d = len([d for d in touch_dates if d <= 30])
 
-        # v7.0: Require ≥3 in 60d OR ≥2 in 30d (recency matters more)
         if not (touches_60d >= 3 or touches_30d >= 2):
-            logger.debug(f"{symbol}: v7.0 touch requirement failed (60d:{touches_60d}, 30d:{touches_30d})")
+            logger.debug(f"{symbol}: Touch requirement failed (60d:{touches_60d}, 30d:{touches_30d})")
             return False
 
         return True
 
     def calculate_dimensions(self, symbol: str, df: pd.DataFrame) -> List[ScoringDimension]:
-        """Calculate 3-dimensional scoring with three expert defenses."""
+        """Calculate 3-dimensional scoring."""
         ind = TechnicalIndicators(df)
         ind.calculate_all()
 
         current_price = df['close'].iloc[-1]
         atr = ind.indicators.get('atr', {}).get('atr', current_price * 0.02)
 
-        calc = SupportResistanceCalculator(df)
-        sr_levels = calc.calculate_all()
+        # S/R from cache
+        sr_levels = self._get_sr_levels(df)
         supports = sr_levels.get('support', [])
 
         supports_below = [s for s in supports if s < current_price]
@@ -218,24 +213,24 @@ class SupportBounceStrategy(BaseStrategy):
         # Volume and CLV data for veto check
         volume_data = ind.indicators.get('volume', {})
         volume_ratio = volume_data.get('volume_ratio', 1.0)
-        vol_ma20 = volume_data.get('vol_ma20', df['volume'].mean())
 
         # Calculate CLV (Close Location Value)
         today = df.iloc[-1]
         clv = calculate_clv(today['close'], today['high'], today['low'])
 
-        # Defense 2: Volume Trap Veto
+        # Volume Trap Veto: high volume + low CLV = falling knife
         is_falling_knife = (volume_ratio > self.PARAMS['volume_veto_threshold'] and
                            clv < self.PARAMS['clv_veto_threshold'])
 
-        # Defense 3: Sector Alpha Bonus
+        # Sector Alpha Bonus
         sector_alpha = self._calculate_sector_alpha(symbol, current_price, atr)
 
         dimensions = []
 
-        # Dimension 1: Support Quality (SQ) - 4 points max (v7.0 spec)
-        sq_score, sq_details = self._calculate_sq(df, ind)
-        # Add sector alpha bonus if present
+        # Dimension 1: Support Quality (SQ) - 4 points max
+        sq_score, sq_details = self._calculate_sq(df, ind, nearest_support,
+                                                   support_touches, recency_weight)
+        # Add sector alpha bonus
         if sector_alpha > 0:
             sq_score += sector_alpha
             sq_details['sector_alpha'] = sector_alpha
@@ -247,8 +242,7 @@ class SupportBounceStrategy(BaseStrategy):
             details=sq_details
         ))
 
-        # Dimension 2: Volume Dryness (VD) - 5 points max
-        # Veto: return empty if falling knife detected
+        # Dimension 2: Volume Dynamics (VD) - 5 points max
         if is_falling_knife:
             logger.debug(f"{symbol}: Volume trap veto (Vol:{volume_ratio:.2f}x, CLV:{clv:.2f})")
             return []
@@ -262,7 +256,8 @@ class SupportBounceStrategy(BaseStrategy):
         ))
 
         # Dimension 3: Rebound Setup (RB) - 6 points max
-        rb_score, rb_details = self._calculate_rb(ind, df, clv, symbol)
+        rb_score, rb_details = self._calculate_rb(ind, df, clv, symbol,
+                                                   sr_levels, nearest_support, distance_pct)
         dimensions.append(ScoringDimension(
             name='RB',
             score=rb_score,
@@ -272,115 +267,17 @@ class SupportBounceStrategy(BaseStrategy):
 
         return dimensions
 
-
-    def _check_time_stop(self, symbol: str, entry_date: datetime,
-                         df: pd.DataFrame) -> bool:
-        """
-        Time stop check - 5 days without rebound exit.
-        Also check 5-day CLV avg > 0.4.
-        """
-        # Get post-entry data
-        entry_idx = df.index.get_indexer([entry_date], method='nearest')[0]
-        if entry_idx < 0 or entry_idx + 5 >= len(df):
-            return False
-
-        post_entry = df.iloc[entry_idx:entry_idx+5]
-
-        # Check if rebounded within 5 days
-        entry_price = df['close'].iloc[entry_idx]
-        max_price = post_entry['close'].max()
-
-        if max_price > entry_price:
-            return False  # Rebounded, no stop
-
-        # 5 days no rebound, check CLV avg
-        clv_values = []
-        for _, row in post_entry.iterrows():
-            high, low, close = row['high'], row['low'], row['close']
-            if high != low:
-                clv = (close - low) / (high - low)
-                clv_values.append(clv)
-
-        if clv_values and sum(clv_values) / len(clv_values) >= self.PARAMS['time_stop_clv_min']:
-            return False  # High CLV avg, no stop
-
-        return True  # Trigger time stop
-
-    def _detect_resistance_level(self, df: pd.DataFrame) -> Optional[float]:
-        """Detect clear resistance level above current price."""
-        calc = SupportResistanceCalculator(df)
-        sr_levels = calc.calculate_all()
-        resistances = sr_levels.get('resistance', [])
-
-        if not resistances:
-            return None
-
-        current_price = df['close'].iloc[-1]
-        resistances_above = [r for r in resistances if r > current_price]
-
-        if not resistances_above:
-            return None
-
-        return min(resistances_above)
-
-    def _detect_support_level(self, df: pd.DataFrame) -> Optional[float]:
-        """Detect clear support level below current price."""
-        calc = SupportResistanceCalculator(df)
-        sr_levels = calc.calculate_all()
-        supports = sr_levels.get('support', [])
-
-        if not supports:
-            return None
-
-        current_price = df['close'].iloc[-1]
-        supports_below = [s for s in supports if s < current_price]
-
-        if not supports_below:
-            return None
-
-        return max(supports_below)
-
-    def _calculate_sq(self, df: pd.DataFrame, ind: TechnicalIndicators) -> Tuple[float, Dict]:
-        """
-        Calculate SQ dimension (no range bonus - v7.0 spec).
-        """
-        # Base SQ calculation
-        current_price = df['close'].iloc[-1]
-        atr = ind.indicators.get('atr', {}).get('atr', current_price * 0.02)
-
-        calc = SupportResistanceCalculator(df)
-        sr_levels = calc.calculate_all()
-        supports = sr_levels.get('support', [])
-
-        supports_below = [s for s in supports if s < current_price]
-        nearest_support = max(supports_below) if supports_below else current_price * 0.99
-        distance_pct = abs(current_price - nearest_support) / current_price
-
-        # Get support touches and recency
-        support_touches = self._calculate_support_touches(df, nearest_support, atr)
-        recency_weight = self._calculate_recency_weight(support_touches['last_touch_days'])
-
-        sq_score, sq_details = self._calculate_sq_base(
-            distance_pct, support_touches, recency_weight,
-            0.0, atr, ind, df
-        )
-
-        return min(4.0, sq_score), sq_details
-
     def _calculate_support_touches(self, df: pd.DataFrame, support_level: float, atr: float) -> Dict:
         """
-        Calculate support touches within tolerance (±0.5 ATR).
-
-        v7.0: Now tracks touch_dates list for recency-based filtering.
-        Returns touch_dates as list of days ago for each touch.
+        Calculate support touches within tolerance (+/-0.5 ATR).
+        Tracks touch_dates list for recency-based filtering.
         """
         tolerance = atr * self.PARAMS['support_tolerance_atr']
         touches = 0
         last_touch_idx = None
         bounce_strengths = []
-        touch_dates = []  # v7.0: Track days ago for each touch
+        touch_dates = []
 
-        # Look back 90 days (about 63 trading days)
         lookback = min(63, len(df) - 1)
 
         for i in range(1, lookback + 1):
@@ -391,18 +288,15 @@ class SupportBounceStrategy(BaseStrategy):
             low = df['low'].iloc[idx]
             close = df['close'].iloc[idx]
             open_price = df['open'].iloc[idx]
-            prev_close = df['close'].iloc[idx - 1] if idx - 1 >= -len(df) else close
 
-            # Check if price touched support
             if abs(low - support_level) <= tolerance or low <= support_level + tolerance:
                 touches += 1
                 last_touch_idx = i
-                touch_dates.append(i)  # v7.0: Record this touch
+                touch_dates.append(i)
 
-                # Calculate bounce strength (close vs open after touch)
                 if close > open_price:
                     strength = (close - open_price) / open_price * 100
-                    bounce_strengths.append(min(strength, 5.0))  # Cap at 5%
+                    bounce_strengths.append(min(strength, 5.0))
 
         avg_bounce = sum(bounce_strengths) / len(bounce_strengths) if bounce_strengths else 0
 
@@ -411,7 +305,7 @@ class SupportBounceStrategy(BaseStrategy):
             'last_touch_days': last_touch_idx if last_touch_idx else 90,
             'avg_bounce_strength': avg_bounce,
             'bounce_count': len(bounce_strengths),
-            'touch_dates': touch_dates,  # v7.0: Return touch dates list
+            'touch_dates': touch_dates,
         }
 
     def _calculate_recency_weight(self, days_since_touch: int) -> float:
@@ -426,7 +320,7 @@ class SupportBounceStrategy(BaseStrategy):
             return 0.3
 
     def _calculate_sector_alpha(self, symbol: str, current_price: float, atr: float) -> float:
-        """Check if sector ETF is also near support (Defense 3)."""
+        """Check if sector ETF is also near support (confluence bonus)."""
         if not self.stock_info or symbol not in self.stock_info:
             return 0.0
 
@@ -444,7 +338,6 @@ class SupportBounceStrategy(BaseStrategy):
 
         etf_price = etf_df['close'].iloc[-1]
 
-        # Calculate ETF support levels
         calc = SupportResistanceCalculator(etf_df)
         etf_sr = calc.calculate_all()
         etf_supports = etf_sr.get('support', [])
@@ -452,20 +345,30 @@ class SupportBounceStrategy(BaseStrategy):
         if not etf_supports:
             return 0.0
 
-        # Find nearest ETF support
         etf_supports_below = [s for s in etf_supports if s < etf_price]
         if not etf_supports_below:
             return 0.0
 
         nearest_etf_support = max(etf_supports_below)
-        etf_atr = atr  # Use same ATR scale for comparison
         etf_distance = abs(etf_price - nearest_etf_support) / etf_price
 
-        # ETF within 3% of support = sector tailwind (+1 bonus)
         if etf_distance < self.PARAMS['max_distance_from_support']:
             return 1.0
 
         return 0.0
+
+    def _calculate_sq(self, df: pd.DataFrame, ind: TechnicalIndicators,
+                      nearest_support: float, support_touches: Dict,
+                      recency_weight: float) -> Tuple[float, Dict]:
+        """Calculate SQ dimension with support data passed in (no redundant S/R)."""
+        current_price = df['close'].iloc[-1]
+        atr = ind.indicators.get('atr', {}).get('atr', current_price * 0.02)
+        distance_pct = abs(current_price - nearest_support) / current_price
+
+        return self._calculate_sq_base(
+            distance_pct, support_touches, recency_weight,
+            0.0, atr, ind, df
+        )
 
     def _calculate_sq_base(
         self,
@@ -478,8 +381,9 @@ class SupportBounceStrategy(BaseStrategy):
         df: pd.DataFrame
     ) -> Tuple[float, Dict]:
         """
-        Support Quality (SQ) - 4 points max (v7.0 spec).
-        Touch frequency + Recency + Bounce strength + Distance + Sector Alpha.
+        Support Quality (SQ) - 4 points max (v8.0).
+        Touch frequency + Bounce strength + Sector Alpha.
+        Distance scoring moved to RB to avoid double-counting.
         """
         details = {
             'distance_pct': distance_pct,
@@ -493,38 +397,28 @@ class SupportBounceStrategy(BaseStrategy):
 
         sq_score = 0.0
 
-        # 1. Touch frequency (0-1.5 pts)
+        # 1. Touch frequency (0-2.0 pts) -- increased from 1.5
         touches = support_touches['touches']
         if touches >= 3:
-            sq_score += 1.5
+            sq_score += 2.0
         elif touches == 2:
-            sq_score += 1.0
+            sq_score += 1.3
         elif touches == 1:
-            sq_score += 0.5
+            sq_score += 0.7
 
-        # 2. Recency weight applied to touch score
+        # Apply recency weight to touch score
         sq_score = round(sq_score * recency_weight, 2)
 
-        # 3. Bounce strength (0-1.5 pts)
+        # 2. Bounce strength (0-2.0 pts) -- increased from 1.5
         avg_bounce = support_touches['avg_bounce_strength']
         if avg_bounce >= 2.0:
-            sq_score += 1.5
+            sq_score += 2.0
         elif avg_bounce >= 1.0:
-            sq_score += 1.0
+            sq_score += 1.3
         elif avg_bounce > 0:
-            sq_score += 0.5
+            sq_score += 0.7
 
-        # 4. Support distance quality (0-1.5 pts)
-        if distance_pct < 0.005:
-            sq_score += 1.5
-        elif distance_pct < 0.01:
-            sq_score += 1.2
-        elif distance_pct < 0.02:
-            sq_score += 1.0
-        elif distance_pct < 0.03:
-            sq_score += 0.5
-
-        # 5. Sector Alpha bonus (0-1 pt)
+        # 3. Sector Alpha bonus (0-1.0 pts)
         sq_score += sector_alpha
 
         return round(min(4.0, sq_score), 2), details
@@ -532,14 +426,14 @@ class SupportBounceStrategy(BaseStrategy):
     def _calculate_vd(self, volume_ratio: float, df: pd.DataFrame) -> Tuple[float, Dict]:
         """
         Volume Dynamics (VD) - 5 points max.
-        3-phase pattern: Climax -> Dry-up -> Surge
-        - Phase 1: Climax (0-1.5 pts): Volume >= 3x avg20d
-        - Phase 2: Dry-up (0-1.5 pts): Volume < 0.6x avg
-        - Phase 3: Surge (0-2.0 pts): Volume on reclaim >= 2x avg
+        3-phase pattern: Breakdown Volume -> Dry-up -> Surge
+        - Phase 1 (0-1.5 pts): LOW volume on breakdown = false breakdown (bullish)
+        - Phase 2 (0-1.5 pts): Current volume < 0.6x avg (selling exhaustion)
+        - Phase 3 (0-2.0 pts): Volume on reclaim >= 2x avg (confirmation)
         """
         details = {
             'volume_ratio': volume_ratio,
-            'phase1_climax': 0.0,
+            'phase1_breakdown_vol': 0.0,
             'phase2_dryup': 0.0,
             'phase3_surge': 0.0,
             'vd_dry_up': False
@@ -548,9 +442,10 @@ class SupportBounceStrategy(BaseStrategy):
         vd_score = 0.0
         vol_ma20 = df['volume'].iloc[-20:].mean() if len(df) >= 20 else df['volume'].mean()
 
-        # Phase 1: Climax detection (look back up to 5 days)
-        climax_score = 0.0
-        climax_found = False
+        # Phase 1: Breakdown volume detection (look back up to 5 days)
+        # v8.0: LOW volume on the breakdown dip = bullish (false breakdown)
+        # HIGH volume = real breakdown = bearish = 0 pts
+        breakdown_vol_score = 0.0
         for i in range(1, min(6, len(df))):
             idx = -(i + 1)
             if idx < -len(df):
@@ -559,22 +454,27 @@ class SupportBounceStrategy(BaseStrategy):
             day_avg = df['volume'].iloc[max(-len(df), idx-20):idx].mean() if idx >= -len(df) + 20 else vol_ma20
             if day_avg > 0:
                 day_ratio = day_vol / day_avg
-                if day_ratio >= 4.0:
-                    climax_score = 1.5
-                    climax_found = True
-                    details['climax_day'] = i
-                    details['climax_ratio'] = day_ratio
+                # Low volume = good (false breakdown)
+                if day_ratio < 0.8:
+                    breakdown_vol_score = 1.5
+                    details['breakdown_day'] = i
+                    details['breakdown_vol_ratio'] = day_ratio
                     break
-                elif day_ratio >= 3.0:
-                    # Linear interpolation: 3x = 1.0, 4x = 1.5
-                    climax_score = 1.0 + (day_ratio - 3.0) * 0.5
-                    climax_found = True
-                    details['climax_day'] = i
-                    details['climax_ratio'] = day_ratio
+                elif day_ratio < 1.0:
+                    breakdown_vol_score = 1.0
+                    details['breakdown_day'] = i
+                    details['breakdown_vol_ratio'] = day_ratio
+                    break
+                elif day_ratio >= 1.5:
+                    # High volume breakdown = real selling, 0 pts
+                    breakdown_vol_score = 0.0
+                    details['breakdown_day'] = i
+                    details['breakdown_vol_ratio'] = day_ratio
+                    details['real_breakdown'] = True
                     break
 
-        details['phase1_climax'] = round(climax_score, 2)
-        vd_score += climax_score
+        details['phase1_breakdown_vol'] = round(breakdown_vol_score, 2)
+        vd_score += breakdown_vol_score
 
         # Phase 2: Dry-up detection (current volume)
         dryup_score = 0.0
@@ -582,7 +482,6 @@ class SupportBounceStrategy(BaseStrategy):
             dryup_score = 1.5
             details['vd_dry_up'] = True
         elif volume_ratio < 0.6:
-            # Linear interpolation: 0.4x = 1.5, 0.6x = 1.0
             dryup_score = 1.5 - (volume_ratio - 0.4) * 2.5
             details['vd_dry_up'] = True
 
@@ -591,7 +490,6 @@ class SupportBounceStrategy(BaseStrategy):
 
         # Phase 3: Surge detection (volume on reclaim >= 2x avg)
         surge_score = 0.0
-        # Look for recent surge after dry-up (last 3 days)
         for i in range(1, min(4, len(df))):
             idx = -(i + 1)
             if idx < -len(df):
@@ -606,7 +504,6 @@ class SupportBounceStrategy(BaseStrategy):
                     details['surge_ratio'] = day_ratio
                     break
                 elif day_ratio >= 2.0:
-                    # Linear interpolation: 2x = 1.0, 3x = 2.0
                     surge_score = 1.0 + (day_ratio - 2.0)
                     details['surge_day'] = i
                     details['surge_ratio'] = day_ratio
@@ -617,20 +514,16 @@ class SupportBounceStrategy(BaseStrategy):
 
         return round(min(5.0, vd_score), 2), details
 
-    def _calculate_rb(self, ind: TechnicalIndicators, df: pd.DataFrame, clv: float, symbol: str = '') -> Tuple[float, Dict]:
+    def _calculate_rb(self, ind: TechnicalIndicators, df: pd.DataFrame, clv: float,
+                      symbol: str = '', sr_levels: Dict = None,
+                      nearest_support: float = None, depth_pct: float = None) -> Tuple[float, Dict]:
         """
         Rebound Setup (RB) - 6 points max.
 
-        v5.0: Continuous 1-5 day reclaim scoring based on days since false breakdown.
-        v7.0: Changes:
-          - Add depth ≥2% hard gate (depth<2% returns 0 score)
-          - Remove 4-5 day reclaim scoring (expired)
-
-        Scoring:
-        - 1 day = full points (2.0)
-        - 2-3 days = medium points (1.0-1.5)
-        - 4-5 days = EXPIRED (v7.0: removed 0.5 pts)
-        - Plus sector alignment (0-1.0 pts)
+        v8.0: Changes:
+          - Depth quality scoring (0-1.0) replaces SQ's duplicate distance scoring
+          - Reclaim scoring: 1 day = full, 2-3 days = medium, 4+ days = expired
+          - Accepts pre-computed S/R and support data from caller
         """
         today = df.iloc[-1]
         current_price = today['close']
@@ -638,31 +531,32 @@ class SupportBounceStrategy(BaseStrategy):
         low = today['low']
         open_price = today['open']
 
-        # Calculate shadow ratios
+        # Candle geometry
         total_range = high - low
         lower_shadow = min(open_price, current_price) - low if min(open_price, current_price) > low else 0
-        upper_shadow = high - max(open_price, current_price) if high > max(open_price, current_price) else 0
 
-        # Calculate days since false breakdown (reclaim)
-        days_since_breakdown = self._calculate_days_since_breakdown(df)
+        # Days since false breakdown
+        days_since_breakdown = self._calculate_days_since_breakdown_cached(
+            df, nearest_support, sr_levels
+        )
 
-        # v7.0: Calculate depth from support for hard gate
-        current_price = df['close'].iloc[-1]
-        calc = SupportResistanceCalculator(df)
-        sr_levels = calc.calculate_all()
-        supports = sr_levels.get('support', [])
-        supports_below = [s for s in supports if s < current_price]
-        nearest_support = max(supports_below) if supports_below else current_price * 0.99
-        depth_pct = abs(current_price - nearest_support) / current_price
+        # Ensure depth_pct is set
+        if depth_pct is None:
+            if nearest_support is None:
+                if sr_levels is None:
+                    sr_levels = self._get_sr_levels(df)
+                supports = sr_levels.get('support', [])
+                supports_below = [s for s in supports if s < current_price]
+                nearest_support = max(supports_below) if supports_below else current_price * 0.99
+            depth_pct = abs(current_price - nearest_support) / current_price
 
-        # Calculate sector alignment score
+        # Sector alignment
         sector_alignment = self._calculate_sector_alignment(symbol)
 
         details = {
             'clv': clv,
             'lower_shadow_pct': 0,
             'has_hammer': False,
-            'prior_halt': False,
             'days_since_breakdown': days_since_breakdown,
             'depth_pct': depth_pct,
             'sector_alignment': sector_alignment
@@ -670,32 +564,29 @@ class SupportBounceStrategy(BaseStrategy):
 
         rb_score = 0.0
 
-        # v7.0: Hard gate - depth must be ≥2%
+        # Hard gate - depth must be >=2%
         if depth_pct < 0.02:
             details['depth_gate_failed'] = True
             details['reclaim_score'] = 'depth_too_shallow'
             return 0.0, details
 
-        # v5.0/v7.0: Continuous reclaim scoring based on days since breakdown
-        # v7.0: 4-5 day reclaims now EXPIRED (removed 0.5 pts scoring)
+        # Reclaim timing scoring
         if days_since_breakdown <= 1:
-            rb_score += 2.0  # 1 day = full reclaim score
+            rb_score += 2.0
             details['reclaim_score'] = 'full'
         elif days_since_breakdown <= 3:
-            # Linear interpolation: 2 days = 1.5, 3 days = 1.0
             rb_score += 2.0 - (days_since_breakdown - 1) * 0.5
             details['reclaim_score'] = 'medium'
         elif days_since_breakdown <= 5:
-            # v7.0: 4-5 days = EXPIRED (removed 0.5 pts scoring)
             details['reclaim_score'] = 'expired'
         else:
             details['reclaim_score'] = 'expired'
 
+        # Lower shadow bonus (0-1.0 pts)
         if total_range > 0:
             lower_shadow_pct = lower_shadow / total_range
             details['lower_shadow_pct'] = lower_shadow_pct
 
-            # Lower shadow bonus (0-1 pt)
             if lower_shadow_pct >= 0.6:
                 rb_score += 1.0
                 details['has_hammer'] = True
@@ -704,13 +595,22 @@ class SupportBounceStrategy(BaseStrategy):
             elif lower_shadow_pct >= 0.3:
                 rb_score += 0.4
 
-        # CLV position bonus (0-1 pt) - higher is better
+        # CLV position bonus (0-1.0 pts)
         if clv >= 0.7:
             rb_score += 1.0
         elif clv >= 0.5:
             rb_score += 0.7
         elif clv >= 0.4:
             rb_score += 0.4
+
+        # Depth quality (0-1.0 pts) -- moved from SQ distance scoring
+        if depth_pct < 0.01:
+            rb_score += 1.0   # Very close to support, ideal bounce zone
+        elif depth_pct < 0.02:
+            rb_score += 0.7   # At depth gate boundary
+        elif depth_pct < 0.05:
+            rb_score += 0.4   # Moderate distance
+        # depth >= 5%: 0 pts (too far from support for clean bounce)
 
         # Sector alignment bonus (0-1.0 pts)
         rb_score += sector_alignment
@@ -720,10 +620,7 @@ class SupportBounceStrategy(BaseStrategy):
     def _calculate_sector_alignment(self, symbol: str) -> float:
         """
         Calculate sector alignment score based on sector ETF vs EMA50.
-        Returns 0-1.0 points:
-        - Above EMA50 by >2%: +1.0
-        - Within EMA50±2%: +0.5
-        - Below EMA50 by >2%: 0
+        Returns 0-1.0 points.
         """
         if not self.stock_info or not symbol or symbol not in self.stock_info:
             return 0.0
@@ -748,61 +645,68 @@ class SupportBounceStrategy(BaseStrategy):
 
         etf_vs_ema_pct = (etf_price - etf_ema50) / etf_ema50
 
-        # Above EMA50 by >2%: +1.0
         if etf_vs_ema_pct > 0.02:
             return 1.0
-        # Within EMA50±2%: +0.5
         elif abs(etf_vs_ema_pct) <= 0.02:
             return 0.5
-        # Below EMA50 by >2%: 0
         else:
             return 0.0
 
     def _calculate_days_since_breakdown(self, df: pd.DataFrame) -> int:
-        """
-        Calculate days since false breakdown below support.
-        Returns number of days since price broke below support and rebounded.
-        """
-        if len(df) < 10:
-            return 999  # Not enough data
-
-        current_price = df['close'].iloc[-1]
-
-        # Calculate support levels
-        calc = SupportResistanceCalculator(df)
-        sr_levels = calc.calculate_all()
+        """Calculate days since false breakdown (uncached, for external callers)."""
+        sr_levels = self._get_sr_levels(df)
         supports = sr_levels.get('support', [])
 
         if not supports:
             return 999
 
-        # Find nearest support below current price
+        current_price = df['close'].iloc[-1]
         supports_below = [s for s in supports if s < current_price]
         if not supports_below:
             return 999
 
         nearest_support = max(supports_below)
+        return self._find_breakdown_day(df, nearest_support)
 
-        # Look back up to 10 days to find false breakdown
+    def _calculate_days_since_breakdown_cached(self, df: pd.DataFrame,
+                                                nearest_support: float,
+                                                sr_levels: Dict = None) -> int:
+        """Calculate days since false breakdown using cached data."""
+        if nearest_support is None:
+            if sr_levels is None:
+                sr_levels = self._get_sr_levels(df)
+            supports = sr_levels.get('support', [])
+            if not supports:
+                return 999
+            current_price = df['close'].iloc[-1]
+            supports_below = [s for s in supports if s < current_price]
+            if not supports_below:
+                return 999
+            nearest_support = max(supports_below)
+
+        return self._find_breakdown_day(df, nearest_support)
+
+    def _find_breakdown_day(self, df: pd.DataFrame, nearest_support: float) -> int:
+        """Find the most recent false breakdown day."""
+        if len(df) < 10:
+            return 999
+
+        current_price = df['close'].iloc[-1]
         lookback_days = min(10, len(df) - 1)
         breakdown_day = None
 
         for i in range(1, lookback_days + 1):
-            idx = -(i + 1)  # Go back i days from today
+            idx = -(i + 1)
             if idx < -len(df):
                 break
 
             low = df['low'].iloc[idx]
             close = df['close'].iloc[idx]
 
-            # Check if price broke below support (low < support)
-            # and then closed back above (close > support) - false breakdown
             if low < nearest_support and close > nearest_support:
                 breakdown_day = i
                 break
-            # Or price is now below support level but close reclaimed it
             elif low < nearest_support:
-                # Check if subsequent days reclaimed
                 for j in range(1, i):
                     check_idx = -(j + 1)
                     if check_idx >= -len(df):
@@ -823,23 +727,61 @@ class SupportBounceStrategy(BaseStrategy):
         score: float,
         tier: str
     ) -> Tuple[float, float, float]:
-        """Calculate entry, stop, and target prices."""
+        """
+        Calculate entry, stop, and target prices aligned with SFP pattern.
+        - Entry: reclaim candle close (if fresh) or limit at support
+        - Stop: breakdown wick low minus buffer
+        - Target: nearest resistance or 2R (whichever is closer)
+        """
         ind = TechnicalIndicators(df)
         ind.calculate_all()
 
         current_price = df['close'].iloc[-1]
         atr = ind.indicators.get('atr', {}).get('atr', current_price * 0.02)
 
-        calc = SupportResistanceCalculator(df)
-        sr_levels = calc.calculate_all()
+        sr_levels = self._get_sr_levels(df)
         supports = sr_levels.get('support', [])
+        resistances = sr_levels.get('resistance', [])
 
         supports_below = [s for s in supports if s < current_price]
         nearest_support = max(supports_below) if supports_below else current_price * 0.98
 
-        entry = round(current_price, 2)
-        stop = round(nearest_support - atr * 0.5, 2)  # Support minus 0.5 ATR buffer
+        # Determine days since breakdown for entry logic
+        days_since_breakdown = self._calculate_days_since_breakdown_cached(
+            df, nearest_support, sr_levels
+        )
+
+        # Entry: reclaim confirmation or limit at support
+        if days_since_breakdown <= 1:
+            # Fresh false breakdown, reclaim candle just formed
+            # Enter at the prior (breakdown) candle's close -- confirmation entry
+            prev_close = df['close'].iloc[-2]
+            entry = max(prev_close, nearest_support)
+        else:
+            # No fresh reclaim, set limit order at support
+            entry = nearest_support + atr * 0.1
+
+        # Stop loss: breakdown wick low minus buffer
+        breakdown_wick_low = None
+        if days_since_breakdown <= 10 and days_since_breakdown != 999:
+            bd_idx = -(days_since_breakdown + 1)
+            if bd_idx >= -len(df):
+                breakdown_wick_low = df['low'].iloc[bd_idx]
+
+        if breakdown_wick_low is not None:
+            stop = round(breakdown_wick_low - atr * 0.25, 2)
+        else:
+            stop = round(nearest_support - atr * 0.5, 2)
+
+        # Take profit: nearest resistance or 2R, whichever is closer
         target = round(current_price + atr * self.PARAMS['target_r_multiplier'], 2)
+        if resistances:
+            resistances_above = [r for r in resistances if r > current_price]
+            if resistances_above:
+                nearest_resistance = min(resistances_above)
+                target = min(nearest_resistance, target)
+
+        entry = round(entry, 2)
 
         return entry, stop, target
 
@@ -872,18 +814,17 @@ class SupportBounceStrategy(BaseStrategy):
         recency_weight = sq_details.get('recency_weight', 0)
         sector_alpha = sq_details.get('sector_alpha', 0)
         if sector_alpha > 0:
-            reasons.append(f"Support x{touches} (w:{recency_weight}, +{sector_alpha}α)")
+            reasons.append(f"Support x{touches} (w:{recency_weight}, +{sector_alpha}alpha)")
         else:
             reasons.append(f"Support x{touches} (w:{recency_weight})")
 
         # VD details
         vol_ratio = vd_details.get('volume_ratio', 0)
-        contraction_days = vd_details.get('contraction_days', 0)
-        reasons.append(f"Vol {vol_ratio:.1f}x, {contraction_days}d dry")
+        reasons.append(f"Vol {vol_ratio:.1f}x")
 
         # RB details
         reclaim_days = rb_details.get('days_since_breakdown')
-        if reclaim_days and reclaim_days <= 5:
+        if reclaim_days and reclaim_days <= 3:
             reasons.append(f"Reclaim d{reclaim_days} ({rb_details.get('reclaim_score', 'unknown')})")
         if rb_details.get('has_hammer'):
             reasons.append("Hammer candle + bounce")

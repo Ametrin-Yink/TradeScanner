@@ -84,8 +84,6 @@ SupportBounce:
   min_touches_30d: 2
   target_r_multiplier: 2.0
   support_tolerance_atr: 0.5
-  time_stop_days: 5
-  time_stop_clv_min: 0.4
   max_reclaim_days: 5
   volume_veto_threshold: 2.0
   clv_veto_threshold: 0.3
