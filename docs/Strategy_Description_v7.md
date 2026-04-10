@@ -1,6 +1,6 @@
 # Strategy Description v8.0
 
-**Version**: 8.0 | **Updated**: 2026-04-09 | **Strategies**: 8 (A-H, A has A1/A2 sub-modes)
+**Version**: 8.0 | **Updated**: 2026-04-09 | **Strategy D updated to v7.1** | **Strategies**: 8 (A-H, A has A1/A2 sub-modes)
 
 ---
 
@@ -410,46 +410,66 @@ Hard gate: depth must be ≥2% for RB to score at all.
 
 **Type**: Short | **Regime**: Neutral, bear; bull only if sector ETF<EMA50 | **Max Raw**: 15.0 | **Dimensions**: TQ(4) + RL(4) + DS(4) + VC(3)
 
-### Pre-filter
+### Pre-filter (v7.1)
 
-| Filter         | Condition     |
-| -------------- | ------------- |
-| Price vs EMA50 | ≤ EMA50×1.05  |
-| EMA8           | ≤ EMA21×1.02  |
-| Near 60d high  | Within 8%     |
-| Market cap     | ≥ $2B         |
-| Avg vol 20d    | ≥ 100K        |
-| Dollar volume  | > $30M avg20d |
+| Filter        | Condition                               |
+| ------------- | --------------------------------------- |
+| Market regime | Neutral/bear, or bull with sector<EMA50 |
+| Avg vol 20d   | ≥ 100K (liquidity gate)                 |
+| Prior trend   | ≥ 25% rally from 52w low                |
+| Resistance    | Exists above current price              |
+
+_Removed in v7.1: market_cap (dead code), dollar_volume (redundant), ADR (moved to VC scoring), EMA8/EMA21 (replaced by EMA50 slope in TQ), 8%-from-60d-high (redundant with screen pre-filter at 10%), Price vs EMA50 distance (moved to scoring)._
 
 ### TQ — Trend Quality (max 4.0)
 
-Code implements EMA alignment only (max 2.5 actual, dimension reserves 4.0):
+EMA alignment (0-2.0) + EMA50 slope (0-0.5) + sector weakness (0-1.0) + prior trend (0-0.5):
 
 | EMA Alignment              | Score |
 | -------------------------- | ----- |
-| Price<EMA50 AND EMA8<EMA21 | 2.5   |
-| Price<EMA50 only           | 1.5   |
-| Price>EMA50 but EMA8<EMA21 | 1.0   |
+| Price<EMA50 AND EMA8<EMA21 | 2.0   |
+| Price<EMA50 only           | 1.2   |
+| Price>EMA50 but EMA8<EMA21 | 0.8   |
 | Price>EMA50 AND EMA8>EMA21 | 0     |
+
+| EMA50 Slope (10d change) | Score |
+| ------------------------ | ----- |
+| Declining (<=0%)         | 0.5   |
+| Flat (0-2%)              | 0.3   |
+| Rising (>2%)             | 0     |
+
+| Sector ETF vs EMA50 | Score |
+| ------------------- | ----- |
+| Sector ETF < EMA50  | 1.0   |
+| No sector data      | 0.3   |
+| Sector ETF > EMA50  | 0     |
+
+| 6-month return | Score |
+| -------------- | ----- |
+| > 20%          | 0.5   |
+| 10-20%         | 0.3   |
+| <= 10%         | 0     |
 
 ### RL — Resistance Level (max 4.0)
 
+Resistance from phase0 pre-calculation (unified 5-method SupportResistanceCalculator). No local peak detection.
+
 | Touches (90d) | Score | Interval | Score   | Width     | Score |
 | ------------- | ----- | -------- | ------- | --------- | ----- |
-| ≥5            | 1.5   | ≥14d     | 1.5     | 1–2.5×ATR | 1.0   |
-| 4             | 1.2   | 7–14d    | 0.8–1.5 | 0.5–1×ATR | 0.5   |
-| 3             | 0.8   | 5–7d     | 0.3–0.8 | >3×ATR    | 0.3   |
-| 2             | 0.3   | <5d      | 0       |           |       |
+| ≥5            | 1.5   | ≥14d     | 1.5     | <0.5×ATR  | 1.0   |
+| 4             | 1.2   | 7–14d    | 0.8–1.5 | 1–2.5×ATR | 1.0   |
+| 3             | 0.8   | 5–7d     | 0.3–0.8 | 0.5–1×ATR | 0.5   |
+| 2             | 0.3   | <5d      | 0       | >3×ATR    | 0.3   |
 
 ### DS — Distribution Signs (max 4.0)
 
-| Heavy-vol up-days (vol>1.5×avg, closes lower) | Score |
-| --------------------------------------------- | ----- |
-| ≥3                                            | 2.0   |
-| 2                                             | 1.3   |
-| 1                                             | 0.6   |
+| Heavy-vol lower-close at resistance (vol>1.5xavg, close<open) | Score |
+| ------------------------------------------------------------- | ----- |
+| ≥3                                                            | 2.0   |
+| 2                                                             | 1.3   |
+| 1                                                             | 0.6   |
 
-Price action (cap 2.0): shooting star/bearish engulfing=+1.0, failed breakout=+1.0, multiple upper wicks=+0.5, faded gap-up=+0.5
+Price action (cap 2.0): shooting star (upper shadow>=2x body, CLV>0.7)=+1.0, long upper wick (>=3x body)=+1.0, failed breakout (high>resistance, close<resistance)=+1.0, faded gap-up (gap>0.5%, close in lower 30% range)=+0.5.
 
 ### VC — Volume Confirmation (max 3.0)
 

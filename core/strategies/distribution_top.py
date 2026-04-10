@@ -1,8 +1,15 @@
-"""Strategy D: DistributionTop - Short distribution tops (v5.0).
+"""Strategy D: DistributionTop - Short distribution tops (v7.1).
 
 Created from:
 - DoubleTopBottom short-side logic (distribution detection)
 - RangeShort sector-weak pattern
+
+v7.1 changes:
+- Removed dead market_cap filter, dollar_volume check, ADR gate
+- Unified resistance detection to phase0 only (removed _detect_resistance_level)
+- Replaced EMA8/EMA21 gate with EMA50 slope in TQ scoring
+- Added prior trend requirement (25% rally from 52w low)
+- Re-balanced TQ: EMA 2.0 + slope 0.5 + sector 1.0 + trend 0.5 = 4.0
 """
 from typing import Dict, List, Tuple, Any, Optional
 import logging
@@ -12,104 +19,74 @@ import numpy as np
 
 from ..indicators import TechnicalIndicators
 from .base_strategy import BaseStrategy, StrategyMatch, ScoringDimension, StrategyType
+from core.constants import SECTOR_ETFS
 
 logger = logging.getLogger(__name__)
 
 
 class DistributionTopStrategy(BaseStrategy):
     """
-    Strategy D: DistributionTop v5.0
+    Strategy D: DistributionTop v7.1
     Short-only distribution tops at multi-week highs.
     Combines DoubleTopBottom short logic + RangeShort sector-weak pattern.
     """
 
     NAME = "DistributionTop"
     STRATEGY_TYPE = StrategyType.D
-    DESCRIPTION = "DistributionTop v5.0 - short distribution patterns"
+    DESCRIPTION = "DistributionTop v7.1 - short distribution patterns"
     DIMENSIONS = ['TQ', 'RL', 'DS', 'VC']
     DIRECTION = 'short'
 
     PARAMS = {
-        'min_market_cap': 2_000_000_000,  # v7.0: $2B per docs (line 346)
-        'min_dollar_volume': 30_000_000,  # v7.0: $30M avg20d per docs (line 348)
-        'min_dollar_volume_short': 30_000_000,  # v7.0: liquidity guard for short strategies
-        'min_atr_pct': 0.015,
         'min_listing_days': 60,
-        'max_distance_from_60d_high': 0.08,
+        'prior_trend_rally_pct': 0.25,  # Must have rallied >= 25% from 52w low
         'max_distance_from_ema50': 1.05,
-        'ema_alignment_tolerance': 1.02,
+        'volume_veto_threshold': 1.5,
         'min_touches': 2,
         'min_test_interval_days': 5,
         'breakout_threshold_atr': 0.3,
-        'volume_veto_threshold': 1.5,
     }
 
     def filter(self, symbol: str, df: pd.DataFrame) -> bool:
-        """Filter for distribution top candidates per v7.0 spec."""
+        """Filter for distribution top candidates per v7.1 spec.
+
+        Hard gates only: listing days, regime, volume, prior trend, resistance.
+        """
         if len(df) < self.PARAMS['min_listing_days']:
             return False
 
-        # Get pre-calculated data from phase0 if available
         phase0_data = getattr(self, 'phase0_data', {})
         data = phase0_data.get(symbol, {})
-
-        # v7.0: Market cap ≥ $2B (doc line 346)
-        market_cap = data.get('market_cap', 0)
-        if market_cap < self.PARAMS['min_market_cap']:
-            logger.debug(f"DIST_REJ: {symbol} - Market cap ${market_cap:,.0f} < ${self.PARAMS['min_market_cap']:,.0f}")
-            return False
-
-        ind = TechnicalIndicators(df)
-        ind.calculate_all()
-
         current_price = df['close'].iloc[-1]
 
-        # v7.0: Avg vol 20d ≥ 100K (doc line 347)
+        # Market regime filter: in bull markets, require sector weakness
+        regime = getattr(self, '_current_regime', 'neutral')
+        if regime in ('bull_strong', 'bull_moderate'):
+            sector_weak = self._is_sector_weak(symbol, df)
+            if not sector_weak:
+                logger.debug(f"DIST_REJ: {symbol} - Bull regime ({regime}) and sector not weak")
+                return False
+
+        # Liquidity gate: avg vol 20d >= 100K
         avg_volume = df['volume'].tail(20).mean()
         if avg_volume < 100_000:
             logger.debug(f"DIST_REJ: {symbol} - Avg volume {avg_volume:,.0f} < 100K")
             return False
 
-        # v7.0: Check dollar volume > $30M avg20d (line 348)
-        avg_dollar_volume = current_price * avg_volume
-        if avg_dollar_volume < self.PARAMS['min_dollar_volume']:
-            logger.debug(f"DIST_REJ: {symbol} - Dollar volume ${avg_dollar_volume:,.0f} < ${self.PARAMS['min_dollar_volume']:,.0f}")
-            return False
+        # Prior trend: must have rallied >= 25% from 52w low
+        low_52w = df['low'].tail(252).min() if len(df) >= 252 else df['low'].min()
+        if low_52w > 0:
+            rally_pct = (current_price - low_52w) / low_52w
+            if rally_pct < self.PARAMS['prior_trend_rally_pct']:
+                logger.debug(f"DIST_REJ: {symbol} - Rally from 52w low {rally_pct:.1%} < 25%")
+                return False
 
-        # Check ADR
-        adr_pct = ind.indicators.get('adr', {}).get('adr_pct', 0)
-        if adr_pct < self.PARAMS['min_atr_pct']:
-            return False
-
-        # EMA checks
-        ema8 = ind.indicators.get('ema', {}).get('ema8', current_price)
-        ema21 = ind.indicators.get('ema', {}).get('ema21', current_price)
-        ema50 = ind.indicators.get('ema', {}).get('ema50', current_price)
-
-        # Price not strongly extended above EMA50
-        if current_price > ema50 * self.PARAMS['max_distance_from_ema50']:
-            return False
-
-        # EMA alignment - not in strong uptrend
-        if ema8 > ema21 * self.PARAMS['ema_alignment_tolerance']:
-            return False
-
-        # Near 60d high
-        high_60d = df['high'].tail(60).max()
-        if (high_60d - current_price) / high_60d > self.PARAMS['max_distance_from_60d_high']:
-            return False
-
-        # Check for resistance level with touches (use phase0_data)
-        phase0_data = getattr(self, 'phase0_data', {})
-        data = phase0_data.get(symbol, {})
+        # Resistance above price required
         resistances = data.get('resistances', [])
-
         if not resistances:
             logger.debug(f"DistribTop_REJ: {symbol} - No resistance data in phase0")
             return False
 
-        # Find resistance above current price
-        current_price = df['close'].iloc[-1]
         resistances_above = [r for r in resistances if r > current_price]
         if not resistances_above:
             logger.debug(f"DistribTop_REJ: {symbol} - No resistance above price")
@@ -129,30 +106,24 @@ class DistributionTopStrategy(BaseStrategy):
         phase0_data = getattr(self, 'phase0_data', {})
         prefiltered = []
 
-        # Phase 0.5: Pre-filter using cached data (price near 60d high)
         logger.info("DistributionTop: Phase 0.5 - Pre-filtering by 60d high proximity...")
 
         for symbol in symbols:
             try:
-                # Use phase0_data for fast pre-filter
                 if phase0_data and symbol in phase0_data:
-                    data = phase0_data[symbol]
-                    current_price = data.get('current_price', 0)
-                    high_60d = data.get('high_60d', 0)
-
-                    # Pre-filter: price within 10% of 60d high (distribution zone)
-                    if high_60d > 0 and current_price > 0:
-                        distance_from_high = (high_60d - current_price) / high_60d
+                    pdata = phase0_data[symbol]
+                    p = pdata.get('current_price', 0)
+                    h = pdata.get('high_60d', 0)
+                    if h > 0 and p > 0:
+                        distance_from_high = (h - p) / h
                         if distance_from_high > 0.10:
                             logger.debug(f"DistribTop_REJ: {symbol} - Price {distance_from_high:.1%} below 60d high")
                             continue
 
-                # Fetch full data for detailed analysis
                 df = self._get_data(symbol)
                 if df is None or len(df) < self.PARAMS['min_listing_days']:
                     continue
 
-                # Run full filter
                 if self.filter(symbol, df):
                     prefiltered.append(symbol)
 
@@ -162,78 +133,26 @@ class DistributionTopStrategy(BaseStrategy):
 
         logger.info(f"DistributionTop: {len(prefiltered)}/{len(symbols)} passed pre-filter")
 
-        # Cache market data for use in filter/calculate_dimensions
         self.market_data = {sym: self._get_data(sym) for sym in prefiltered}
 
-        # Call base class screen on pre-filtered symbols
         return super().screen(prefiltered, max_candidates=max_candidates)
 
-    def _detect_resistance_level(self, df: pd.DataFrame) -> Optional[Dict]:
-        """Detect resistance level with multiple touches using local maxima."""
-        highs = df['high'].tail(90).values
-        df_tail = df.tail(90).reset_index(drop=True)
-
-        # Find local maxima (peaks) manually
-        peaks = []
-        for i in range(5, len(highs) - 5):
-            # Check if current point is higher than neighbors within 5-day window
-            if highs[i] == max(highs[i-5:i+6]):
-                peaks.append(i)
-
-        if len(peaks) < 2:
-            return None
-
-        peak_prices = highs[peaks]
-
-        # Group peaks that are close in price (within 2.5 ATR)
-        atr = TechnicalIndicators(df).indicators.get('atr', {}).get('atr', df['close'].iloc[-1] * 0.02)
-
-        level_high = np.max(peak_prices)
-        level_low = np.min(peak_prices[peak_prices >= level_high - atr * 2.5])
-
-        # Get peak indices that are within the resistance level
-        level_peak_indices = [peaks[i] for i, p in enumerate(peak_prices) if level_high >= p >= level_low]
-        touches = len(level_peak_indices)
-
-        if touches < self.PARAMS['min_touches']:
-            return None
-
-        # Calculate days between touches for interval quality
-        if len(level_peak_indices) >= 2:
-            avg_days_between = np.mean(np.diff(level_peak_indices))
-        else:
-            avg_days_between = 0
-
-        return {
-            'high': float(level_high),
-            'low': float(level_low),
-            'touches': touches,
-            'width_atr': float((level_high - level_low) / atr) if atr > 0 else 0,
-            'avg_days_between': float(avg_days_between),
-            'peak_indices': level_peak_indices
-        }
-
     def calculate_dimensions(self, symbol: str, df: pd.DataFrame) -> List[ScoringDimension]:
-        """Calculate TQ, RL, DS, VC per v5.0 spec."""
+        """Calculate TQ, RL, DS, VC per v7.1 spec."""
         ind = TechnicalIndicators(df)
         ind.calculate_all()
 
-        # Get resistance data from phase0
         phase0_data = getattr(self, 'phase0_data', {})
         data = phase0_data.get(symbol, {})
         resistances = data.get('resistances', [])
         nearest_resistance_distance_pct = data.get('nearest_resistance_distance_pct')
 
-        # TQ: Trend Quality
-        tq_score = self._calculate_tq(ind, df)
+        # Build resistance level dict from phase0 data for RL/DS
+        level = self._build_level_from_phase0(df, resistances)
 
-        # RL: Resistance Level (use phase0_data)
-        rl_score = self._calculate_rl(df, resistances, nearest_resistance_distance_pct)
-
-        # DS: Distribution Signs (use phase0_data)
-        ds_score = self._calculate_ds(df, resistances)
-
-        # VC: Volume Confirmation
+        tq_score = self._calculate_tq(ind, df, symbol)
+        rl_score = self._calculate_rl(df, level, resistances, nearest_resistance_distance_pct)
+        ds_score = self._calculate_ds(df, level, resistances)
         vc_score = self._calculate_vc(df)
 
         return [
@@ -243,8 +162,75 @@ class DistributionTopStrategy(BaseStrategy):
             ScoringDimension(name='VC', score=vc_score, max_score=3.0, details={}),
         ]
 
-    def _calculate_tq(self, ind: TechnicalIndicators, df: pd.DataFrame) -> float:
-        """Trend Quality - EMA alignment and sector weakness."""
+    def _build_level_from_phase0(self, df: pd.DataFrame, resistances: List[float]) -> Optional[Dict]:
+        """Build a resistance level dict from phase0 resistances for use in RL/DS scoring."""
+        if not resistances:
+            return None
+
+        current_price = df['close'].iloc[-1]
+        resistances_above = [r for r in resistances if r > current_price]
+        if not resistances_above:
+            return None
+
+        level_high = min(resistances_above)
+
+        # Estimate touches and width from recent price action near this level
+        recent_highs = df['high'].tail(90)
+        touches = 0
+        touch_indices = []
+        tolerance = level_high * 0.02  # 2% tolerance
+
+        for i, h in enumerate(recent_highs.values):
+            if abs(h - level_high) / level_high < tolerance:
+                touches += 1
+                touch_indices.append(i)
+
+        if touches < self.PARAMS['min_touches']:
+            return None
+
+        atr_df = df['high'].tail(90) - df['low'].tail(90)
+        atr = atr_df.ewm(span=14, adjust=False).mean().iloc[-1] if len(atr_df) >= 14 else current_price * 0.02
+
+        # Width: range of prices at touches
+        touch_prices = recent_highs.values[touch_indices] if touch_indices else [level_high]
+        level_low = np.min(touch_prices)
+        width_atr = (level_high - level_low) / atr if atr > 0 else 0
+
+        avg_days = float(np.mean(np.diff(touch_indices))) if len(touch_indices) >= 2 else 0.0
+
+        return {
+            'high': float(level_high),
+            'low': float(level_low),
+            'touches': touches,
+            'width_atr': float(width_atr),
+            'avg_days_between': avg_days,
+            'touch_indices': touch_indices,
+        }
+
+    def _calculate_tq(self, ind: TechnicalIndicators, df: pd.DataFrame, symbol: str = None) -> float:
+        """Trend Quality - EMA alignment, EMA50 slope, sector weakness, prior trend.
+
+        EMA alignment (0-2.0):
+        - Price<EMA50 AND EMA8<EMA21 = 2.0
+        - Price<EMA50 only = 1.2
+        - Price>EMA50 but EMA8<EMA21 = 0.8
+        - Price>EMA50 AND EMA8>EMA21 = 0
+
+        EMA50 slope (0-0.5):
+        - Declining (slope <= 0) = 0.5
+        - Flat (0 < slope <= 2%) = 0.3
+        - Rising (slope > 2%) = 0.0
+
+        Sector weakness (0-1.0):
+        - Sector ETF < its EMA50 = 1.0
+        - Sector ETF data unavailable = 0.3
+        - Sector ETF > EMA50 = 0.0
+
+        Prior trend strength (0-0.5):
+        - ret_6m > 20% = 0.5
+        - 10% < ret_6m <= 20% = 0.3
+        - ret_6m <= 10% = 0.0
+        """
         current_price = df['close'].iloc[-1]
         ema8 = ind.indicators.get('ema', {}).get('ema8', current_price)
         ema21 = ind.indicators.get('ema', {}).get('ema21', current_price)
@@ -252,28 +238,102 @@ class DistributionTopStrategy(BaseStrategy):
 
         score = 0.0
 
-        # EMA alignment (0-2.5)
+        # EMA alignment (0-2.0)
         if current_price < ema50 and ema8 < ema21:
-            score += 2.5
+            score += 2.0
         elif current_price < ema50:
-            score += 1.5
+            score += 1.2
         elif current_price > ema50 and ema8 < ema21:
-            score += 1.0
+            score += 0.8
+
+        # EMA50 slope (0-0.5)
+        ema50_series = df['close'].ewm(span=50, adjust=False).mean()
+        if len(ema50_series) >= 11:
+            ema50_10d_ago = ema50_series.iloc[-11]
+            if ema50_10d_ago > 0:
+                slope = (ema50 - ema50_10d_ago) / ema50_10d_ago
+                if slope <= 0:
+                    score += 0.5
+                elif slope <= 0.02:
+                    score += 0.3
+
+        # Sector weakness (0-1.0)
+        sector_score = self._calculate_sector_weakness_v71(symbol, df)
+        score += sector_score
+
+        # Prior trend strength (0-0.5)
+        phase0_data = getattr(self, 'phase0_data', {})
+        data = phase0_data.get(symbol, {})
+        ret_6m = data.get('ret_6m', 0)
+        if ret_6m > 0.20:
+            score += 0.5
+        elif ret_6m > 0.10:
+            score += 0.3
 
         return min(4.0, score)
 
-    def _calculate_rl(self, df: pd.DataFrame, resistances: List[float] = None,
+    def _is_sector_weak(self, symbol: str, df: pd.DataFrame) -> bool:
+        """Check if the stock's sector ETF is below its EMA50.
+
+        Used in regime filter: in bull markets, require sector weakness.
+        """
+        phase0_data = getattr(self, 'phase0_data', {})
+        data = phase0_data.get(symbol, {})
+        sector = data.get('sector', '')
+
+        if not sector or sector not in SECTOR_ETFS:
+            return True
+
+        etf_symbol = SECTOR_ETFS[sector]
+
+        try:
+            etf_data = self.db.get_etf_cache(etf_symbol) if hasattr(self, 'db') else None
+            if etf_data is None or len(etf_data) < 50:
+                return True
+        except Exception:
+            return True
+
+        close = etf_data['close']
+        ema50 = close.ewm(span=50, adjust=False).mean().iloc[-1]
+        return close.iloc[-1] < ema50
+
+    def _calculate_sector_weakness_v71(self, symbol: str, df: pd.DataFrame) -> float:
+        """Sector weakness scoring for TQ dimension (0-1.0).
+
+        v7.1: Reduced from 1.5 to 1.0 to make room for EMA50 slope and prior trend.
+        """
+        if symbol is None:
+            return 0.3
+
+        phase0_data = getattr(self, 'phase0_data', {})
+        data = phase0_data.get(symbol, {})
+        sector = data.get('sector', '')
+
+        if not sector or sector not in SECTOR_ETFS:
+            return 0.3
+
+        etf_symbol = SECTOR_ETFS[sector]
+
+        try:
+            etf_data = self.db.get_etf_cache(etf_symbol) if hasattr(self, 'db') else None
+            if etf_data is None or len(etf_data) < 50:
+                return 0.3
+        except Exception:
+            return 0.3
+
+        close = etf_data['close']
+        ema50 = close.ewm(span=50, adjust=False).mean().iloc[-1]
+        current_etf_price = close.iloc[-1]
+
+        if current_etf_price < ema50:
+            return 1.0
+
+        return 0.0
+
+    def _calculate_rl(self, df: pd.DataFrame, level: Optional[Dict] = None,
+                      resistances: List[float] = None,
                       nearest_resistance_distance_pct: float = None) -> float:
         """Resistance Level quality - touches, interval, width."""
-        # First check if phase0_data gives us a valid resistance above price
-        if resistances:
-            current_price = df['close'].iloc[-1]
-            resistances_above = [r for r in resistances if r > current_price]
-            if not resistances_above:
-                return 0.0
-
-        # Fall back to detailed resistance detection for scoring
-        level = self._detect_resistance_level(df)
         if level is None:
             return 0.0
 
@@ -290,14 +350,14 @@ class DistributionTopStrategy(BaseStrategy):
         elif touches == 2:
             score += 0.3
 
-        # Interval quality (0-1.5) - days between touches
-        # v7.0: Align with docs thresholds: ≥14d=1.5, 7-14d=0.8-1.5, 5-7d=0.3-0.8, <5d=0
-        avg_days = level.get('avg_days_between', 0)
+        # Interval quality (0-1.5)
         score += self._calculate_rl_interval_score(level)
 
         # Width (0-1.0) - tighter is better
         width_atr = level['width_atr']
-        if 1.0 <= width_atr <= 2.5:
+        if 0.0 < width_atr < 0.5:
+            score += 1.0
+        elif 1.0 <= width_atr <= 2.5:
             score += 1.0
         elif 0.5 <= width_atr < 1.0:
             score += 0.5
@@ -307,57 +367,36 @@ class DistributionTopStrategy(BaseStrategy):
         return min(4.0, score)
 
     def _calculate_rl_interval_score(self, level: Dict) -> float:
-        """Calculate RL interval score per v7.0 docs.
+        """Calculate RL interval score.
 
-        Docs thresholds:
-        - ≥14d = 1.5
-        - 7-14d = 0.8-1.5 (interpolated)
-        - 5-7d = 0.3-0.8 (interpolated)
-        - <5d = 0
+        >=14d = 1.5, 7-14d = 0.8-1.5, 5-7d = 0.3-0.8, <5d = 0
         """
         avg_days = level.get('avg_days_between', 0)
 
         if avg_days >= 14:
             return 1.5
         elif 7 <= avg_days < 14:
-            # Linear interpolation from 0.8 (at 7d) to 1.5 (at 14d)
             return 0.8 + (avg_days - 7) / 7 * 0.7
         elif 5 <= avg_days < 7:
-            # Linear interpolation from 0.3 (at 5d) to 0.8 (at 7d)
             return 0.3 + (avg_days - 5) / 2 * 0.5
         else:
-            # <5d = 0
             return 0.0
 
-    def _calculate_ds(self, df: pd.DataFrame, resistances: List[float] = None) -> float:
-        """Distribution Signs - heavy volume on days that close lower at resistance + price action exhaustion.
-
-        v7.0 fix: Docs say "Heavy-vol up-days (vol>1.5×avg, closes lower)" which means
-        distribution = failed up-day attempt (heavy volume but close < open).
-        """
-        # Use phase0_data resistances if available, otherwise detect
-        if resistances:
-            current_price = df['close'].iloc[-1]
-            resistances_above = [r for r in resistances if r > current_price]
-            if not resistances_above:
-                return 0.0
-            level_high = min(resistances_above)
-            level = {'high': level_high}
-        else:
-            level = self._detect_resistance_level(df)
-            if level is None:
-                return 0.0
+    def _calculate_ds(self, df: pd.DataFrame, level: Optional[Dict] = None,
+                      resistances: List[float] = None) -> float:
+        """Distribution Signs - heavy volume on failed up-days at resistance + price action exhaustion."""
+        if level is None:
+            return 0.0
 
         recent = df.tail(30)
         avg_volume = df['volume'].tail(20).mean()
+        level_high = level['high']
 
-        # v7.0 fix: Count days with heavy volume that close LOWER than open (distribution)
-        # Docs: "Heavy-vol up-days (vol>1.5×avg, closes lower)" = failed up-day attempt
+        # Count heavy volume days that close lower (distribution)
         heavy_vol_lower_close_days = 0
         for idx, row in recent.iterrows():
-            # Distribution = heavy volume but close < open (failed up-day)
             if row['close'] < row['open'] and row['volume'] > avg_volume * 1.5:
-                if abs(row['high'] - level['high']) / level['high'] < 0.02:
+                if abs(row['high'] - level_high) / level_high < 0.02:
                     heavy_vol_lower_close_days += 1
 
         # Score heavy volume on lower-close days (0-2.0)
@@ -397,13 +436,11 @@ class DistributionTopStrategy(BaseStrategy):
             low_p = row['low']
             close_p = row['close']
 
-            # Skip if not near resistance level
             if abs(high_p - level_high) / level_high > 0.03:
                 continue
 
             body = abs(close_p - open_p)
             upper_shadow = high_p - max(open_p, close_p)
-            lower_shadow = min(open_p, close_p) - low_p
 
             # Shooting star: upper shadow >= 2x body, CLV > 0.7
             if body > 0 and upper_shadow >= 2 * body:
@@ -426,29 +463,29 @@ class DistributionTopStrategy(BaseStrategy):
             if idx > 0:
                 prev_close = recent_10d.iloc[idx - 1]['close']
                 gap_pct = (open_p - prev_close) / prev_close
-                if gap_pct > 0.005:  # Gap up > 0.5%
-                    # Close near low (within 30% of range from low)
+                if gap_pct > 0.005:
                     day_range = high_p - low_p
                     if day_range > 0:
                         close_position = (close_p - low_p) / day_range
-                        if close_position < 0.3:  # Close in lower 30% of range
+                        if close_position < 0.3:
                             signals.append(f"gap_fade_day{idx}")
                             continue
 
         return signals
 
     def _calculate_vc(self, df: pd.DataFrame) -> float:
-        """Volume Confirmation - breakdown surge and follow-through per v7.0 spec.
+        """Volume Confirmation - breakdown surge and follow-through per v7.1 spec.
 
-        Doc (lines 380-385):
-        | Breakdown vol / avg20d | Score | Follow-through |
-        |------------------------|-------|----------------|
-        | ≥2.5× | 2.0 | +1.0 if 2nd down-day within 2 sessions |
-        | 1.8–2.5× | 1.3–2.0 | |
-        | 1.2–1.8× | 0.5–1.3 | |
-        | <1.2× | 0 | |
+        Base score (0-2.0) from volume ratio:
+        - >=2.5x = 2.0
+        - 1.8-2.5x = 1.3-2.0 (interpolated)
+        - 1.2-1.8x = 0.5-1.3 (interpolated)
+        - <1.2x = 0
 
-        Returns max 3.0 (2.0 base + 1.0 follow-through).
+        Follow-through (0-1.0):
+        - 2 down-days in last 2 sessions = +1.0
+
+        Returns max 3.0.
         """
         recent_volume = df['volume'].iloc[-1]
         avg_volume = df['volume'].tail(20).mean()
@@ -468,23 +505,13 @@ class DistributionTopStrategy(BaseStrategy):
         else:
             base_score = 0.0
 
-        # Follow-through score (+1.0 if 2nd down-day within 2 sessions)
+        # Follow-through (+1.0 if 2 down-days within 2 sessions)
         follow_through_score = 0.0
         if len(df) >= 3:
-            # Check if today and prior day are both down-days
-            today_close = df['close'].iloc[-1]
-            today_open = df['open'].iloc[-1]
-
-            # Count down-days in last 2 sessions (excluding today for breakdown day)
             down_days_count = 0
-            for i in range(1, min(3, len(df))):
-                idx = -i
-                prev_close = df['close'].iloc[idx]
-                prev_open = df['open'].iloc[idx] if idx < -1 else df['open'].iloc[-2]
-                if prev_close < prev_open:
+            for i in range(1, 3):
+                if df['close'].iloc[-i] < df['open'].iloc[-i]:
                     down_days_count += 1
-
-            # +1.0 if 2nd down-day within 2 sessions of breakdown
             if down_days_count >= 2:
                 follow_through_score = 1.0
 
@@ -495,10 +522,10 @@ class DistributionTopStrategy(BaseStrategy):
                             score: float, tier: str) -> Tuple[Optional[float], Optional[float], Optional[float]]:
         """Calculate entry, stop, target for short position.
 
-        v7.0 Entry rules (docs line 389):
-        - Close < resistance - 0.3×ATR
-        - Vol ≥ 1.5×avg20d
-        - CLV ≤ 0.35 (close near low, bearish)
+        v7.1 Entry rules:
+        - Close < resistance - 0.3x ATR
+        - Vol >= 1.5x avg20d
+        - CLV <= 0.35
         - Not within 5d of earnings
         """
         current_price = df['close'].iloc[-1]
@@ -507,20 +534,6 @@ class DistributionTopStrategy(BaseStrategy):
         ind = TechnicalIndicators(df)
         atr = ind.indicators.get('atr', {}).get('atr', current_price * 0.02)
 
-        # v7.0: Calculate CLV (Close Location Value)
-        # CLV = ((Close - Low) - (High - Close)) / (High - Low)
-        # Range: -1 (close at low) to +1 (close at high)
-        # For short entry, we want CLV ≤ 0.35 (close not near high)
-        if high - low > 0:
-            clv = ((current_price - low) - (high - current_price)) / (high - low)
-        else:
-            clv = 0.5
-
-        # v7.0: Reject entry if CLV > 0.35 (too bullish for short)
-        if clv > 0.35:
-            return None, None, None
-
-        # Use phase0_data for resistance level
         phase0_data = getattr(self, 'phase0_data', {})
         data = phase0_data.get(symbol, {})
         resistances = data.get('resistances', [])
@@ -531,8 +544,31 @@ class DistributionTopStrategy(BaseStrategy):
         else:
             resistance_high = df['high'].tail(20).max()
 
+        # Entry condition 1: Close < resistance - 0.3x ATR
+        entry_threshold = resistance_high - 0.3 * atr
+        if current_price > entry_threshold:
+            return None, None, None
+
+        # Entry condition 2: Vol >= 1.5x avg20d
+        avg_volume = df['volume'].tail(20).mean()
+        if avg_volume > 0 and df['volume'].iloc[-1] < avg_volume * 1.5:
+            return None, None, None
+
+        # Entry condition 3: CLV <= 0.35
+        if high - low > 0:
+            clv = ((current_price - low) - (high - current_price)) / (high - low)
+        else:
+            clv = 0.5
+        if clv > 0.35:
+            return None, None, None
+
+        # Entry condition 4: Not within 5d of earnings
+        days_to_earnings = data.get('days_to_earnings')
+        if days_to_earnings is not None and 0 <= days_to_earnings <= 5:
+            return None, None, None
+
         entry = round(current_price, 2)
-        stop = round(min(resistance_high + 0.5 * atr, entry * 1.04), 2)
+        stop = round(min(resistance_high + 0.5 * atr, entry * 1.05), 2)
         risk = stop - entry
         target = round(entry - risk * 2.5, 2)
 
@@ -549,10 +585,8 @@ class DistributionTopStrategy(BaseStrategy):
 
         position_pct = self.calculate_position_pct(tier)
 
-        # Get resistance info from phase0_data
         phase0_data = getattr(self, 'phase0_data', {})
         data = phase0_data.get(symbol, {})
-        resistances = data.get('resistances', [])
         nearest_resistance_distance_pct = data.get('nearest_resistance_distance_pct')
 
         reasons = [
@@ -560,7 +594,6 @@ class DistributionTopStrategy(BaseStrategy):
             f"TQ:{tq.score:.2f} RL:{rl.score:.2f} DS:{ds.score:.2f} VC:{vc.score:.2f}"
         ]
 
-        # Resistance level details
         if nearest_resistance_distance_pct is not None:
             reasons.append(f"Resistance distance: {nearest_resistance_distance_pct:.1%}")
 
