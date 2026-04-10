@@ -18,17 +18,24 @@ class RelativeStrengthLongStrategy(BaseStrategy):
     Exempt from extreme regime scalar.
 
     Mismatches fixed (v7.0):
-    1. RD max score: 6.0 → 4.0
+    1. RD max score: 6.0 -> 4.0
     2. RD scoring: RS percentile + SPY divergence bonus (capped at 4.0)
     3. SH dimension: Replaced EMA alignment + 52w high with SPY down-day evaluation
     4. Regime exit: Added Stage 3 trailing stop when SPY crosses above EMA21
-    5. Stop loss: Changed to max(EMA50×0.99, entry×0.93)
+    5. Stop loss: Changed to max(EMA50*0.99, entry*0.93)
     6. Pre-filter: Removed accum_ratio hard gate (now only scored in VC)
+
+    v7.1 refactoring:
+    7. Removed market_cap/avg_volume hard gates (already filtered in Phase 0)
+    8. rs_consecutive_days_80 moved from hard gate to RD bonus
+    9. CQ dimension: replaced SPY-relative vol with absolute ATR trend
+    10. R:R target reduced from 3.0 to 2.0 (realistic for bear markets)
+    11. Added max_hold_days: 20 time-stop recommendation
     """
 
     NAME = "RelativeStrengthLong"
     STRATEGY_TYPE = StrategyType.H
-    DESCRIPTION = "RelativeStrengthLong v5.0 - RS leaders in bear markets"
+    DESCRIPTION = "RelativeStrengthLong v7.0 - RS leaders in bear/neutral markets"
     DIMENSIONS = ['RD', 'SH', 'CQ', 'VC']
     DIRECTION = 'long'
 
@@ -37,13 +44,10 @@ class RelativeStrengthLongStrategy(BaseStrategy):
 
     PARAMS = {
         'min_rs_percentile': 80,
-        'min_market_cap': 3e9,
-        'min_volume': 200000,
-        # Note: accum_ratio is scored in VC dimension, not a hard pre-filter
     }
 
     def filter(self, symbol: str, df: pd.DataFrame) -> bool:
-        """Hard gate: Only in bear/neutral regimes. RS >= 80th per v7.0."""
+        """Hard gate: Only in bear/neutral regimes. RS >= 80th percentile."""
         # Get regime from screener context
         regime = getattr(self, '_current_regime', 'neutral')
         if regime not in ['bear_moderate', 'bear_strong', 'extreme_vix', 'neutral']:
@@ -52,32 +56,14 @@ class RelativeStrengthLongStrategy(BaseStrategy):
 
         data = self.phase0_data.get(symbol, {}) if hasattr(self, 'phase0_data') else {}
 
-        # RS percentile gate (v7.0: ≥80th for 5+ consecutive days)
+        # RS percentile gate (v7.0: >=80th for 5+ consecutive days)
         rs_pct = data.get('rs_percentile', 0)
         if rs_pct < self.PARAMS['min_rs_percentile']:
             logger.debug(f"RS_REJ: {symbol} - RS percentile {rs_pct:.1f} < {self.PARAMS['min_rs_percentile']}")
             return False
 
-        # v7.0: Check consecutive days ≥80th percentile (≥5 days required)
-        rs_consecutive_days = data.get('rs_consecutive_days_80', 0)
-        if rs_consecutive_days < 5:
-            logger.debug(f"RS_REJ: {symbol} - RS ≥80th for only {rs_consecutive_days} days (need ≥5)")
-            return False
-
-        # Market cap (v7.0: ≥$3B)
-        market_cap = data.get('market_cap', 0)
-        if market_cap < self.PARAMS['min_market_cap']:
-            logger.debug(f"RS_REJ: {symbol} - market cap too low")
-            return False
-
-        # Volume (v7.0: ≥200K avg 20d)
-        avg_volume = df['volume'].tail(20).mean()
-        if avg_volume < self.PARAMS['min_volume']:
-            logger.debug(f"RS_REJ: {symbol} - volume too low")
-            return False
-
-        # v7.0: Price > EMA21 (checked in _check_basic_requirements)
-
+        # v7.0: RS consecutive days tracked for scoring bonus (not a hard gate)
+        # Market cap and volume already enforced by Phase 0 prefilter ($2B, 100K)
         logger.debug(f"RS_PASS: {symbol} - RS leader in {regime}")
         return True
 
@@ -108,15 +94,12 @@ class RelativeStrengthLongStrategy(BaseStrategy):
         """
         RS Divergence - per v7.0 spec (max 4.0, including bonus).
 
-        Documentation structure:
-        | RS_pct | Score | Stock 10d return − SPY 10d return | Bonus |
-        |--------|-------|-----------------------------------|-------|
-        | ≥95th | 4.0 | >+10% | +1.5 |
-        | 90-95th | 3.0-4.0 | +5-10% | +1.0-1.5 |
-        | 85-90th | 2.0-3.0 | +2-5% | +0.5-1.0 |
-        | 80-85th | 1.0-2.0 | <+2% | 0 |
+        Components:
+        1. RS percentile base score (0-3.0)
+        2. SPY 10d divergence bonus (0-1.0)
+        3. RS consecutive days >=80th bonus (0-0.5)
 
-        Note: RD capped at 4.0 after bonus.
+        Note: RD capped at 4.0 after all bonuses.
         """
         rs_pct = data.get('rs_percentile', 50)
         base_score = 0.0
@@ -133,7 +116,7 @@ class RelativeStrengthLongStrategy(BaseStrategy):
         else:
             return 0.0  # Below 80th percentile
 
-        # SPY divergence bonus (0-1.5) based on 10d return differential
+        # SPY divergence bonus (0-1.0) based on 10d return differential
         spy_df = getattr(self, '_spy_df', None)
         bonus = 0.0
         if spy_df is not None and len(df) >= 10 and len(spy_df) >= 10:
@@ -142,15 +125,25 @@ class RelativeStrengthLongStrategy(BaseStrategy):
             divergence = stock_ret_10d - spy_ret_10d
 
             if divergence > 0.10:
-                bonus = 1.5
+                bonus = 1.0
             elif divergence >= 0.05:
-                bonus = 1.0 + (divergence - 0.05) * 10  # 1.0-1.5 for +5-10%
+                bonus = 0.7 + (divergence - 0.05) * 6  # 0.7-1.0 for +5-10%
             elif divergence >= 0.02:
-                bonus = 0.5 + (divergence - 0.02) * 16.67  # 0.5-1.0 for +2-5%
+                bonus = 0.3 + (divergence - 0.02) * 13.33  # 0.3-0.7 for +2-5%
             # else: <+2% = 0 bonus
 
-        # Cap at 4.0 after bonus
-        return min(4.0, base_score + bonus)
+        # RS consecutive days >=80th bonus (0-0.5)
+        consecutive_days = data.get('rs_consecutive_days_80', 0)
+        streak_bonus = 0.0
+        if consecutive_days >= 10:
+            streak_bonus = 0.5
+        elif consecutive_days >= 5:
+            streak_bonus = 0.3
+        elif consecutive_days >= 3:
+            streak_bonus = 0.1
+
+        # Cap at 4.0 after all bonuses
+        return min(4.0, base_score + bonus + streak_bonus)
 
     def _calculate_sh(self, df: pd.DataFrame, data: Dict) -> float:
         """
@@ -232,11 +225,11 @@ class RelativeStrengthLongStrategy(BaseStrategy):
 
     def _calculate_cq(self, df: pd.DataFrame) -> float:
         """
-        Compression Quality - per v5.0 spec (3.0 max).
+        Compression Quality - per v7.1 spec (3.0 max).
 
         Components:
-        1. Volatility vs SPY (0-1.5 pts) - relative ATR
-        2. Base quality during SPY weakness (0-1.5 pts) - price range % in last 10d
+        1. ATR trend (0-1.5 pts) - is volatility declining over last 5 days?
+        2. Price range tightness (0-1.5 pts) - 10d range %
         """
         ind = TechnicalIndicators(df)
         ind.calculate_all()
@@ -244,31 +237,33 @@ class RelativeStrengthLongStrategy(BaseStrategy):
         current_price = df['close'].iloc[-1]
         score = 0.0
 
-        # 1. Volatility vs SPY (0-1.5 pts) per v5.0 spec
-        spy_df = getattr(self, '_spy_df', None)
-        if spy_df is not None and len(spy_df) >= 20:
-            stock_atr = ind.indicators.get('atr', {}).get('atr', 0)
-            stock_atr_pct = stock_atr / current_price if current_price > 0 else 0
+        # 1. ATR trend: is volatility declining? (0-1.5 pts)
+        # Compare current ATR(14) to ATR from 5 days ago
+        if len(df) >= 19:  # Need 14 + 5 days of data
+            atr_current = ind.indicators.get('atr', {}).get('atr', 0)
 
-            spy_ind = TechnicalIndicators(spy_df)
-            spy_atr = spy_ind.indicators.get('atr', {}).get('atr', 0)
-            spy_price = spy_df['close'].iloc[-1]
-            spy_atr_pct = spy_atr / spy_price if spy_price > 0 else 0
+            # Calculate ATR from 5 days ago
+            df_5d_ago = df.iloc[:-5]
+            if len(df_5d_ago) >= 14:
+                ind_5d = TechnicalIndicators(df_5d_ago)
+                ind_5d.calculate_all()
+                atr_5d_ago = ind_5d.indicators.get('atr', {}).get('atr', 0)
 
-            if spy_atr_pct > 0:
-                rel_vol = stock_atr_pct / spy_atr_pct
-                if rel_vol < 0.8:
-                    score += 1.5
-                elif rel_vol < 1.2:
-                    # Linear interpolation: 0.8-1.2 = 1.5-0.8
-                    score += 1.5 - (rel_vol - 0.8) / 0.4 * 0.7
-                elif rel_vol < 1.8:
-                    # Linear interpolation: 1.2-1.8 = 0.8-0.2
-                    score += 0.8 - (rel_vol - 1.2) / 0.6 * 0.6
-                # else: > 1.8 = 0 points
+                if atr_5d_ago > 0 and current_price > 0:
+                    # ATR change as percentage
+                    atr_change = (atr_current - atr_5d_ago) / atr_5d_ago
 
-        # 2. Base quality during SPY weakness (0-1.5 pts)
-        # Measure stock's price range % during last 10d
+                    if atr_change <= -0.15:
+                        score += 1.5  # Volatility declining significantly
+                    elif atr_change <= -0.05:
+                        score += 1.2  # Moderate decline
+                    elif atr_change <= 0.05:
+                        score += 0.8  # Stable volatility
+                    elif atr_change <= 0.15:
+                        score += 0.4  # Slightly increasing
+                    # else: > 15% increase = 0 points
+
+        # 2. Price range tightness in last 10d (0-1.5 pts)
         if len(df) >= 10:
             recent_10d = df.tail(10)
             high_10d = recent_10d['high'].max()
@@ -325,12 +320,13 @@ class RelativeStrengthLongStrategy(BaseStrategy):
                             dimensions: List[ScoringDimension],
                             score: float, tier: str) -> Tuple[float, float, float]:
         """
-        Calculate entry, stop, target for long position per v7.0 spec.
+        Calculate entry, stop, target for long position per v7.1 spec.
 
-        Entry: RS≥80th 5+ days, Price>EMA21 positive slope, Vol≥1.2×avg20d; prefer SPY down-day
-        Stop: max(EMA50×0.99, entry×0.93)
-        Target: entry + 3.0 × (entry − stop)
-        Regime exit: If SPY crosses above EMA21 (bear→neutral), move to Stage 3 trailing stop
+        Entry: RS>=80th, Price>EMA21 positive slope; prefer SPY down-day
+        Stop: max(EMA50*0.99, entry*0.93)
+        Target: entry + 2.0 * (entry - stop)  (realistic for bear markets)
+        Regime exit: If SPY crosses above EMA21 (bear->neutral), move to Stage 3 trailing stop
+        Time-stop: Recommend max 20 hold days for bear market conditions
         """
         current_price = df['close'].iloc[-1]
         ind = TechnicalIndicators(df)
@@ -338,35 +334,31 @@ class RelativeStrengthLongStrategy(BaseStrategy):
 
         # Get indicators
         ema50 = ind.indicators.get('ema', {}).get('ema50', current_price)
-        atr = ind.indicators.get('atr', {}).get('atr', current_price * 0.02)
 
         entry = round(current_price, 2)
 
-        # Stop loss per v7.0: max(EMA50×0.99, entry×0.93)
+        # Stop loss per v7.0: max(EMA50*0.99, entry*0.93)
         ema50_stop = ema50 * 0.99
         entry_stop = entry * 0.93
         stop = round(max(ema50_stop, entry_stop), 2)
 
-        # Check regime exit condition (SPY above EMA21 = bear→neutral signal)
+        # Check regime exit condition (SPY above EMA21 = bear->neutral signal)
         spy_df = getattr(self, '_spy_df', None)
-        regime_exit_active = False
         if spy_df is not None and len(spy_df) >= 21:
             spy_ema21 = spy_df['close'].ewm(span=21, adjust=False).mean().iloc[-1]
             spy_close = spy_df['close'].iloc[-1]
             if spy_close > spy_ema21:
                 # SPY above EMA21: regime transitioning from bear to neutral
                 # Move to Stage 3 trailing stop (tighter stop)
-                regime_exit_active = True
-                # Stage 3: Use tighter stop (EMA21 or recent low)
                 ema21 = ind.indicators.get('ema', {}).get('ema21', current_price)
                 low_10d = df['low'].tail(10).min()
                 stage3_stop = round(max(ema21 * 0.99, low_10d), 2)
                 # Use the tighter of original stop or Stage 3 stop
                 stop = min(stop, stage3_stop)
 
-        # Target per v7.0: 3.0× risk (not 2.5×)
+        # Target per v7.1: 2.0x risk (reduced from 3.0 for bear market realism)
         risk = entry - stop
-        target = round(entry + risk * 3.0, 2)
+        target = round(entry + risk * 2.0, 2)
 
         return entry, stop, target
 
@@ -384,11 +376,13 @@ class RelativeStrengthLongStrategy(BaseStrategy):
         data = self.phase0_data.get(symbol, {}) if hasattr(self, 'phase0_data') else {}
         rs_pct = data.get('rs_percentile', 0)
         accum_ratio = data.get('accum_ratio_15d', 1.0)
+        consecutive_days = data.get('rs_consecutive_days_80', 0)
 
         return [
             f"Score: {score:.2f}/15 (Tier {tier}-{position_pct*100:.0f}%)",
             f"RD:{rd.score:.2f} SH:{sh.score:.2f} CQ:{cq.score:.2f} VC:{vc.score:.2f}",
-            f"RS percentile: {rs_pct:.0f}th",
+            f"RS percentile: {rs_pct:.0f}th, consecutive days >=80th: {consecutive_days}",
             f"Accumulation ratio: {accum_ratio:.2f}",
-            f"Support hold score: {sh.score:.2f}"
+            f"Support hold score: {sh.score:.2f}",
+            f"Max hold days: 20 (bear market time-stop)"
         ]

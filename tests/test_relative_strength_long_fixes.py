@@ -319,10 +319,116 @@ class TestAccumRatioPreFilter:
         print(f"PASS: test_accum_ratio_scored_in_vc_dimension")
 
 
+class TestV71Refactoring:
+    """Tests for v7.1 refactoring changes."""
+
+    def test_filter_no_market_cap_check(self):
+        """Filter should not check market_cap (removed in v7.1)."""
+        strategy = RelativeStrengthLongStrategy()
+        df = create_mock_data(days=252, base_price=100.0)
+        strategy._current_regime = 'bear_moderate'
+
+        # RS percentile passes, no market_cap set (defaults to missing)
+        strategy.phase0_data = {
+            'TEST': {'rs_percentile': 90, 'accum_ratio_15d': 1.3}
+        }
+
+        result = strategy.filter('TEST', df)
+        assert result is True, "Should pass without market_cap"
+        print(f"PASS: test_filter_no_market_cap_check")
+
+    def test_filter_no_volume_check(self):
+        """Filter should not check avg_volume (removed in v7.1)."""
+        strategy = RelativeStrengthLongStrategy()
+        df = create_mock_data(days=252, base_price=100.0, seed=42)
+        strategy._current_regime = 'bear_moderate'
+
+        # Low volume data in mock but RS passes
+        strategy.phase0_data = {
+            'TEST': {'rs_percentile': 90, 'accum_ratio_15d': 1.3}
+        }
+
+        result = strategy.filter('TEST', df)
+        assert result is True, "Should pass without volume check"
+        print(f"PASS: test_filter_no_volume_check")
+
+    def test_filter_no_consecutive_days_gate(self):
+        """Filter should not require consecutive_days >= 5 (v7.1: moved to bonus)."""
+        strategy = RelativeStrengthLongStrategy()
+        df = create_mock_data(days=252, base_price=100.0)
+        strategy._current_regime = 'bear_moderate'
+
+        # RS passes but consecutive_days < 5
+        strategy.phase0_data = {
+            'TEST': {'rs_percentile': 90, 'rs_consecutive_days_80': 3, 'accum_ratio_15d': 1.3}
+        }
+
+        result = strategy.filter('TEST', df)
+        assert result is True, "Should pass with only 3 consecutive days (bonus, not gate)"
+        print(f"PASS: test_filter_no_consecutive_days_gate")
+
+    def test_rd_bonus_for_consecutive_days(self):
+        """RD should give bonus for consecutive days >=80th percentile."""
+        strategy = RelativeStrengthLongStrategy()
+        df = create_mock_data(days=252)
+        spy_df = create_spy_mock_data()
+        strategy._spy_df = spy_df
+
+        # Same RS percentile, different consecutive days
+        strategy.phase0_data = {
+            'TEST_LOW': {'rs_percentile': 90, 'rs_consecutive_days_80': 2, 'accum_ratio_15d': 1.3},
+            'TEST_HIGH': {'rs_percentile': 90, 'rs_consecutive_days_80': 10, 'accum_ratio_15d': 1.3},
+        }
+
+        rd_low = strategy._calculate_rd(strategy.phase0_data['TEST_LOW'], df)
+        rd_high = strategy._calculate_rd(strategy.phase0_data['TEST_HIGH'], df)
+
+        assert rd_high > rd_low, f"RD bonus: high consecutive ({rd_high:.2f}) should beat low ({rd_low:.2f})"
+        print(f"PASS: test_rd_bonus_for_consecutive_days (3days={rd_low:.2f}, 10days={rd_high:.2f})")
+
+    def test_target_is_2x_risk_not_3x(self):
+        """Target should be 2.0x risk, not 3.0x."""
+        strategy = RelativeStrengthLongStrategy()
+        df = create_mock_data(days=252, base_price=100.0)
+
+        strategy.phase0_data = {
+            'TEST': {'rs_percentile': 85, 'accum_ratio_15d': 1.3}
+        }
+
+        dimensions = strategy.calculate_dimensions('TEST', df)
+        score, tier = strategy.calculate_score(dimensions, df, 'TEST')
+        entry, stop, target = strategy.calculate_entry_exit('TEST', df, dimensions, score, tier)
+
+        risk = entry - stop
+        expected_target = round(entry + risk * 2.0, 2)
+
+        assert target == expected_target, f"Target {target} should be entry + 2*risk = {expected_target}"
+        print(f"PASS: test_target_is_2x_risk_not_3x (entry={entry}, stop={stop}, target={target}, risk={risk:.2f})")
+
+    def test_match_reasons_include_time_stop(self):
+        """Match reasons should include max_hold_days recommendation."""
+        strategy = RelativeStrengthLongStrategy()
+        df = create_mock_data(days=252)
+
+        strategy.phase0_data = {
+            'TEST': {'rs_percentile': 85, 'rs_consecutive_days_80': 7, 'accum_ratio_15d': 1.3}
+        }
+
+        dimensions = strategy.calculate_dimensions('TEST', df)
+        score, tier = strategy.calculate_score(dimensions, df, 'TEST')
+        reasons = strategy.build_match_reasons('TEST', df, dimensions, score, tier)
+
+        reason_text = ' '.join(reasons)
+        assert '20' in reason_text, f"Match reasons should mention 20-day time-stop: {reasons}"
+        assert 'consecutive' in reason_text.lower(), f"Match reasons should show consecutive days: {reasons}"
+        print(f"PASS: test_match_reasons_include_time_stop")
+        print(f"  Reasons: {reasons}")
+
+
 def run_all_tests():
-    """Run all tests for Strategy H mismatches."""
+    """Run all tests for Strategy H."""
     print("=" * 70)
-    print("Testing Strategy H (RelativeStrengthLong) Mismatch Fixes")
+    print("Testing Strategy H (RelativeStrengthLong)")
     print("=" * 70)
 
     print("\n--- Test 1: RD Max Score (should be 4.0, not 6.0) ---")
@@ -371,8 +477,20 @@ def run_all_tests():
     except AssertionError as e:
         print(f"FAIL: {e}")
 
+    print("\n--- Test 7: v7.1 Refactoring (redundant filters, bonuses, R:R) ---")
+    test7 = TestV71Refactoring()
+    try:
+        test7.test_filter_no_market_cap_check()
+        test7.test_filter_no_volume_check()
+        test7.test_filter_no_consecutive_days_gate()
+        test7.test_rd_bonus_for_consecutive_days()
+        test7.test_target_is_2x_risk_not_3x()
+        test7.test_match_reasons_include_time_stop()
+    except AssertionError as e:
+        print(f"FAIL: {e}")
+
     print("\n" + "=" * 70)
-    print("All Strategy H mismatch tests completed!")
+    print("All Strategy H tests completed!")
     print("=" * 70)
 
 

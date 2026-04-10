@@ -134,16 +134,12 @@ CapitulationRebound:
 
 # --- Strategy G: EarningsGap ---
 EarningsGap:
-  min_market_cap: 2_000_000_000
   min_gap_pct: 0.05
-  max_days_post_earnings: 5
-  min_dollar_volume_gap_day: 100_000_000
-  min_rs_percentile: 50
   max_consolidation_days: 10
-  min_price: 10.0
+  min_gap_volume_ratio: 2.0
+  min_rs_percentile_long: 50
+  min_rs_percentile_short: 50
 
 # --- Strategy H: RelativeStrengthLong ---
 RelativeStrengthLong:
   min_rs_percentile: 80
-  min_market_cap: 3_000_000_000
-  min_volume: 200_000

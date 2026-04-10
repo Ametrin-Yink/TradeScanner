@@ -743,26 +743,45 @@ Sector alignment bonus: +1.0 if sector ETF confirms gap direction
 **Type**: Long | **Regime**: Bear, neutral | **Max Raw**: 13.0 | **Dimensions**: RD(4) + SH(4) + CQ(3) + VC(2)
 **EXTREME_EXEMPT**: True
 
+v7.1 changes: Removed market_cap/volume hard gates (Phase 0 already filters). rs_consecutive_days_80 moved from hard gate to RD bonus. CQ replaced SPY-relative vol with absolute ATR trend. R:R reduced to 2.0x (realistic for bear markets). Added max_hold_days: 20.
+
 ### Pre-filter
 
-| Filter      | Condition                      |
-| ----------- | ------------------------------ |
-| RS_pct      | ≥ 80th for ≥5 consecutive days |
-| Price       | > EMA21                        |
-| Market cap  | ≥ $3B                          |
-| Avg vol 20d | ≥ 200K                         |
+| Filter | Condition                                           |
+| ------ | --------------------------------------------------- |
+| Regime | bear_moderate, bear_strong, extreme_vix, or neutral |
+| RS_pct | >= 80th (hard gate)                                 |
 
-### RD — RS Divergence (max 4.0, incl. SPY divergence bonus)
+_Note: Market cap, volume, and RS consecutive days are no longer hard gates. Phase 0 prefilter already enforces market cap >= $2B and volume >= 100K. RS consecutive days is scored as a bonus in RD._
 
-| RS_pct  | Score   | Stock 10d return − SPY 10d return | Bonus    |
-| ------- | ------- | --------------------------------- | -------- |
-| ≥95th   | 4.0     | >+10%                             | +1.5     |
-| 90–95th | 3.0–4.0 | +5–10%                            | +1.0–1.5 |
-| 85–90th | 2.0–3.0 | +2–5%                             | +0.5–1.0 |
-| 80–85th | 1.0–2.0 | <+2%                              | 0        |
-| <80th   | 0       |                                   |          |
+### RD -- RS Divergence (max 4.0, incl. bonuses)
 
-_(RD capped at 4.0 after bonus)_
+| RS_pct  | Base Score |
+| ------- | ---------- |
+| >= 95th | 3.0        |
+| 90-95th | 2.0-3.0    |
+| 85-90th | 1.0-2.0    |
+| 80-85th | 0.0-1.0    |
+| < 80th  | 0          |
+
+**SPY divergence bonus (0-1.0)**: Stock 10d return - SPY 10d return
+
+| Divergence | Bonus   |
+| ---------- | ------- |
+| > +10%     | 1.0     |
+| +5-10%     | 0.7-1.0 |
+| +2-5%      | 0.3-0.7 |
+| < +2%      | 0       |
+
+**RS consecutive days >= 80th bonus (0-0.5)**:
+
+| Consecutive days | Bonus |
+| ---------------- | ----- |
+| >= 10            | 0.5   |
+| >= 5             | 0.3   |
+| >= 3             | 0.1   |
+
+_(RD capped at 4.0 after all bonuses)_
 
 ### SH -- Support Holding (max 4.0)
 
@@ -776,30 +795,34 @@ Evaluated during SPY down-days in last 10d. Code gives proportional credit:
 
 Max possible: 2.5 (EMA8 + EMA21 full hold) + 1.0 baseline = 3.5, but capped by dimension max.
 
-### CQ — Consolidation Quality (max 3.0)
+### CQ -- Consolidation Quality (max 3.0)
 
-| Relative volatility (stock ATR / SPY ATR) | Score   | 10d range | Score   |
-| ----------------------------------------- | ------- | --------- | ------- |
-| <0.8                                      | 1.5     | <5%       | 1.5     |
-| 0.8–1.2                                   | 0.8–1.5 | 5–8%      | 1.0–1.5 |
-| 1.2–1.8                                   | 0.2–0.8 | 8–12%     | 0.5–1.0 |
-| >1.8                                      | 0       | >12%      | 0       |
+| ATR trend (5d change) | Score | 10d range | Score   |
+| --------------------- | ----- | --------- | ------- |
+| Declining >= 15%      | 1.5   | < 5%      | 1.5     |
+| Declining 5-15%       | 1.2   | 5-8%      | 1.0-1.5 |
+| Stable (+/- 5%)       | 0.8   | 8-12%     | 0.5-1.0 |
+| Rising 5-15%          | 0.4   | > 12%     | 0       |
+| Rising > 15%          | 0     |           |         |
 
-### VC — Volume Confirmation (max 2.0)
+ATR trend = `(ATR_now - ATR_5d_ago) / ATR_5d_ago`. Measures whether the stock's own volatility is contracting, independent of SPY.
+
+### VC -- Volume Confirmation (max 2.0)
 
 `accum_ratio = sum(vol, up-days, 15d) / sum(vol, down-days, 15d)`
 
 | accum_ratio | Score   |
 | ----------- | ------- |
-| >2.0        | 2.0     |
-| 1.5–2.0     | 1.5–2.0 |
-| 1.2–1.5     | 0.8–1.5 |
-| 1.0–1.2     | 0.3–0.8 |
-| <1.0        | 0       |
+| > 2.0       | 2.0     |
+| 1.5-2.0     | 1.5-2.0 |
+| 1.2-1.5     | 0.8-1.5 |
+| 1.0-1.2     | 0.3-0.8 |
+| < 1.0       | 0       |
 
 ### Entry / Exit
 
-**Entry**: RS≥80th 5+ days, Price>EMA21 positive slope, Vol≥1.2×avg20d; prefer SPY down-day
-**Stop**: `max(EMA50×0.99, entry×0.93)`
-**Target**: `entry + 3.0 × (entry − stop)`
-**Regime exit**: If SPY crosses above EMA21 (bear→neutral), move to Stage 3 trailing stop
+**Entry**: RS>=80th, Price>EMA21 positive slope; prefer SPY down-day
+**Stop**: `max(EMA50 * 0.99, entry * 0.93)`
+**Target**: `entry + 2.0 * (entry - stop)`
+**Regime exit**: If SPY crosses above EMA21 (bear->neutral), move to Stage 3 trailing stop (tighter: `max(EMA21 * 0.99, low_10d)`)
+**Time-stop**: Recommend max 20 hold days for bear market conditions
