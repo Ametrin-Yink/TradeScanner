@@ -383,6 +383,8 @@ class PreMarketPrep:
                     calendar = ticker.calendar
 
                     earnings_date = None
+                    surprise_pct = None
+
                     if calendar and 'Earnings Date' in calendar:
                         earnings_dates = calendar['Earnings Date']
                         if earnings_dates and isinstance(earnings_dates, list):
@@ -402,6 +404,28 @@ class PreMarketPrep:
                                             break
                                     except:
                                         continue
+
+                    # Extract earnings surprise from most recent quarter
+                    try:
+                        earnings_df = ticker.earnings
+                        if earnings_df is not None and not earnings_df.empty and len(earnings_df) > 0:
+                            last_row = earnings_df.iloc[-1]
+                            # yfinance earnings: columns vary, try common patterns
+                            for eps_estimate_col in ['EPS Estimate', 'EPSEstimate', 'eps_estimate']:
+                                if eps_estimate_col in earnings_df.columns:
+                                    estimate = last_row.get(eps_estimate_col)
+                                    actual = last_row.get('Reported EPS', last_row.get('Actual EPS', None))
+                                    if estimate and actual and abs(estimate) > 0:
+                                        surprise_pct = (actual - estimate) / abs(estimate)
+                                        break
+                    except:
+                        pass
+
+                    if surprise_pct is not None:
+                        try:
+                            self.db.update_stock_earnings_surprise(symbol, round(surprise_pct, 4))
+                        except:
+                            pass
 
                     # Explicit cleanup
                     if 'calendar' in locals():
@@ -689,6 +713,10 @@ class PreMarketPrep:
                 guidance_change = earnings_data.get('guidance_change', False)
                 one_time_event = earnings_data.get('one_time_event', False)
 
+            # Fetch earnings surprise percentage
+            tier1_earnings = self.db.get_tier1_cache(symbol)
+            earnings_surprise_pct = tier1_earnings.get('earnings_surprise_pct') if tier1_earnings else None
+
             # G-eligibility by gap size
             days_post_earnings = -days_to_earnings if days_to_earnings and days_to_earnings < 0 else None
             g_max_days = None
@@ -807,6 +835,7 @@ class PreMarketPrep:
                 'earnings_beat': earnings_beat,
                 'guidance_change': guidance_change,
                 'one_time_event': one_time_event,
+                'earnings_surprise_pct': earnings_surprise_pct,
                 'gap_1d_pct': gap_1d_pct,
                 'gap_direction': gap_direction,
                 'gap_volume_ratio': gap_volume_ratio,

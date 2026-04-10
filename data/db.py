@@ -99,6 +99,8 @@ class Database:
             # v7.1: Sector info (multiple strategies)
             'sector': 'TEXT',
             'sector_etf_symbol': 'TEXT',
+            # v7.1: Earnings surprise for Strategy G
+            'earnings_surprise_pct': 'REAL',
         }
 
         for column, dtype in new_columns.items():
@@ -616,6 +618,19 @@ class Database:
                 (earnings_date, today, symbol)
             )
 
+    def update_stock_earnings_surprise(self, symbol: str, surprise_pct: Optional[float]):
+        """Store earnings surprise percentage in tier1_cache.
+
+        Args:
+            symbol: Stock symbol
+            surprise_pct: (actual_eps - estimate_eps) / abs(estimate_eps), or None
+        """
+        with self.get_connection() as conn:
+            conn.execute(
+                "UPDATE tier1_cache SET earnings_surprise_pct = ? WHERE symbol = ?",
+                (surprise_pct, symbol)
+            )
+
     def get_stock_earnings_data(self, symbol: str) -> Optional[Dict[str, Any]]:
         """Get earnings surprise data for a stock from tier1_cache.
 
@@ -951,7 +966,8 @@ CREATE TABLE IF NOT EXISTS tier1_cache (
     g_eligible INTEGER,
     vcp_detected BOOLEAN,
     vcp_tightness REAL,
-    vcp_volume_ratio REAL
+    vcp_volume_ratio REAL,
+    earnings_surprise_pct REAL
 );
 
 -- Tier 3 cache (market data)

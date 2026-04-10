@@ -161,7 +161,8 @@ class StrategyScreener:
                         'ema21': cache_entry.get('ema21', 0),
                         'ema50': cache_entry.get('ema50', 0),
                         'ema200': cache_entry.get('ema200', 0),
-                        'high_50d': cache_entry.get('high_60d', 0),
+                        'high_60d': cache_entry.get('high_60d', 0),
+                        'low_60d': cache_entry.get('low_60d', 0),
                         'volume_sma20': cache_entry.get('volume_sma', 0),
                         'data_days': cache_entry.get('data_days', len(df)),
                         # v7.0 Strategy G earnings data
@@ -179,6 +180,23 @@ class StrategyScreener:
                         'g_eligible': cache_entry.get('g_eligible', False),
                         # v7.1: Sector alignment
                         'sector_aligned': cache_entry.get('sector_aligned', False),
+                        # v7.1: All missing keys from Tier 1 cache
+                        'rsi_14': cache_entry.get('rsi_14', 50),
+                        'rs_consecutive_days_80': cache_entry.get('rs_consecutive_days_80', 0),
+                        'accum_ratio_15d': cache_entry.get('accum_ratio_15d', 1.0),
+                        'consecutive_down_days': cache_entry.get('consecutive_down_days', 0),
+                        'resistances': cache_entry.get('resistances', []),
+                        'supports': cache_entry.get('supports', []),
+                        'nearest_resistance_distance_pct': cache_entry.get('nearest_resistance_distance_pct', 999.0),
+                        'nearest_support_distance_pct': cache_entry.get('nearest_support_distance_pct', 999.0),
+                        'ema21_slope_norm': cache_entry.get('ema21_slope_norm', 0),
+                        'pullback_from_high_pct': cache_entry.get('pullback_from_high_pct', 0),
+                        'distance_to_ema8_pct': cache_entry.get('distance_to_ema8_pct', 0),
+                        'sector': cache_entry.get('sector', ''),
+                        'vcp_detected': cache_entry.get('vcp_detected', False),
+                        'vcp_tightness': cache_entry.get('vcp_tightness', 0.12),
+                        'vcp_volume_ratio': cache_entry.get('vcp_volume_ratio', 1.0),
+                        'earnings_surprise_pct': cache_entry.get('earnings_surprise_pct'),
                     }
 
                     # Delete temporary objects immediately
@@ -268,7 +286,8 @@ class StrategyScreener:
                     'ema21': ind.indicators.get('ema', {}).get('ema21', 0),
                     'ema50': ind.indicators.get('ema', {}).get('ema50', 0),
                     'ema200': ind.indicators.get('ema', {}).get('ema200', 0),
-                    'high_50d': float(df['high'].tail(50).max()),
+                    'high_60d': float(df['high'].tail(60).max()),
+                    'low_60d': float(df['low'].tail(60).min()),
                     'volume_sma20': float(df['volume'].tail(20).mean()),
                     'data_days': len(df),
                     # v7.0 Strategy G earnings data (from Tier 1 cache)
@@ -286,6 +305,23 @@ class StrategyScreener:
                     'g_eligible': cache_entry.get('g_eligible', False),
                     # v7.1: Sector alignment
                     'sector_aligned': cache_entry.get('sector_aligned', False),
+                    # v7.1: All missing keys from Tier 1 cache
+                    'rsi_14': ind.indicators.get('rsi', {}).get('rsi', 50),
+                    'rs_consecutive_days_80': cache_entry.get('rs_consecutive_days_80', 0),
+                    'accum_ratio_15d': cache_entry.get('accum_ratio_15d', 1.0),
+                    'consecutive_down_days': self._calc_consecutive_down_days(df),
+                    'resistances': cache_entry.get('resistances', []),
+                    'supports': cache_entry.get('supports', []),
+                    'nearest_resistance_distance_pct': cache_entry.get('nearest_resistance_distance_pct', 999.0),
+                    'nearest_support_distance_pct': cache_entry.get('nearest_support_distance_pct', 999.0),
+                    'ema21_slope_norm': self._calc_ema21_slope_norm(ind, df),
+                    'pullback_from_high_pct': self._calc_pullback_pct(df),
+                    'distance_to_ema8_pct': self._calc_distance_to_ema8(df, ind),
+                    'sector': cache_entry.get('sector', ''),
+                    'vcp_detected': cache_entry.get('vcp_detected', False),
+                    'vcp_tightness': cache_entry.get('vcp_tightness', 0.12),
+                    'vcp_volume_ratio': cache_entry.get('vcp_volume_ratio', 1.0),
+                    'earnings_surprise_pct': cache_entry.get('earnings_surprise_pct'),
                 }
 
                 # Delete temporary objects immediately to free memory
@@ -665,6 +701,35 @@ class StrategyScreener:
         except (KeyError, IndexError, AttributeError, ValueError) as e:
             logger.debug(f"Basic requirements check failed: {e}")
             return False
+
+    def _calc_consecutive_down_days(self, df: pd.DataFrame) -> int:
+        """Count consecutive down days at end of series (Strategy F)."""
+        count = 0
+        for i in range(1, min(10, len(df))):
+            if df['close'].iloc[-i] < df['close'].iloc[-i - 1]:
+                count += 1
+            else:
+                break
+        return count
+
+    def _calc_ema21_slope_norm(self, ind, df: pd.DataFrame) -> float:
+        """Calculate normalized EMA21 slope (Strategy B)."""
+        ema21 = ind.indicators.get('ema', {}).get('ema21', 0)
+        atr = ind.indicators.get('atr', {}).get('atr', 1)
+        ema21_5d_ago = df['close'].ewm(span=21).mean().iloc[-6] if len(df) >= 6 else ema21 * 0.99
+        return (ema21 - ema21_5d_ago) / atr if atr > 0 else 0
+
+    def _calc_pullback_pct(self, df: pd.DataFrame) -> float:
+        """Calculate pullback from 20d high (Strategy B)."""
+        current_price = df['close'].iloc[-1]
+        high_20d = df['high'].tail(20).max()
+        return (high_20d - current_price) / high_20d if high_20d > 0 else 0
+
+    def _calc_distance_to_ema8(self, df: pd.DataFrame, ind) -> float:
+        """Calculate distance to EMA8 (Strategy B)."""
+        current_price = df['close'].iloc[-1]
+        ema8 = ind.indicators.get('ema', {}).get('ema8', current_price)
+        return abs(current_price - ema8) / ema8 if ema8 > 0 else 0
 
     def screen(
         self,

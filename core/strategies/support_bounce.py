@@ -82,6 +82,9 @@ class SupportBounceStrategy(BaseStrategy):
         """
         logger.info("SupportBounce: Phase 0 - Pre-filtering by support existence...")
 
+        # Check for pre-calculated phase0_data (from Phase 0 pre-calculation)
+        phase0_data = getattr(self, 'phase0_data', {})
+
         prefiltered = []
 
         for symbol in symbols:
@@ -93,9 +96,14 @@ class SupportBounceStrategy(BaseStrategy):
 
                 current_price = df['close'].iloc[-1]
 
-                # S/R calculation, cached by symbol for downstream reuse
-                sr_levels = self._get_sr_levels(df, symbol)
-                supports = sr_levels.get('support', [])
+                # Try pre-calculated supports from phase0_data first
+                p0 = phase0_data.get(symbol, {}) if phase0_data else {}
+                supports = p0.get('supports', [])
+
+                if not supports:
+                    # Fall back to inline S/R calculation
+                    sr_levels = self._get_sr_levels(df, symbol)
+                    supports = sr_levels.get('support', [])
 
                 if not supports:
                     logger.debug(f"SupportBounce_REJ: {symbol} - No support levels found")
@@ -126,13 +134,15 @@ class SupportBounceStrategy(BaseStrategy):
         # Load sector ETF data for comparison
         self._load_sector_etf_data()
 
-        # Load stock info for sector alpha
-        try:
-            if self.fetcher:
-                self.stock_info = self.fetcher.fetch_batch_stock_info(prefiltered)
-        except Exception as e:
-            logger.warning(f"Could not load stock info: {e}")
-            self.stock_info = {}
+        # Load stock info for sector alpha (only for symbols without phase0_data sector)
+        symbols_needing_info = [s for s in prefiltered if not phase0_data.get(s, {}).get('sector')]
+        if symbols_needing_info:
+            try:
+                if self.fetcher:
+                    fetched = self.fetcher.fetch_batch_stock_info(symbols_needing_info)
+                    self.stock_info.update(fetched)
+            except Exception as e:
+                logger.warning(f"Could not load stock info: {e}")
 
         # Use base class screen on pre-filtered symbols
         return super().screen(prefiltered, max_candidates=max_candidates)
@@ -329,10 +339,17 @@ class SupportBounceStrategy(BaseStrategy):
 
     def _calculate_sector_alpha(self, symbol: str, current_price: float, atr: float) -> float:
         """Check if sector ETF is also near support (confluence bonus)."""
-        if not self.stock_info or symbol not in self.stock_info:
-            return 0.0
+        # Try phase0_data sector first
+        phase0_data = getattr(self, 'phase0_data', {})
+        p0 = phase0_data.get(symbol, {}) if phase0_data else {}
+        sector = p0.get('sector', '')
 
-        sector = self.stock_info.get(symbol, {}).get('sector', 'Unknown')
+        # Fall back to stock_info
+        if not sector and symbol in self.stock_info:
+            sector = self.stock_info.get(symbol, {}).get('sector', 'Unknown')
+
+        if not sector or sector == 'Unknown' or sector not in SECTOR_ETFS:
+            return 0.0
         if sector == 'Unknown' or sector not in SECTOR_ETFS:
             return 0.0
 
@@ -630,10 +647,17 @@ class SupportBounceStrategy(BaseStrategy):
         Calculate sector alignment score based on sector ETF vs EMA50.
         Returns 0-1.0 points.
         """
-        if not self.stock_info or not symbol or symbol not in self.stock_info:
-            return 0.0
+        # Try phase0_data sector first
+        phase0_data = getattr(self, 'phase0_data', {})
+        p0 = phase0_data.get(symbol, {}) if phase0_data else {}
+        sector = p0.get('sector', '')
 
-        sector = self.stock_info.get(symbol, {}).get('sector', 'Unknown')
+        # Fall back to stock_info
+        if not sector and symbol in self.stock_info:
+            sector = self.stock_info.get(symbol, {}).get('sector', 'Unknown')
+
+        if not sector or sector == 'Unknown' or sector not in SECTOR_ETFS:
+            return 0.0
         if sector == 'Unknown' or sector not in SECTOR_ETFS:
             return 0.0
 
