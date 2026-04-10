@@ -195,6 +195,10 @@ class CompleteScanner:
 
                 result = self._run_pipeline(ctx)
 
+            # Copy pipeline phase times to scanner tracking
+            for k, v in ctx.phase_times.items():
+                self._phase_times[k] = v
+
             if ctx.status == "completed":
                 total_duration = sum(ctx.phase_times.values())
                 self._update_workflow_status(
@@ -674,7 +678,7 @@ class CompleteScanner:
 
         # Convert local file path to web URL
         report_filename = report_path.split('/')[-1]
-        report_url = f"http://47.90.229.136:19801/reports/{report_filename}"
+        report_url = f"{settings.get('report', {}).get('base_url', 'http://47.90.229.136:19801')}/reports/{report_filename}"
 
         # Log AI info
         logger.info(f"AI Regime Confidence: {ai_confidence}%")

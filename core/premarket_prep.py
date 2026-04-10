@@ -848,8 +848,8 @@ class PreMarketPrep:
                 'vcp_tightness': vcp_tightness,
                 'vcp_volume_ratio': vcp_volume_ratio,
                 # v7.1: Support/Resistance levels (Strategies C, D)
-                'supports': supports[:5],  # Top 5 support levels
-                'resistances': resistances[:5],  # Top 5 resistance levels
+                'supports': [float(x) for x in supports[:5]],  # Top 5 support levels
+                'resistances': [float(x) for x in resistances[:5]],  # Top 5 resistance levels
                 'nearest_support_distance_pct': nearest_support_distance_pct,
                 'nearest_resistance_distance_pct': nearest_resistance_distance_pct,
                 # v7.1: Consecutive down-days (Strategy F)

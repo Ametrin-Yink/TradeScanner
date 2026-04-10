@@ -41,9 +41,13 @@ class Phase2ScreeningHandler(PhaseHandler):
             market_data=tier3_data
         )
 
-        logger.info(f"Found {len(candidates)} candidates")
+        # Track symbols that didn't produce any candidate
+        candidate_symbols = {c.symbol for c in candidates}
+        fail_symbols = [s for s in symbols if s not in candidate_symbols]
+
+        logger.info(f"Found {len(candidates)} candidates, {len(fail_symbols)} symbols without matches")
 
         return PhaseResult(success=True, data={
             'candidates': candidates,
-            'fail_symbols': [],
+            'fail_symbols': fail_symbols,
         })

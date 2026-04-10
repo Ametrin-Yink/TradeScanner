@@ -33,6 +33,7 @@ class AnalyzedOpportunity:
     position_size: str = "normal"  # small, normal, large
     time_frame: str = "short-term"  # short-term, swing, long-term
     alternative_scenario: str = ""
+    technical_snapshot: dict = field(default_factory=dict)
 
 
 class OpportunityAnalyzer:
@@ -95,7 +96,8 @@ class OpportunityAnalyzer:
             risk_factors=ai_analysis.get('risk_factors', []) if isinstance(ai_analysis.get('risk_factors'), list) else [],
             position_size=ai_analysis.get('position_size', 'normal') if isinstance(ai_analysis.get('position_size'), str) else 'normal',
             time_frame=ai_analysis.get('time_frame', 'short-term') if isinstance(ai_analysis.get('time_frame'), str) else 'short-term',
-            alternative_scenario=ai_analysis.get('alternative_scenario', '') if isinstance(ai_analysis.get('alternative_scenario'), str) else ''
+            alternative_scenario=ai_analysis.get('alternative_scenario', '') if isinstance(ai_analysis.get('alternative_scenario'), str) else '',
+            technical_snapshot=match.technical_snapshot if hasattr(match, 'technical_snapshot') else {}
         )
 
     def analyze_all(
@@ -376,12 +378,76 @@ Provide analysis in JSON format:
             return []
 
     def _ai_deep_analysis(self, candidate, news_results, regime):
-        """Call AI for detailed analysis."""
-        news_summary = "\n".join([f"- {r.get('title', '')}" for r in news_results[:3]])
+        """Call AI for detailed analysis with Tavily news context."""
+        news_summary = "\n".join([
+            f"- {r.get('title', '')}: {r.get('content', '')[:200]}"
+            for r in news_results[:5]
+        ])
 
-        return {
-            'technical_outlook': f"Entry: {candidate.entry_price}, Stop: {candidate.stop_loss}",
-            'news_sentiment': 'Positive' if 'beat' in news_summary.lower() else 'Neutral',
-            'key_catalysts': news_results[:2],
-            'risk_level': 'Medium'
-        }
+        if not self.dashscope_api_key:
+            return {
+                'technical_outlook': f"Entry: {candidate.entry_price}, Stop: {candidate.stop_loss}",
+                'news_sentiment': 'Neutral',
+                'key_catalysts': news_results[:2],
+                'risk_level': 'Medium'
+            }
+
+        try:
+            url = f"{self.dashscope_base}/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {self.dashscope_api_key}",
+                "Content-Type": "application/json"
+            }
+
+            prompt = f"""Deep analysis for {candidate.symbol} ({candidate.strategy}):
+
+Entry: {candidate.entry_price}, Stop: {candidate.stop_loss}, Target: {candidate.take_profit}
+Market Regime: {regime}
+AI Confidence: {candidate.confidence}%
+
+Technical Reasons:
+{chr(10).join(f"- {r}" for r in getattr(candidate, 'match_reasons', [])[:5])}
+
+Recent News:
+{news_summary or "No recent news available"}
+
+Return JSON:
+{{
+    "technical_outlook": "Detailed technical outlook",
+    "news_sentiment": "Positive|Neutral|Negative",
+    "key_catalysts": ["catalyst1", "catalyst2"],
+    "risk_level": "Low|Medium|High",
+    "detailed_reasoning": "Detailed reasoning for this trade"
+}}"""
+
+            payload = {
+                "model": self.model,
+                "messages": [
+                    {"role": "system", "content": "Expert technical analyst. Return valid JSON only."},
+                    {"role": "user", "content": prompt}
+                ],
+                "temperature": 0.3
+            }
+
+            data = self._call_ai_with_retry(url, headers, payload, max_retries=2)
+            if data:
+                content = data['choices'][0]['message']['content']
+                json_match = __import__('re').search(r'\{[^{}]*\}', content, __import__('re').DOTALL)
+                if json_match:
+                    return json.loads(json_match.group())
+
+            # Fallback
+            return {
+                'technical_outlook': f"Entry: {candidate.entry_price}, Stop: {candidate.stop_loss}",
+                'news_sentiment': 'Neutral',
+                'key_catalysts': news_results[:2],
+                'risk_level': 'Medium'
+            }
+        except Exception as e:
+            logger.error(f"AI deep analysis failed for {candidate.symbol}: {e}")
+            return {
+                'technical_outlook': f"Entry: {candidate.entry_price}, Stop: {candidate.stop_loss}",
+                'news_sentiment': 'Neutral',
+                'key_catalysts': news_results[:2],
+                'risk_level': 'Medium'
+            }

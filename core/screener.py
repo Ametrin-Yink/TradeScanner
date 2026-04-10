@@ -185,8 +185,8 @@ class StrategyScreener:
                         'rs_consecutive_days_80': cache_entry.get('rs_consecutive_days_80', 0),
                         'accum_ratio_15d': cache_entry.get('accum_ratio_15d', 1.0),
                         'consecutive_down_days': cache_entry.get('consecutive_down_days', 0),
-                        'resistances': cache_entry.get('resistances', []),
-                        'supports': cache_entry.get('supports', []),
+                        'resistances': [float(x) for x in cache_entry.get('resistances', [])],
+                        'supports': [float(x) for x in cache_entry.get('supports', [])],
                         'nearest_resistance_distance_pct': cache_entry.get('nearest_resistance_distance_pct', 999.0),
                         'nearest_support_distance_pct': cache_entry.get('nearest_support_distance_pct', 999.0),
                         'ema21_slope_norm': cache_entry.get('ema21_slope_norm', 0),
@@ -266,9 +266,8 @@ class StrategyScreener:
                 # Phase 0.4: 52-week metrics
                 metrics_52w = ind.calculate_52w_metrics()
 
-                # Fetch earnings data from Tier 1 cache (calculated in Phase 0)
-                tier1_cache = self._load_tier1_cache([symbol])
-                cache_entry = tier1_cache.get(symbol, {})
+                # Fetch earnings data from already-loaded Tier 1 cache
+                cache_entry = cached_tier1.get(symbol, {})
 
                 # Store pre-calculated data - ONLY scalars, NO DataFrames/objects
                 phase0_data[symbol] = {
@@ -792,7 +791,7 @@ class StrategyScreener:
             batch_size: Number of symbols to process per batch (default 100)
 
         Returns:
-            List of StrategyMatch (max 10 total, distributed per table)
+            List of StrategyMatch (max 30 total, distributed per table)
         """
         self.market_data = market_data or {}
 

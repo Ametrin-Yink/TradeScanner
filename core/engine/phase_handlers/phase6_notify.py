@@ -25,7 +25,8 @@ class Phase6NotifyHandler(PhaseHandler):
         )
 
         report_filename = ctx.report_path.split('/')[-1]
-        report_url = f"http://47.90.229.136:19801/reports/{report_filename}"
+        base_url = settings.get('report', {}).get('base_url', 'http://47.90.229.136:19801')
+        report_url = f"{base_url}/reports/{report_filename}"
 
         scan_date = datetime.now().strftime('%Y-%m-%d')
 
