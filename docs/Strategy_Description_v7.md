@@ -501,7 +501,7 @@ Price action (cap 2.0): shooting star (upper shadow>=2x body, CLV>0.7)=+1.0, lon
 | Market regime | Bull=full, Neutral=B-tier, Bear=skip, Extreme VIX=skip |
 | History       | ≥ 200 bars                                             |
 | ADR           | ≥ 3%                                                   |
-| RSI14         | < 40                                                   |
+| RSI14         | < 45                                                   |
 | Near 60d low  | Within 10%                                             |
 | Support level | Must exist below price                                 |
 
@@ -511,7 +511,7 @@ _Removed in v7.1: market_cap (Phase 0 prefilter), volume (Phase 0 prefilter)._
 
 | EMA Structure                  | Score |
 | ------------------------------ | ----- |
-| Price < EMA21 AND EMA8 > EMA21 | 3.5   |
+| Price > EMA21 AND EMA8 > EMA21 | 3.5   |
 | Price > EMA8 AND EMA8 < EMA21  | 2.0   |
 | Price > EMA50                  | 0.0   |
 | Downtrend intact (fallback)    | 0.5   |
