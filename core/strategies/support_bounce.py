@@ -52,11 +52,33 @@ class SupportBounceStrategy(BaseStrategy):
         self.stock_info = {}
         self._sr_cache: Dict[str, Dict] = {}
 
+    def _reset_sr_cache(self):
+        """Clear S/R cache between symbols."""
+        self._sr_cache.clear()
+
+    def _get_sr_levels(self, df: pd.DataFrame, symbol: str = '') -> Dict:
+        """Get cached S/R levels, compute once per symbol."""
+        if symbol and symbol in self._sr_cache:
+            return self._sr_cache[symbol]['levels']
+        calc = SupportResistanceCalculator(df)
+        levels = calc.calculate_all()
+        if symbol:
+            self._sr_cache[symbol] = {'levels': levels, 'calc': calc}
+        return levels
+
+    def _get_sr_calculator(self, df: pd.DataFrame, symbol: str = ''):
+        """Get cached S/R calculator instance."""
+        self._get_sr_levels(df, symbol)
+        if symbol and symbol in self._sr_cache:
+            return self._sr_cache[symbol]['calc']
+        return None
+
     def screen(self, symbols: List[str], max_candidates: int = 5) -> List[StrategyMatch]:
         """
         Screen all symbols with lightweight Phase 0 pre-filter.
         Pre-filter only checks: support exists, price within max distance.
         Full validation (touches, EMA50, ADR, volume) happens in filter().
+        S/R results are cached so filter() and calculate_dimensions() reuse them.
         """
         logger.info("SupportBounce: Phase 0 - Pre-filtering by support existence...")
 
@@ -71,9 +93,8 @@ class SupportBounceStrategy(BaseStrategy):
 
                 current_price = df['close'].iloc[-1]
 
-                # Single S/R calculation, cached
-                calc = SupportResistanceCalculator(df)
-                sr_levels = calc.calculate_all()
+                # S/R calculation, cached by symbol for downstream reuse
+                sr_levels = self._get_sr_levels(df, symbol)
                 supports = sr_levels.get('support', [])
 
                 if not supports:
@@ -126,19 +147,6 @@ class SupportBounceStrategy(BaseStrategy):
         except Exception as e:
             logger.warning(f"Could not load sector ETF data: {e}")
 
-    def _get_sr_levels(self, df: pd.DataFrame) -> Dict:
-        """Get cached S/R levels, compute once per DataFrame."""
-        if 'levels' not in self._sr_cache:
-            calc = SupportResistanceCalculator(df)
-            self._sr_cache['levels'] = calc.calculate_all()
-            self._sr_cache['calc'] = calc
-        return self._sr_cache['levels']
-
-    def _get_sr_calculator(self, df: pd.DataFrame):
-        """Get cached S/R calculator instance."""
-        self._get_sr_levels(df)
-        return self._sr_cache['calc']
-
     def filter(self, symbol: str, df: pd.DataFrame) -> bool:
         """Filter for SupportBounce candidates per v8.0 spec."""
         if len(df) < self.PARAMS['min_listing_days']:
@@ -160,7 +168,7 @@ class SupportBounceStrategy(BaseStrategy):
             return False
 
         # S/R from cache
-        sr_levels = self._get_sr_levels(df)
+        sr_levels = self._get_sr_levels(df, symbol)
         supports = sr_levels.get('support', [])
         if not supports:
             return False
@@ -199,7 +207,7 @@ class SupportBounceStrategy(BaseStrategy):
         atr = ind.indicators.get('atr', {}).get('atr', current_price * 0.02)
 
         # S/R from cache
-        sr_levels = self._get_sr_levels(df)
+        sr_levels = self._get_sr_levels(df, symbol)
         supports = sr_levels.get('support', [])
 
         supports_below = [s for s in supports if s < current_price]
