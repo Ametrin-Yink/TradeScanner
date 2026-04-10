@@ -172,10 +172,13 @@ class StrategyScreener:
                         'earnings_date': cache_entry.get('earnings_date'),
                         'gap_1d_pct': cache_entry.get('gap_1d_pct', 0),
                         'gap_direction': cache_entry.get('gap_direction', 'none'),
+                        'gap_volume_ratio': cache_entry.get('gap_volume_ratio', 1.0),
                         # v7.0 Strategy G eligibility
                         'g_max_days': cache_entry.get('g_max_days'),
                         'days_post_earnings': cache_entry.get('days_post_earnings'),
                         'g_eligible': cache_entry.get('g_eligible', False),
+                        # v7.1: Sector alignment
+                        'sector_aligned': cache_entry.get('sector_aligned', False),
                     }
 
                     # Delete temporary objects immediately
@@ -276,10 +279,13 @@ class StrategyScreener:
                     'earnings_date': cache_entry.get('earnings_date'),
                     'gap_1d_pct': cache_entry.get('gap_1d_pct', 0),
                     'gap_direction': cache_entry.get('gap_direction', 'none'),
+                    'gap_volume_ratio': cache_entry.get('gap_volume_ratio', 1.0),
                     # v7.0 Strategy G eligibility
                     'g_max_days': cache_entry.get('g_max_days'),
                     'days_post_earnings': cache_entry.get('days_post_earnings'),
                     'g_eligible': cache_entry.get('g_eligible', False),
+                    # v7.1: Sector alignment
+                    'sector_aligned': cache_entry.get('sector_aligned', False),
                 }
 
                 # Delete temporary objects immediately to free memory

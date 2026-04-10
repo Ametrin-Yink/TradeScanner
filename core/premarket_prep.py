@@ -664,6 +664,9 @@ class PreMarketPrep:
             gap_1d_pct = (df['open'].iloc[-1] / df['close'].iloc[-2] - 1) if len(df) >= 2 else 0
             gap_direction = 'up' if gap_1d_pct > 0.02 else ('down' if gap_1d_pct < -0.02 else 'none')
 
+            # Gap volume ratio (Strategy G): gap day volume vs 20-day average
+            gap_volume_ratio = (df['volume'].iloc[-1] / avg_volume_20d) if avg_volume_20d > 0 else 1.0
+
             # Earnings date from DB cache
             earnings_date = self.db.get_stock_earnings_date(symbol)
             days_to_earnings = None
@@ -759,6 +762,19 @@ class PreMarketPrep:
             sector = stock_info.get('sector', '') if stock_info else ''
             sector_etf_symbol = self._get_sector_etf_symbol(sector)
 
+            # Sector alignment (Strategy G): check if sector ETF trend confirms gap direction
+            sector_aligned = False
+            if sector_etf_symbol:
+                sector_etf_data = self.db.get_tier1_cache(sector_etf_symbol)
+                if sector_etf_data:
+                    sector_etf_price = sector_etf_data.get('current_price', 0)
+                    sector_etf_ema21 = sector_etf_data.get('ema21', 0)
+                    if sector_etf_price > 0 and sector_etf_ema21 > 0:
+                        if gap_direction == 'up' and sector_etf_price > sector_etf_ema21:
+                            sector_aligned = True
+                        elif gap_direction == 'down' and sector_etf_price < sector_etf_ema21:
+                            sector_aligned = True
+
             return {
                 'cache_date': datetime.now().date().isoformat(),
                 'current_price': current_price,
@@ -793,6 +809,7 @@ class PreMarketPrep:
                 'one_time_event': one_time_event,
                 'gap_1d_pct': gap_1d_pct,
                 'gap_direction': gap_direction,
+                'gap_volume_ratio': gap_volume_ratio,
                 # v7.0 Strategy G eligibility
                 'g_max_days': g_max_days,
                 'days_post_earnings': days_post_earnings,
@@ -819,6 +836,7 @@ class PreMarketPrep:
                 # v7.1: Sector info (multiple strategies)
                 'sector': sector,
                 'sector_etf_symbol': sector_etf_symbol,
+                'sector_aligned': sector_aligned,
             }
 
         except Exception as e:

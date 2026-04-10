@@ -668,73 +668,99 @@ Bonus: +1.0 if CLV>0.65 AND vol>1.5×avg20d (capitulation candle confirmation). 
 
 ### Pre-filter
 
-| Filter                  | Condition                   |
-| ----------------------- | --------------------------- |
-| Earnings gap            | ≥5% on earnings day         |
-| Days since earnings     | See eligibility table below |
-| Dollar volume (gap day) | > $100M                     |
-| Market cap              | ≥ $2B                       |
-| Price                   | > $10                       |
+| Filter                | Condition                 |
+| --------------------- | ------------------------- |
+| Post-earnings         | `days_to_earnings < 0`    |
+| Earnings gap          | >=5% open-to-prev-close   |
+| Gap-day volume        | >=2.0x avg20d (hard gate) |
+| RS percentile (long)  | >= 50th                   |
+| RS percentile (short) | <= 50th                   |
 
-**Eligibility by gap size:**
+_Redundant filters removed: market_cap, price, dollar_volume (all handled by Phase 0)._
+
+**Eligibility window by gap size:**
 
 | Gap Size | Max Days Eligible |
 | -------- | ----------------- |
-| ≥10%     | 1–5               |
-| 7–10%    | 1–3               |
-| 5–7%     | 1–2               |
+| >=10%    | 1-5               |
+| 7-10%    | 1-3               |
+| 5-7%     | 1-2               |
 
 **Direction**:
 
 ```python
-if gap_pct > 0 and price_holding_above_gap_zone: direction = 'LONG'
-elif gap_pct < 0 and price_holding_below_gap_zone: direction = 'SHORT'
+if gap_direction == 'up' and rs >= 50th: direction = 'LONG'
+elif gap_direction == 'down' and rs <= 50th: direction = 'SHORT'
 else: reject
 ```
 
-### GS — Gap Strength (max 5.0)
+### GS -- Gap Strength (max 5.0)
 
-| Gap % | Long    | Short   | Gap type bonus         |
-| ----- | ------- | ------- | ---------------------- |
-| ≥10%  | 3.0     | 2.5     | Beat/miss vs est: +1.0 |
-| 7–10% | 2.0–3.0 | 2.0–2.5 | Guidance change: +1.0  |
-| 5–7%  | 1.0–2.0 | 1.5–2.0 | One-time event: +0.5   |
+| Gap % | Long    | Short   |
+| ----- | ------- | ------- |
+| >=10% | 3.0     | 2.5     |
+| 7-10% | 2.0-3.0 | 2.0-2.5 |
+| 5-7%  | 1.0-2.0 | 1.5-2.0 |
 
-### QC — Quality of Consolidation (max 4.0)
+**Earnings surprise bonus (direction-aware, 0-1.0)**:
 
-| Days since gap | Score | Consolidation range | Score |
-| -------------- | ----- | ------------------- | ----- |
-| 1–2            | 2.0   | <3%                 | 1.5   |
-| 3–4            | 1.5   | 3–5%                | 1.0   |
-| 5+             | 0.5   | 5–8%                | 0.5   |
-|                |       | >8%                 | 0     |
+- Longs: `min(1.0, max(0, surprise_pct) / 0.20)` -- only rewarded for positive surprises
+- Shorts: `min(1.0, max(0, -surprise_pct) / 0.20)` -- only rewarded for negative surprises
+- Fallback: binary `earnings_beat` flag (+1.0) if surprise_pct unavailable
 
-### TC — Trend Context (max 3.0)
+**Guidance change**: +1.0 if guidance changed. **One-time event**: +0.5. Total capped at 5.0.
 
-| Pre-earnings trend         | Score |
-| -------------------------- | ----- |
-| Aligned with gap direction | 2.0   |
-| Neutral                    | 1.0   |
-| Counter-trend              | 0.5   |
+### QC -- Quality of Consolidation (max 4.0)
 
-Sector alignment bonus: +1.0 if sector ETF confirms gap direction
+Consolidation = all days AFTER the actual gap day (dynamically identified via `_find_gap_day_index`).
 
-### VC — Volume Confirmation (max 3.0)
+| Consolidation range / gap_open | Score | Consolidation vol / avg20d | Score |
+| ------------------------------ | ----- | -------------------------- | ----- |
+| <3%                            | 2.5   | <0.8x                      | 1.5   |
+| 3-5%                           | 1.5   | 0.8-1.2x                   | 0.8   |
+| 5-8%                           | 0.8   | >1.2x                      | 0     |
+| >8%                            | 0     |                            |       |
 
-| Gap day vol / avg20d | Score | Consolidation vol | Score |
-| -------------------- | ----- | ----------------- | ----- |
-| >5×                  | 2.0   | Below average     | 1.0   |
-| 3–5×                 | 1.5   | Average           | 0.5   |
-| 2–3×                 | 1.0   | Above average     | 0     |
-| <2×                  | 0     |                   |       |
+No days-score component (time decay handled by eligibility window filter, avoiding double-counting). Same-day gap (no consolidation yet): partial credit 1.5. Total capped at 4.0.
+
+### TC -- Trend Context (max 3.0)
+
+| Pre-earnings trend           | Score |
+| ---------------------------- | ----- |
+| Aligned with gap direction   | 2.0   |
+| Neutral (price between EMAs) | 1.0   |
+| Counter-trend                | 0.5   |
+
+EMA alignment: Long = `price > ema8 > ema21`; Short = `price < ema8 < ema21`.
+
+**Sector alignment bonus**:
+
+- `sector_aligned` True: +1.0
+- Sector data available but not aligned: +0.0
+- Sector data unavailable: +0.5 (neutral default)
+
+Total capped at 3.0.
+
+### VC -- Volume Confirmation (max 3.0)
+
+| Gap day vol / avg20d | Score | Consolidation vol / avg20d | Score |
+| -------------------- | ----- | -------------------------- | ----- |
+| >5x                  | 2.0   | <0.8x (dry-up)             | 1.0   |
+| 3-5x                 | 1.5   | 0.8-1.2x (average)         | 0.5   |
+| 2-3x                 | 1.0   | >1.2x (elevated)           | 0     |
+| <2x                  | 0     | No consolidation yet       | 0.5   |
+
+Total capped at 3.0.
 
 ### Entry / Exit
 
-**Entry (Long)**: Break of consolidation high; Vol≥1.5×avg20d
-**Entry (Short)**: Break of consolidation low; Vol≥1.5×avg20d
-**Stop (Long)**: `max(consolidation_low−0.5×ATR, gap_open×0.95)`
-**Stop (Short)**: `min(consolidation_high+0.5×ATR, gap_open×1.05)`
-**Target**: `entry ± 2.5 × (entry − stop)`
+**Entry (Long)**: Break of consolidation high
+**Entry (Short)**: Break of consolidation low
+**Stop (Long)**: `max(consolidation_low - 0.5*ATR, gap_open * 0.95)`
+**Stop (Short)**: `min(consolidation_high + 0.5*ATR, gap_open * 1.05)`
+**Target**: `entry +/- 2.5 * (entry - stop)`
+
+Gap day's open price (not last day's close) is used for stop buffer calculations. Consolidation identified dynamically via actual gap day detection, not assumed to be last row.
 
 ---
 
