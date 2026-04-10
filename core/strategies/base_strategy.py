@@ -23,7 +23,7 @@ STRATEGY_MAX_SCORES = {
     'PullbackEntry': 20.0,
     'SupportBounce': 15.0,
     'DistributionTop': 15.0,
-    'AccumulationBottom': 15.0,
+    'AccumulationBottom': 18.0,
     'CapitulationRebound': 15.0,
     'EarningsGap': 15.0,
     'RelativeStrengthLong': 13.0,

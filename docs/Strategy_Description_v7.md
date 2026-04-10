@@ -490,29 +490,33 @@ Price action (cap 2.0): shooting star (upper shadow>=2x body, CLV>0.7)=+1.0, lon
 
 ## Strategy E: AccumulationBottom
 
-**Type**: Long | **Regime**: Bear, extreme, neutral weak | **Max Raw**: 15.0 | **Dimensions**: TQ(4) + AL(4) + AS(4) + VC(3)
+**Type**: Long | **Regime**: Bull=full, Neutral=B-tier max, Bear=skip, Extreme VIX=skip | **Max Raw**: 18.0 → normalized to 0-15 | **Dimensions**: TQ(4) + AL(4) + OD(4) + VC(3) + WY(3)
 
-**Market rules**: Bull → skip; Neutral → B-tier max; Bear → full; Extreme VIX → A-tier min.
+**Support caching**: Support level computed once per symbol in `screen()`, cached in `_support_cache`, reused across filter/dimensions/entry/reasons.
 
-### Pre-filter
+### Pre-filter (v7.1)
 
-| Filter       | Condition  |
-| ------------ | ---------- |
-| Near 60d low | Within 10% |
-| Avg vol 20d  | ≥ 150K     |
-| Market cap   | ≥ $2.5B    |
-| Listed age   | > 180 days |
+| Filter        | Condition                                              |
+| ------------- | ------------------------------------------------------ |
+| Market regime | Bull=full, Neutral=B-tier, Bear=skip, Extreme VIX=skip |
+| History       | ≥ 200 bars                                             |
+| ADR           | ≥ 3%                                                   |
+| RSI14         | < 40                                                   |
+| Near 60d low  | Within 10%                                             |
+| Support level | Must exist below price                                 |
+
+_Removed in v7.1: market_cap (Phase 0 prefilter), volume (Phase 0 prefilter)._
 
 ### TQ — Trend Quality (max 4.0)
 
-| EMA Structure                             | Score |
-| ----------------------------------------- | ----- |
-| Price<EMA50 AND EMA8<EMA21                | 2.5   |
-| Price<EMA50 only (EMA8>=EMA21)            | 1.5   |
-| Price>=EMA50 AND Price<EMA200, EMA8≈EMA21 | 2.0   |
-| Price>=EMA200                             | 0     |
+| EMA Structure                  | Score |
+| ------------------------------ | ----- |
+| Price < EMA21 AND EMA8 > EMA21 | 3.5   |
+| Price > EMA8 AND EMA8 < EMA21  | 2.0   |
+| Price > EMA50                  | 0.0   |
+| Downtrend intact (fallback)    | 0.5   |
 
-Note: The crossing condition (EMA8≈EMA21, within 1%) only scores 2.0 when price >= EMA50. If price < EMA50, the EMA8<EMA21 branch (2.5) or `Price<EMA50 only` branch (1.5) catches it first.
+_Simplified in v7.1: removed unreachable crossing branch. Rewards early reversal or reclamation, not extended downtrends._
 
 ### AL — Accumulation Level (max 4.0)
 
@@ -523,30 +527,60 @@ Note: The crossing condition (EMA8≈EMA21, within 1%) only scores 2.0 when pric
 | 3             | 0.8   | 5–7d         | 0.3–0.8 | >3×ATR    | 0.3   |
 | 2             | 0.3   | <5d          | 0       |           |       |
 
-### AS — Accumulation Signs (max 4.0)
+### OD — OBV Divergence (max 4.0) _(replaces AS)_
 
-| Up-day vol ratio (up-day vol / avg20d) | Score   |
-| -------------------------------------- | ------- |
-| >2.0×                                  | 2.0     |
-| 1.5–2.0×                               | 1.5–2.0 |
-| 1.2–1.5×                               | 0.8–1.5 |
-| 1.0–1.2×                               | 0.3–0.8 |
+Cumulative OBV: `if close > prev_close: +vol; elif close < prev_close: -vol; else: unchanged`
 
-Price action (cap 2.0): hammer/bullish engulfing=+1.0, failed breakdown=+1.0, higher lows=+0.5, tight range=+0.5
+30-day rate-of-change comparison:
+
+```
+obv_roc = (obv_current - obv_30d) / abs(obv_30d)
+price_roc = (price_current - price_30d) / price_30d
+divergence = obv_roc - price_roc
+```
+
+| Divergence | Score            | Rationale                         |
+| ---------- | ---------------- | --------------------------------- |
+| > 0.30     | 3.0              | Strong institutional accumulation |
+| 0.15–0.30  | 1.5–3.0 (linear) | Moderate accumulation             |
+| 0.05–0.15  | 0.5–1.5 (linear) | Weak accumulation                 |
+| 0–0.05     | 0                | No divergence                     |
+| < 0        | 0                | Distribution (penalty)            |
+
+Confirmation bonus via 10-day OBV slope (linear regression, 0-1.0):
+
+- Positive and rising → +1.0
+- Negative or flat → 0
+
+`OD = min(4.0, divergence_score + confirmation_bonus)`
 
 ### VC — Volume Confirmation (max 3.0)
 
 | Breakout vol / avg20d | Score   | Follow-through                       |
 | --------------------- | ------- | ------------------------------------ |
-| ≥2.5×                 | 2.0     | +1.0 if 2nd up-day within 2 sessions |
-| 1.8–2.5×              | 1.3–2.0 |                                      |
-| 1.2–1.8×              | 0.5–1.3 |                                      |
+| ≥2.0×                 | 2.0     | +1.0 if 2nd up-day within 2 sessions |
+| 1.5–2.0×              | 1.3–2.0 |                                      |
+| 1.2–1.5×              | 0.5–1.3 |                                      |
 | <1.2×                 | 0       |                                      |
+
+### WY — Wyckoff Structure (max 3.0) _(new)_
+
+**Spring detection (0-1.5)**: Look back 30 days for bar where `low < support_low` but `close > support_low`. Score by volume ratio vs prior 10-day avg:
+
+- Vol < 0.8x avg → 1.5 (classic spring on low vol)
+- Vol 0.8–1.2x avg → 1.0
+- Vol > 1.2x avg → 0.5 (reclaim but not clean spring)
+
+**Selling climax (0-1.0)**: Look back 60 days for highest volume bar. If vol > 3x 20-day avg AND lower shadow ≥ 50% of range → 1.0
+
+**Volume contraction in range (0-0.5)**: Compare avg vol on down-days in last 30d vs 60–30d window. If recent < prior × 0.8 → 0.5 (declining selling pressure)
+
+`WY = min(3.0, spring_score + climax_score + contraction_score)`
 
 ### Entry / Exit
 
-**Entry**: Close>resistance+0.3×ATR, Vol≥1.5×avg20d, CLV≥0.60, not within 5d of earnings  
-**Stop**: `max(support_low−0.5×ATR, entry×0.94)`  
+**Entry**: Support level confirmed; RSI < 40; within 10% of 60d low; Wyckoff signals preferred  
+**Stop**: `support_low − 0.5 × ATR` (removed 6% fallback)  
 **Target**: `entry + 2.5 × (entry − stop)` (cap at EMA50 if within 15%)
 
 ---
