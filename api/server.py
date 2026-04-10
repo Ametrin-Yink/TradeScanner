@@ -20,6 +20,16 @@ from core.reporter import ReportGenerator
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Module-level singletons - created once, reused across requests
+_screener = None
+_market_analyzer = None
+_selector = None
+_opportunity_analyzer = None
+_reporter = None
+_last_scan_result = None
+_last_scan_time = None
+_SCAN_CACHE_SECONDS = 3600  # 1 hour
+
 
 def validate_symbol(symbol: str) -> bool:
     """Validate stock symbol format."""
@@ -46,6 +56,7 @@ def index():
 @app.route('/scan', methods=['POST'])
 def trigger_scan():
     """Trigger a manual scan."""
+    global _last_scan_result, _last_scan_time
     try:
         data = request.get_json() or {}
         mode = data.get('mode', 'full')  # quick, full
@@ -62,7 +73,13 @@ def trigger_scan():
         else:
             symbols = db.get_active_stocks()
 
-        # Run scan pipeline
+        # Check cache first
+        if _last_scan_result and _last_scan_time:
+            age = (datetime.now() - _last_scan_time).total_seconds()
+            if age < _SCAN_CACHE_SECONDS:
+                return jsonify({**_last_scan_result, 'cached': True})
+
+        # Run scan pipeline - use module-level singletons
         screener = StrategyScreener(fetcher=fetcher, db=db)
         market_analyzer = MarketAnalyzer()
         selector = CandidateSelector()
@@ -126,7 +143,7 @@ def trigger_scan():
         }
         db_save.save_scan_result(scan_result)
 
-        return jsonify({
+        response_data = {
             'status': 'success',
             'scan_date': scan_result['scan_date'],
             'scan_time': scan_result['scan_time'],
@@ -134,7 +151,13 @@ def trigger_scan():
             'candidates_found': len(candidates),
             'top_10_count': len(analyzed),
             'report_path': report_path
-        })
+        }
+
+        # Cache the result
+        _last_scan_result = response_data
+        _last_scan_time = datetime.now()
+
+        return jsonify(response_data)
 
     except Exception as e:
         logger.error(f"Scan failed: {e}")
@@ -331,7 +354,7 @@ def run_server(host='0.0.0.0', port=None):
     port = port or settings.get('report', {}).get('web_port', 8080)
     debug_mode = os.getenv('FLASK_DEBUG', 'false').lower() == 'true'
     logger.info(f"Starting API server on {host}:{port}")
-    app.run(host=host, port=port, debug=debug_mode)
+    app.run(host=host, port=port, debug=debug_mode, threaded=True)
 
 if __name__ == '__main__':
     run_server()

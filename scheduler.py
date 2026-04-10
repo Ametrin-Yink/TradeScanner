@@ -548,7 +548,7 @@ class CompleteScanner:
                 logger.error(f"Failed to analyze {match.symbol}: {e}")
                 return None
 
-        with ThreadPoolExecutor(max_workers=2) as executor:
+        with ThreadPoolExecutor(max_workers=4) as executor:
             # Submit all tasks
             future_to_match = {
                 executor.submit(analyze_single, match): match

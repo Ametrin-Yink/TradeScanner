@@ -326,7 +326,7 @@ Provide analysis in JSON format:
 
         # Analyze in parallel
         analyzed = []
-        with ThreadPoolExecutor(max_workers=2) as executor:
+        with ThreadPoolExecutor(max_workers=4) as executor:
             futures = {
                 executor.submit(self._deep_analyze_single, c, regime): c
                 for c in top_10

@@ -48,6 +48,10 @@ class MomentumBreakoutStrategy(BaseStrategy):
         'bonus_max': 1.5,
     }
 
+    def __init__(self, fetcher=None, db=None, config=None):
+        super().__init__(fetcher=fetcher, db=db, config=config)
+        self._vcp_cache: Optional[Dict] = None
+
     def filter(self, symbol: str, df: pd.DataFrame) -> bool:
         """Filter with TC primary gate and basic requirements.
 
@@ -127,12 +131,8 @@ class MomentumBreakoutStrategy(BaseStrategy):
 
         current_price = df['close'].iloc[-1]
 
-        # Detect VCP platform - may return None if no valid pattern
-        platform = ind.detect_vcp_platform(
-            lookback_range=self.PARAMS['platform_lookback'],
-            max_range_pct=self.PARAMS['platform_max_range'],
-            concentration_threshold=self.PARAMS['concentration_threshold']
-        )
+        # Detect VCP platform - cached on first call, reused thereafter
+        platform = self._get_vcp_data(ind)
 
         # v7.0 Fix: Create fallback platform data if detection failed
         if not platform:
@@ -347,6 +347,16 @@ class MomentumBreakoutStrategy(BaseStrategy):
             final_score += 0.5
 
         return pattern_type, round(min(4.0, final_score), 2)
+
+    def _get_vcp_data(self, ind) -> Dict:
+        """Get VCP data, calculating once and caching on the instance."""
+        if self._vcp_cache is None:
+            self._vcp_cache = ind.detect_vcp_platform(
+                lookback_range=self.PARAMS['platform_lookback'],
+                max_range_pct=self.PARAMS['platform_max_range'],
+                concentration_threshold=self.PARAMS['concentration_threshold']
+            )
+        return self._vcp_cache
 
     def _is_high_tight_flag(self, df: pd.DataFrame, platform_data: pd.DataFrame, platform_days: int) -> bool:
         """
@@ -788,11 +798,7 @@ class MomentumBreakoutStrategy(BaseStrategy):
         - CLV ≥ 0.65
         """
         ind = TechnicalIndicators(df)
-        platform = ind.detect_vcp_platform(
-            lookback_range=self.PARAMS['platform_lookback'],
-            max_range_pct=self.PARAMS['platform_max_range'],
-            concentration_threshold=self.PARAMS['concentration_threshold']
-        )
+        platform = self._get_vcp_data(ind)
 
         current_price = df['close'].iloc[-1]
         platform_low = platform['platform_low'] if platform else df['low'].tail(20).min()
@@ -874,11 +880,7 @@ class MomentumBreakoutStrategy(BaseStrategy):
         position_pct = self.calculate_position_pct(tier)
 
         ind = TechnicalIndicators(df)
-        platform = ind.detect_vcp_platform(
-            lookback_range=self.PARAMS['platform_lookback'],
-            max_range_pct=self.PARAMS['platform_max_range'],
-            concentration_threshold=self.PARAMS['concentration_threshold']
-        )
+        platform = self._get_vcp_data(ind)
 
         pattern_type = cq.details.get('pattern_type', 'VCP') if cq else 'VCP'
 

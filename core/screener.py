@@ -1,6 +1,5 @@
 """Strategy screener - thin orchestrator using plugin architecture."""
 import copy
-import gc
 import logging
 import time
 from collections import defaultdict
@@ -73,6 +72,27 @@ class StrategyScreener:
         self._spy_data: Optional[pd.DataFrame] = None
         self._spy_return_5d: float = 0.0
 
+        # Preload Tier 3 ETF data into memory
+        self._tier3_data: Dict[str, pd.DataFrame] = {}
+        tier3_symbols = ['SPY', 'QQQ', 'IWM', '^VIX', 'VIXY', 'UVXY',
+                         'XLK', 'XLF', 'XLE', 'XLI', 'XLP', 'XLY',
+                         'XLB', 'XLU', 'XLV', 'XBI', 'SMH', 'IGV',
+                         'IYT', 'KRE', 'XRT']
+        for sym in tier3_symbols:
+            try:
+                df = self.db.get_tier3_cache(sym)
+                if df is not None and not df.empty:
+                    self._tier3_data[sym] = df
+            except Exception:
+                pass
+
+        # Preload Tier 1 cache into memory
+        self._tier1_cache_all: Dict[str, Dict] = {}
+        try:
+            self._tier1_cache_all = self.db.get_all_tier1_cache()
+        except Exception:
+            pass
+
         # Initialize all strategy plugins (9 strategies with A1/A2 sub-modes)
         self._strategies = {}
         for strategy_type in [StrategyType.A1, StrategyType.A2, StrategyType.B,
@@ -123,11 +143,6 @@ class StrategyScreener:
         calculated = 0
 
         for i, symbol in enumerate(symbols):
-            # Batch processing: clear memory every 30 symbols to prevent OOM
-            if i > 0 and i % 30 == 0:
-                import gc
-                gc.collect()
-                logger.debug(f"Phase 0: Processed {i} symbols, garbage collected")
 
             # First try cached Tier 1 data
             if symbol in cached_tier1:
@@ -198,9 +213,6 @@ class StrategyScreener:
                         'vcp_volume_ratio': cache_entry.get('vcp_volume_ratio', 1.0),
                         'earnings_surprise_pct': cache_entry.get('earnings_surprise_pct'),
                     }
-
-                    # Delete temporary objects immediately
-                    del df, ind
 
                     rs_scores.append({'symbol': symbol, 'rs': phase0_data[symbol]['rs_raw']})
                     used_cache += 1
@@ -350,35 +362,39 @@ class StrategyScreener:
     def _load_tier1_cache(self, symbols: List[str]) -> Dict[str, Dict]:
         """Load Tier 1 cache from database for given symbols.
 
+        Uses preloaded _tier1_cache_all from __init__ to avoid per-symbol queries.
+
         Args:
             symbols: List of symbols to load
 
         Returns:
             Dict mapping symbol to cached Tier 1 data
         """
-        cached = {}
+        all_cache = getattr(self, '_tier1_cache_all', {})
+        if not all_cache:
+            try:
+                all_cache = self.db.get_all_tier1_cache()
+            except Exception:
+                return {}
+
         today = datetime.now().date()
-        max_age_days = 2  # Accept cache up to 2 days old
+        max_age_days = 2
+        cached = {}
 
         for symbol in symbols:
+            data = all_cache.get(symbol)
+            if not data:
+                continue
+            cache_date_str = data.get('cache_date')
+            if not cache_date_str:
+                continue
             try:
-                data = self.db.get_tier1_cache(symbol)
-                if data:
-                    cache_date_str = data.get('cache_date')
-                    if cache_date_str:
-                        try:
-                            cache_date = datetime.fromisoformat(cache_date_str).date()
-                            days_old = (today - cache_date).days
-                            if 0 <= days_old <= max_age_days:
-                                cached[symbol] = data
-                                continue
-                        except (ValueError, TypeError):
-                            pass
-                    # Also accept if cache_date matches today's ISO format (backward compat)
-                    if data.get('cache_date') == today.isoformat():
-                        cached[symbol] = data
-            except Exception as e:
-                logger.debug(f"Failed to load Tier 1 cache for {symbol}: {e}")
+                cache_date = datetime.fromisoformat(cache_date_str).date()
+                days_old = (today - cache_date).days
+                if 0 <= days_old <= max_age_days:
+                    cached[symbol] = data
+            except (ValueError, TypeError):
+                pass
 
         return cached
 
@@ -391,9 +407,14 @@ class StrategyScreener:
         Returns:
             DataFrame or None
         """
+        if symbol in self._tier3_data:
+            logger.debug(f"Loaded Tier 3 from memory for {symbol}: {len(self._tier3_data[symbol])} rows")
+            return self._tier3_data[symbol]
+
         try:
             df = self.db.get_tier3_cache(symbol)
             if df is not None and not df.empty:
+                self._tier3_data[symbol] = df  # Cache in memory
                 logger.debug(f"Loaded Tier 3 cache for {symbol}: {len(df)} rows")
                 return df
         except Exception as e:

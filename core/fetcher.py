@@ -1,4 +1,6 @@
 """Data fetcher for stock market data using yfinance with incremental updates."""
+import gc
+import threading
 import time
 import logging
 from datetime import datetime, timedelta
@@ -22,7 +24,7 @@ class DataFetcher:
     def __init__(
         self,
         db: Optional[Database] = None,
-        max_workers: int = 2,  # Reduced to 2 for rate limiting
+        max_workers: int = 4,  # Increased for better throughput
         request_delay: float = 0.5,  # Increased to 0.5s for rate limiting
         max_retries: int = 3,
         max_history_days: int = 252
@@ -239,6 +241,40 @@ class DataFetcher:
                 logger.error(f"Failed to fetch {symbol}: {e}")
                 return None
 
+    def _download_batch_yf(self, symbols: List[str], period: str = "13mo", interval: str = "1d") -> Dict[str, pd.DataFrame]:
+        """Download using yf.download with MultiIndex reshaping."""
+        import warnings
+        warnings.filterwarnings('ignore')
+
+        try:
+            multi_df = yf.download(symbols, period=period, interval=interval, auto_adjust=True, threads=True)
+
+            if multi_df is None or (hasattr(multi_df, 'empty') and multi_df.empty):
+                return {}
+
+            results = {}
+            for symbol in symbols:
+                try:
+                    df = pd.DataFrame()
+                    for col in ['Close', 'Open', 'High', 'Low', 'Volume']:
+                        if (col, symbol) in multi_df.columns:
+                            df[col.lower()] = multi_df[(col, symbol)]
+                        elif (symbol, col) in multi_df.columns:
+                            df[col.lower()] = multi_df[(symbol, col)]
+                    if not df.empty and len(df) > 0:
+                        df.index.name = 'date'
+                        df = df.dropna(subset=['close'])
+                        results[symbol] = df
+                except Exception as e:
+                    logger.debug(f"Failed to extract {symbol} from batch download: {e}")
+                    continue
+            return results
+        except Exception as e:
+            logger.error(f"yf.download batch failed: {e}")
+            return {}
+        finally:
+            warnings.resetwarnings()
+
     def _save_to_db(self, symbol: str, df: pd.DataFrame, incremental: bool = True):
         """Save fetched data to database using batch insert."""
         try:
@@ -299,6 +335,9 @@ class DataFetcher:
         """
         Fetch data for multiple stocks with incremental updates.
 
+        Uses batch yf.download for symbols without cache, and incremental
+        fetch for symbols with existing cached data.
+
         Args:
             symbols: List of stock symbols
             period: Data period (for non-cached fetches)
@@ -313,23 +352,70 @@ class DataFetcher:
 
         logger.info(f"Fetching data for {len(symbols)} symbols (cache enabled: {use_cache})")
 
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            future_to_symbol = {
-                executor.submit(self.fetch_stock_data, sym, period, interval, use_cache): sym
-                for sym in symbols
-            }
+        if use_cache:
+            # Split into cached vs non-cached
+            no_cache_symbols = []
+            has_cache_symbols = []
 
-            for future in as_completed(future_to_symbol):
-                symbol = future_to_symbol[future]
-                try:
-                    df = future.result()
+            for sym in symbols:
+                cached_df, latest_date = self._get_cached_data(sym)
+                if cached_df is not None and latest_date is not None:
+                    has_cache_symbols.append((sym, cached_df, latest_date))
+                else:
+                    no_cache_symbols.append(sym)
+
+            # Batch download for symbols without cache
+            if no_cache_symbols:
+                logger.info(f"Batch downloading {len(no_cache_symbols)} symbols without cache")
+                batch_size = 50
+                for i in range(0, len(no_cache_symbols), batch_size):
+                    batch = no_cache_symbols[i:i + batch_size]
+                    logger.info(f"Batch download: {len(batch)} symbols")
+                    batch_results = self._download_batch_yf(batch, period="13mo", interval=interval)
+
+                    for sym, df in batch_results.items():
+                        if df is not None and not df.empty:
+                            self._save_to_db(sym, df, incremental=False)
+                            results[sym] = df
+
+                    # Rate limit between batches
+                    if i + batch_size < len(no_cache_symbols):
+                        time.sleep(self.request_delay)
+
+                    gc.collect()
+
+            # Incremental fetch for symbols with cache
+            if has_cache_symbols:
+                with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                    future_to_symbol = {
+                        executor.submit(self._fetch_incremental, sym, cached_df, latest_date): sym
+                        for sym, cached_df, latest_date in has_cache_symbols
+                    }
+
+                    for future in as_completed(future_to_symbol):
+                        symbol = future_to_symbol[future]
+                        try:
+                            df = future.result()
+                            if df is not None and not df.empty:
+                                self._save_to_db(symbol, df, incremental=True)
+                                results[symbol] = df
+                        except Exception as e:
+                            logger.error(f"Error fetching {symbol}: {e}")
+                            failed_symbols.append(symbol)
+        else:
+            # No cache mode: batch download all
+            batch_size = 50
+            for i in range(0, len(symbols), batch_size):
+                batch = symbols[i:i + batch_size]
+                batch_results = self._download_batch_yf(batch, period=period, interval=interval)
+
+                for sym, df in batch_results.items():
                     if df is not None and not df.empty:
-                        results[symbol] = df
-                    else:
-                        failed_symbols.append(symbol)
-                except Exception as e:
-                    logger.error(f"Error fetching {symbol}: {e}")
-                    failed_symbols.append(symbol)
+                        self._save_to_db(sym, df, incremental=False)
+                        results[sym] = df
+
+                if i + batch_size < len(symbols):
+                    time.sleep(self.request_delay)
 
         logger.info(f"Successfully fetched {len(results)} symbols, {len(failed_symbols)} failed")
         if failed_symbols:
@@ -356,15 +442,16 @@ class DataFetcher:
         symbols: Optional[List[str]] = None,
         days_ahead: int = 7
     ) -> Dict[str, datetime]:
-        """Fetch earnings calendar for symbols."""
+        """Fetch earnings calendar for symbols using parallel workers."""
         if symbols is None:
             symbols = self.db.get_active_stocks()
 
         earnings = {}
+        lock = threading.Lock()
         today = datetime.now().date()
         end_date = today + timedelta(days=days_ahead)
 
-        for symbol in symbols:
+        def fetch_single(symbol):
             try:
                 ticker = yf.Ticker(symbol)
                 calendar = self._rate_limited_request(lambda: ticker.calendar)
@@ -377,14 +464,17 @@ class DataFetcher:
                         earnings_date = earnings_date.date()
 
                     if today <= earnings_date <= end_date:
-                        earnings[symbol] = earnings_date
-                        logger.debug(f"{symbol} earnings on {earnings_date}")
-
-                time.sleep(self.request_delay)
+                        with lock:
+                            earnings[symbol] = earnings_date
+                            logger.debug(f"{symbol} earnings on {earnings_date}")
 
             except Exception as e:
                 logger.debug(f"Could not fetch earnings for {symbol}: {e}")
-                continue
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = {executor.submit(fetch_single, s): s for s in symbols}
+            for future in as_completed(futures):
+                future.result()  # Swallow exceptions
 
         logger.info(f"Found {len(earnings)} earnings in next {days_ahead} days")
         return earnings

@@ -3,6 +3,7 @@ import sqlite3
 import json
 import pickle
 import logging
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional, Any
@@ -20,12 +21,19 @@ class Database:
 
     def __init__(self, db_path: Path = DB_PATH):
         self.db_path = db_path
+        self._local = threading.local()
         self._init_db()
 
     def _init_db(self):
         with sqlite3.connect(self.db_path) as conn:
             conn.executescript(SCHEMA)
             self._migrate_db(conn)
+        self._add_performance_indexes()
+
+    def _add_performance_indexes(self):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_market_data_symbol ON market_data(symbol)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_tier1_cache_date ON tier1_cache(cache_date)")
 
     def _migrate_db(self, conn: sqlite3.Connection):
         """Migrate database schema if needed."""
@@ -144,7 +152,12 @@ class Database:
         conn.commit()
 
     def get_connection(self):
-        return sqlite3.connect(self.db_path)
+        if not hasattr(self._local, 'conn') or self._local.conn is None:
+            conn = sqlite3.connect(self.db_path)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            self._local.conn = conn
+        return self._local.conn
 
     def add_stock(self, symbol: str, name: str = "", sector: str = ""):
         with self.get_connection() as conn:
@@ -312,6 +325,40 @@ class Database:
                 result[row['symbol']] = dict(row)
 
             return result
+
+    def get_market_data_latest(self, symbols: List[str], limit: int = 20) -> Dict[str, List]:
+        """Single query: latest N rows per symbol for all symbols."""
+        if not symbols:
+            return {}
+        placeholders = ','.join(['?' for _ in symbols])
+        with self.get_connection() as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute(f"""
+                SELECT symbol, date, close, volume FROM market_data
+                WHERE symbol IN ({placeholders})
+                ORDER BY date DESC
+            """, symbols)
+            results = {}
+            for row in cursor.fetchall():
+                sym = row['symbol']
+                if sym not in results:
+                    results[sym] = []
+                if len(results[sym]) < limit:
+                    results[sym].append({'date': row['date'], 'close': row['close'], 'volume': row['volume']})
+            return results
+
+    def get_stock_info_batch(self, symbols: List[str]) -> Dict[str, Dict]:
+        """Batch stock info lookup in single query."""
+        if not symbols:
+            return {}
+        placeholders = ','.join(['?' for _ in symbols])
+        with self.get_connection() as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute(
+                f"SELECT * FROM stocks WHERE symbol IN ({placeholders})",
+                symbols
+            )
+            return {row['symbol']: dict(row) for row in cursor.fetchall()}
 
     def save_tier3_cache(self, symbol: str, df: pd.DataFrame):
         """Save market data as pickled blob (Tier 3 cache).

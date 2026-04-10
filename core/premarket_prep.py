@@ -7,6 +7,7 @@ Stocks with market cap <$2B are filtered out during pre-calculation.
 """
 import gc
 import logging
+import threading
 import time
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
@@ -58,7 +59,7 @@ class PreMarketPrep:
         batch_size: int = 50
     ):
         self.db = db or Database()
-        self.fetcher = DataFetcher(db=self.db)
+        self.fetcher = DataFetcher(db=self.db, max_workers=max_workers)
         self.universe_manager = StockUniverseManager(db=self.db)
         self.max_workers = max_workers
         self.batch_size = batch_size
@@ -259,65 +260,44 @@ class PreMarketPrep:
                 - filtered_by_volume: Count filtered by volume
                 - total_stocks: Total stocks checked
         """
-        from data.db import db
-
         stocks = self.universe_manager.get_stocks(min_market_cap=None)
         total_stocks = len(stocks)
 
         logger.info(f"Applying pre-filter to {total_stocks} stocks...")
         logger.info(f"  Criteria: market cap >= $2B, price ${self.MIN_PRICE}-{self.MAX_PRICE}, volume >= {self.MIN_AVG_VOLUME:,}")
 
+        # Batch queries instead of N+1
+        market_data_by_symbol = self.db.get_market_data_latest(stocks, limit=20)
+        stock_info_batch = self.db.get_stock_info_batch(stocks)
+
         qualifying_stocks = []
         filtered_by_cap = 0
         filtered_by_price = 0
         filtered_by_volume = 0
 
-        for i, symbol in enumerate(stocks):
-            if (i + 1) % 500 == 0:
-                logger.info(f"  Checked {i + 1}/{total_stocks} stocks...")
-
-            try:
-                # Get latest market data
-                with db.get_connection() as conn:
-                    cursor = conn.execute(
-                        """SELECT close, volume FROM market_data
-                        WHERE symbol = ? ORDER BY date DESC LIMIT 20""",
-                        (symbol,)
-                    )
-                    rows = cursor.fetchall()
-
-                if len(rows) < 5:  # Need at least 5 days of data
-                    continue
-
-                latest_price = rows[0][0]
-                avg_volume = sum(r[1] for r in rows) / len(rows)
-
-                # Check 1: Price range ($2 - $3000)
-                if latest_price < self.MIN_PRICE or latest_price > self.MAX_PRICE:
-                    filtered_by_price += 1
-                    continue
-
-                # Check 2: Volume (>= 100K average)
-                if avg_volume < self.MIN_AVG_VOLUME:
-                    filtered_by_volume += 1
-                    continue
-
-                # Check 3: Market cap (>= $2B) - use cached value from database
-                # Market cap is fetched during data fetch phase (fetcher.py:211)
-                # This avoids 2,921 individual HTTP requests to yfinance!
-                stock_info = self.db.get_stock_info_full(symbol)
-                market_cap = stock_info.get('market_cap', 0) if stock_info else 0
-
-                if market_cap < self.MIN_MARKET_CAP:
-                    filtered_by_cap += 1
-                    continue
-
-                # All checks passed
-                qualifying_stocks.append(symbol)
-
-            except Exception as e:
-                logger.debug(f"Could not pre-filter {symbol}: {e}")
+        for symbol in stocks:
+            rows = market_data_by_symbol.get(symbol, [])
+            if len(rows) < 5:
                 continue
+
+            latest_price = rows[0]['close']
+            avg_volume = sum(r['volume'] for r in rows) / len(rows)
+
+            if latest_price < self.MIN_PRICE or latest_price > self.MAX_PRICE:
+                filtered_by_price += 1
+                continue
+
+            if avg_volume < self.MIN_AVG_VOLUME:
+                filtered_by_volume += 1
+                continue
+
+            info = stock_info_batch.get(symbol, {})
+            market_cap = info.get('market_cap', 0) or 0
+            if market_cap < self.MIN_MARKET_CAP:
+                filtered_by_cap += 1
+                continue
+
+            qualifying_stocks.append(symbol)
 
         total_filtered = total_stocks - len(qualifying_stocks)
 
@@ -368,16 +348,19 @@ class PreMarketPrep:
 
         logger.info(f"  Fetching earnings for {len(needs_update)}/{len(symbols)} stocks")
 
-        # Fetch in small batches with aggressive memory cleanup
+        # Fetch in small batches with parallel workers and aggressive memory cleanup
         batch_size = 20
         updated = 0
         total_batches = (len(needs_update) + batch_size - 1) // batch_size
+        fetch_lock = threading.Lock()
 
         for i in range(0, len(needs_update), batch_size):
             batch = needs_update[i:i + batch_size]
             logger.info(f"  Earnings batch {i//batch_size + 1}/{total_batches}: {len(batch)} stocks")
 
-            for symbol in batch:
+            batch_updated = [0]
+
+            def fetch_earnings_for_symbol(symbol):
                 try:
                     ticker = yf.Ticker(symbol)
                     calendar = ticker.calendar
@@ -400,7 +383,8 @@ class PreMarketPrep:
                                         if date >= today:
                                             earnings_date = date.isoformat()
                                             self.db.update_stock_earnings_date(symbol, earnings_date)
-                                            updated += 1
+                                            with fetch_lock:
+                                                batch_updated[0] += 1
                                             break
                                     except:
                                         continue
@@ -410,7 +394,6 @@ class PreMarketPrep:
                         earnings_df = ticker.earnings
                         if earnings_df is not None and not earnings_df.empty and len(earnings_df) > 0:
                             last_row = earnings_df.iloc[-1]
-                            # yfinance earnings: columns vary, try common patterns
                             for eps_estimate_col in ['EPS Estimate', 'EPSEstimate', 'eps_estimate']:
                                 if eps_estimate_col in earnings_df.columns:
                                     estimate = last_row.get(eps_estimate_col)
@@ -427,14 +410,15 @@ class PreMarketPrep:
                         except:
                             pass
 
-                    # Explicit cleanup
-                    if 'calendar' in locals():
-                        del calendar
-                    if 'ticker' in locals():
-                        del ticker
-
                 except Exception as e:
                     logger.debug(f"Failed to fetch earnings for {symbol}: {e}")
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                futures = {executor.submit(fetch_earnings_for_symbol, s): s for s in batch}
+                for future in as_completed(futures):
+                    future.result()
+
+            updated += batch_updated[0]
 
             # Aggressive GC after each batch
             gc.collect()

@@ -34,6 +34,7 @@ class TechnicalIndicators:
     _cache_hits: int = 0
     _cache_misses: int = 0
     _cache_lock = threading.Lock()
+    _MAX_CACHE_SIZE = 2000
 
     def __init__(self, df: pd.DataFrame, symbol: str = None):
         """
@@ -86,6 +87,9 @@ class TechnicalIndicators:
         # Store in cache
         with TechnicalIndicators._cache_lock:
             TechnicalIndicators._cache[cache_key] = self.indicators
+            if len(TechnicalIndicators._cache) > self._MAX_CACHE_SIZE:
+                oldest_key = next(iter(TechnicalIndicators._cache))
+                del TechnicalIndicators._cache[oldest_key]
 
         return self.indicators
 
