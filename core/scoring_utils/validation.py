@@ -16,7 +16,6 @@ class ParameterValidator:
         'rsi_oversold': (5, 30),
         'volume_climax_threshold': (2.0, 10.0),
         'vix_reject_threshold': (20, 50),
-        'profit_efficiency_threshold': (1.0, 3.0),
     }
 
     @classmethod

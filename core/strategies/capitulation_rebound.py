@@ -53,15 +53,13 @@ class CapitulationReboundStrategy(BaseStrategy):
         'volume_medium_threshold': 2.0,
         'vix_min': 15,      # NEW: VIX < 15 = reject (no fear = no capitulation)
         'vix_max_full': 35,  # VIX > 35 = cap at Tier B
-        'profit_efficiency_threshold': 1.5,
-        'efficiency_penalty': 2.0,
-        'time_window_days': 10,
     }
 
-    def __init__(self, fetcher=None, db=None, config=None):
-        """Initialize with VIX data cache."""
+    def __init__(self, fetcher=None, db=None, config=None, earnings_calendar=None):
+        """Initialize with VIX data cache and optional earnings calendar."""
         super().__init__(fetcher=fetcher, db=db, config=config)
         self.vix_data = None
+        self.earnings_calendar = earnings_calendar
 
     def screen(self, symbols: List[str], max_candidates: int = 5) -> List[StrategyMatch]:
         """
@@ -161,6 +159,63 @@ class CapitulationReboundStrategy(BaseStrategy):
             logger.warning(f"Could not check VIX: {e}, defaulting to normal mode")
             return 'normal'  # Default to normal on error (VIX window 15-35 is safe)
 
+    def _check_reversal_confirmation(self, df: pd.DataFrame) -> Tuple[bool, Dict]:
+        """
+        Check if the most recent candle shows strong reversal confirmation (for MO bonus).
+
+        Returns (is_strong, details) where:
+        - is_strong: strong reversal signal (body majority or outside day)
+        - details: dict with signal flags for match reasons
+        """
+        if len(df) < 2:
+            return False, {}
+
+        today = df.iloc[-1]
+        yesterday = df.iloc[-2]
+
+        today_open = today['open']
+        today_close = today['close']
+        today_high = today['high']
+        today_low = today['low']
+
+        yesterday_high = yesterday['high']
+        yesterday_low = yesterday['low']
+
+        body_size = abs(today_close - today_open)
+        lower_wick = min(today_open, today_close) - today_low
+        has_long_lower_wick = lower_wick > body_size if body_size > 0 else lower_wick > 0
+
+        # Strong reversal signals (for scoring bonus)
+        total_range = today_high - today_low
+        body_is_majority = body_size > 0.5 * total_range if total_range > 0 else False
+        today_range = today_high - today_low
+        yesterday_range = yesterday_high - yesterday_low
+        is_outside_day = today_range > yesterday_range if yesterday_range > 0 else False
+        is_strong = body_is_majority or is_outside_day
+
+        details = {
+            'is_green': today_close > today_open,
+            'closed_higher': today_close > yesterday_close,
+            'has_long_lower_wick': has_long_lower_wick,
+            'body_is_majority': body_is_majority,
+            'is_outside_day': is_outside_day,
+        }
+
+        return is_strong, details
+
+    def _is_large_single_gap(self, df: pd.DataFrame) -> bool:
+        """Check if a single large gap-down (>5%) is likely earnings-driven."""
+        lookback = self.PARAMS['lookback_days']
+        recent = df.tail(lookback + 1)  # +1 to capture the pre-gap close
+
+        for i in range(1, len(recent)):
+            prev_close = recent.iloc[i-1]['close']
+            today_open = recent.iloc[i]['open']
+            gap_pct = (today_open - prev_close) / prev_close
+            if gap_pct < -0.05:  # >5% gap down
+                return True
+        return False
+
     def _prefilter_symbol(self, symbol: str, df: pd.DataFrame) -> bool:
         """Pre-filter symbol for capitulation bottom conditions only."""
         ind = TechnicalIndicators(df)
@@ -183,7 +238,7 @@ class CapitulationReboundStrategy(BaseStrategy):
             return False
 
         if current_price >= ema50 - self.PARAMS['ema_atr_multiplier'] * atr:
-            logger.debug(f"CAP_REJ: {symbol} - Price not below EMA50-{self.PARAMS['ema_atr_multiplier']}×ATR")
+            logger.debug(f"CAP_REJ: {symbol} - Price not below EMA50-{self.PARAMS['ema_atr_multiplier']}xATR")
             return False
 
         # v7.0: Use pre-calculated consecutive down-days from phase0_data
@@ -196,28 +251,16 @@ class CapitulationReboundStrategy(BaseStrategy):
             logger.debug(f"CAP_REJ: {symbol} - No exhaustion signal (gaps={gaps}, down_streak={consecutive_down})")
             return False
 
+        # Reject likely earnings-driven gaps (fundamental repricing, not capitulation)
+        if gaps == 1 and self._is_large_single_gap(df):
+            logger.debug(f"CAP_REJ: {symbol} - Likely earnings gap (single large gap)")
+            return False
+
         logger.debug(f"CAP_PASS: {symbol} - All pre-filters passed")
         return True
 
     def filter(self, symbol: str, df: pd.DataFrame) -> bool:
-        """Filter with additional checks per v7.0 spec."""
-        if len(df) < self.PARAMS['min_listing_days']:
-            return False
-
-        ind = TechnicalIndicators(df)
-        ind.calculate_all()
-
-        if not self._check_basic_requirements(df):
-            return False
-
-        current_price = df['close'].iloc[-1]
-
-        # v7.0: Dollar volume > $50M avg20d (doc line 468)
-        avg_dollar_volume = current_price * df['volume'].tail(20).mean()
-        if avg_dollar_volume < 50_000_000:
-            logger.debug(f"CAP_REJ: {symbol} - Dollar volume ${avg_dollar_volume:,.0f} < $50M")
-            return False
-
+        """All filtering done in _prefilter_symbol; pass-through for base class screen()."""
         return True
 
     def calculate_dimensions(self, symbol: str, df: pd.DataFrame) -> List[ScoringDimension]:
@@ -237,23 +280,24 @@ class CapitulationReboundStrategy(BaseStrategy):
         price_metrics = ind.indicators.get('price_metrics', {})
         gaps = price_metrics.get('gaps_5d', 0)
 
-        # Calculate distance from EMA
+        # Distance from EMA (used by EX dimension only)
         distance_from_ema = abs(current_price - ema50) / ema50
-        atr_multiple = distance_from_ema / (atr / current_price) if atr > 0 else 0
+        atr_ratio = distance_from_ema / (atr / current_price) if atr > 0 else 0
 
         dimensions = []
 
-        # Dimension 1: MO - Momentum Overextension with RSI divergence (Expert suggestion B)
-        mo_score, mo_details = self._calculate_mo(df, rsi, atr_multiple)
+        # Dimension 1: MO - Momentum Overextension with RSI divergence and velocity
+        reversal_strong, reversal_details = self._check_reversal_confirmation(df)
+        mo_score, mo_details = self._calculate_mo(df, rsi, reversal_strong, reversal_details)
         dimensions.append(ScoringDimension(
             name='MO',
             score=mo_score,
-            max_score=5.0,
+            max_score=5.5,
             details=mo_details
         ))
 
         # Dimension 2: EX - Extension Level (uses ATR ratio per doc)
-        ex_score, ex_details = self._calculate_ex(atr_multiple, gaps, df, symbol)
+        ex_score, ex_details = self._calculate_ex(atr_ratio, gaps, df, symbol)
         dimensions.append(ScoringDimension(
             name='EX',
             score=ex_score,
@@ -261,43 +305,34 @@ class CapitulationReboundStrategy(BaseStrategy):
             details=ex_details
         ))
 
-        # Dimension 3: VC - Volume Confirmation with Volume Climax (Expert suggestion A)
+        # Dimension 3: VC - Volume Confirmation with Volume Climax
         vc_score, vc_details = self._calculate_vc(ind, df)
         dimensions.append(ScoringDimension(
             name='VC',
             score=vc_score,
-            max_score=4.0,
+            max_score=5.0,
             details=vc_details
         ))
 
-        # Check profit efficiency
-        total_score = sum(d.score for d in dimensions)
-        entry = current_price
-        stop = entry - atr * self.PARAMS['stop_atr_multiplier']
-        target1 = ema50 - 2 * atr
-
-        if abs(entry - stop) > 0:
-            profit_potential = abs(target1 - entry) / abs(entry - stop)
-            if profit_potential < self.PARAMS['profit_efficiency_threshold']:
-                total_score -= self.PARAMS['efficiency_penalty']
-                logger.debug(f"{symbol}: Efficiency penalty applied (R:R={profit_potential:.2f})")
-
         return dimensions
 
-    def _calculate_mo(self, df: pd.DataFrame, rsi: float, atr_multiple: float) -> Tuple[float, Dict]:
+    def _calculate_mo(self, df: pd.DataFrame, rsi: float,
+                      reversal_strong: bool = False, reversal_details: Dict = None) -> Tuple[float, Dict]:
         """
-        Momentum Overextension dimension (0-5) with RSI divergence core scoring (Expert suggestion B).
+        Momentum Overextension dimension (0-5.5) with RSI divergence and velocity scoring.
         Long mode only: Capitulation bottom detection.
         """
         details = {
             'rsi': rsi,
-            'atr_multiple': atr_multiple,
             'rsi_divergence': False
         }
 
+        if reversal_details:
+            details['reversal'] = reversal_details
+
         mo_score = 0.0
 
-        # RSI oversold (capitulation detection) - matches doc thresholds (18-25 range)
+        # RSI oversold (capitulation detection)
         if rsi < 12:
             mo_score += 3.0
         elif rsi < 15:
@@ -309,67 +344,51 @@ class CapitulationReboundStrategy(BaseStrategy):
         else:
             mo_score += 0
 
-        # Expert suggestion B: RSI bullish divergence (core scoring)
+        # RSI bullish divergence (core scoring)
         if check_rsi_divergence(df, 'bullish'):
             mo_score += 2.0
             details['rsi_divergence'] = True
 
-        # Distance from EMA in ATR terms
-        if atr_multiple > 10:
+        # RSI velocity: how fast RSI has dropped over last 10 days
+        rsi_velocity = self._calculate_rsi_velocity(df)
+        details['rsi_velocity'] = rsi_velocity
+
+        if rsi_velocity >= 20:
             mo_score += 2.0
-        elif atr_multiple > 7:
-            mo_score += 1.5 + (atr_multiple - 7) / 3.0 * 0.5
-        elif atr_multiple > 5:
-            mo_score += 1.0 + (atr_multiple - 5) / 2.0 * 0.5
-        else:
-            mo_score += max(0, (atr_multiple - 3) / 2.0)
+        elif rsi_velocity >= 15:
+            mo_score += 1.5 + (rsi_velocity - 15) / 5.0 * 0.5
+        elif rsi_velocity >= 10:
+            mo_score += 1.0 + (rsi_velocity - 10) / 5.0 * 0.5
+        elif rsi_velocity >= 5:
+            mo_score += 0.5 + (rsi_velocity - 5) / 5.0 * 0.5
 
-        return round(min(5.0, mo_score), 2), details
+        # Reversal confirmation bonus (+0.5 for strong signals)
+        if reversal_strong:
+            mo_score += 0.5
+            details['reversal_bonus'] = True
 
-    def _check_rsi_divergence(self, df: pd.DataFrame, direction: str) -> bool:
-        """Check for RSI divergence (Expert suggestion B)."""
-        if len(df) < 20:
-            return False
+        return round(min(5.5, mo_score), 2), details
 
-        # Calculate RSI
+    def _calculate_rsi_velocity(self, df: pd.DataFrame) -> float:
+        """Calculate RSI(14) drop over last 10 days. Positive = capitulation signal."""
+        if len(df) < 25:
+            return 0.0
+
         delta = df['close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-        rs = gain / loss
+        gain = delta.clip(lower=0)
+        loss = -delta.clip(upper=0)
+        avg_gain = gain.rolling(window=14).mean()
+        avg_loss = loss.rolling(window=14).mean()
+        rs = avg_gain / avg_loss
         rsi = 100 - (100 / (1 + rs))
 
-        if direction == 'bearish':
-            # Bearish divergence: price higher high, RSI lower high
-            recent_high_idx = df['high'].tail(10).idxmax()
-            recent_high = df.loc[recent_high_idx, 'high']
+        current_rsi = rsi.iloc[-1]
+        rsi_10d_ago = rsi.iloc[-11] if len(rsi) >= 11 else None
 
-            prev_period = df.loc[df.index < recent_high_idx]
-            if len(prev_period) < 10:
-                return False
+        if rsi_10d_ago is not None and pd.notna(rsi_10d_ago):
+            return max(0.0, float(rsi_10d_ago - current_rsi))
 
-            prev_high = prev_period['high'].tail(20).max()
-            prev_rsi_high = rsi.loc[prev_period.tail(20).index].max()
-            recent_rsi = rsi.loc[recent_high_idx]
-
-            if recent_high > prev_high and recent_rsi < prev_rsi_high:
-                return True
-        else:
-            # Bullish divergence: price lower low, RSI higher low
-            recent_low_idx = df['low'].tail(10).idxmin()
-            recent_low = df.loc[recent_low_idx, 'low']
-
-            prev_period = df.loc[df.index < recent_low_idx]
-            if len(prev_period) < 10:
-                return False
-
-            prev_low = prev_period['low'].tail(20).min()
-            prev_rsi_low = rsi.loc[prev_period.tail(20).index].min()
-            recent_rsi = rsi.loc[recent_low_idx]
-
-            if recent_low < prev_low and recent_rsi > prev_rsi_low:
-                return True
-
-        return False
+        return 0.0
 
     def _calculate_ex(self, atr_ratio: float, gaps: int, df: pd.DataFrame = None, symbol: str = None) -> Tuple[float, Dict]:
         """
@@ -424,19 +443,20 @@ class CapitulationReboundStrategy(BaseStrategy):
 
     def _calculate_vc(self, ind: TechnicalIndicators, df: pd.DataFrame) -> Tuple[float, Dict]:
         """
-        Volume Confirmation dimension (0-4) per documentation.
+        Volume Confirmation dimension (0-5) with extended capitulation tiers.
 
-        Documentation (lines 493-500):
         | Vol / avg20d | Score |
         |--------------|-------|
-        | >5× | 3.0 |
-        | 4-5× | 2.5-3.0 |
-        | 3-4× | 2.0-2.5 |
-        | 2-3× | 1.0-2.0 |
-        | 1.5-2× | 0.3-1.0 |
-        | <1.5× | 0 |
+        | >8x | 4.0 (true capitulation climax) |
+        | 6-8x | 3.5 |
+        | 5-6x | 3.0 |
+        | 4-5x | 2.5-3.0 |
+        | 3-4x | 2.0-2.5 |
+        | 2-3x | 1.0-2.0 |
+        | 1.5-2x | 0.3-1.0 |
+        | <1.5x | 0 |
 
-        Bonus (line 502): +1.0 if CLV>0.65 AND vol>1.5×avg20d
+        Bonus: +1.0 if CLV>0.65 AND vol>1.5x avg20d
         """
         volume_data = ind.indicators.get('volume', {})
         volume_ratio = volume_data.get('volume_ratio', 1.0)
@@ -453,8 +473,13 @@ class CapitulationReboundStrategy(BaseStrategy):
 
         vc_score = 0.0
 
-        # Documentation thresholds (lines 493-500)
-        if volume_ratio > 5:
+        # Extended volume scoring tiers for true capitulation
+        if volume_ratio > 8:
+            vc_score += 4.0
+            details['extreme_volume_climax'] = True
+        elif volume_ratio > 6:
+            vc_score += 3.5
+        elif volume_ratio > 5:
             vc_score += 3.0
         elif volume_ratio > 4:
             vc_score += 2.5 + (volume_ratio - 4) * 0.5
@@ -471,7 +496,7 @@ class CapitulationReboundStrategy(BaseStrategy):
             vc_score += 1.0
             details['capitulation_candle'] = True
 
-        return round(min(4.0, vc_score), 2), details
+        return round(min(5.0, vc_score), 2), details
 
 
     def calculate_entry_exit(
@@ -482,7 +507,12 @@ class CapitulationReboundStrategy(BaseStrategy):
         score: float,
         tier: str
     ) -> Tuple[float, float, float]:
-        """Calculate entry, stop, and target prices for long positions."""
+        """Calculate entry, stop, and target prices for long positions.
+
+        Mean-reversion targets are tiered:
+        - Primary target: EMA8 (quick mean reversion)
+        - Secondary target: EMA21 (stored as self.current_secondary_target)
+        """
         ind = TechnicalIndicators(df)
         ind.calculate_all()
 
@@ -490,11 +520,18 @@ class CapitulationReboundStrategy(BaseStrategy):
         atr = ind.indicators.get('atr', {}).get('atr', current_price * 0.02)
 
         ema = ind.indicators.get('ema', {})
-        ema50 = ema.get('ema50', current_price)
+        ema8 = ema.get('ema8', current_price)
+        ema21 = ema.get('ema21', current_price)
 
         entry = round(current_price, 2)
         stop = round(current_price - atr * self.PARAMS['stop_atr_multiplier'], 2)
-        target = round(ema50, 2)
+        target = round(ema8, 2)
+
+        # Store secondary target for partial exit management
+        self.current_secondary_target = round(ema21, 2)
+
+        # Keep target1 alias for compatibility
+        self.current_target1 = entry
 
         return entry, stop, target
 
@@ -518,17 +555,21 @@ class CapitulationReboundStrategy(BaseStrategy):
         vc_details = vc.details if vc else {}
 
         reasons = [
-            f"Score: {score:.2f}/15 (Tier {tier}-{position_pct*100:.0f}%)",
+            f"Score: {score:.2f}/16.5 (Tier {tier}-{position_pct*100:.0f}%)",
             f"MO:{mo.score:.2f} EX:{ex.score:.2f} VC:{vc.score:.2f}",
             f"RSI: {mo_details.get('rsi', 0):.1f}",
+            f"RSI velocity: {mo_details.get('rsi_velocity', 0):.1f}",
             f"Gaps: {ex_details.get('gaps_5d', 0)}",
         ]
 
         if mo_details.get('rsi_divergence'):
             reasons.append("RSI divergence!")
 
-        if vc_details.get('volume_climax'):
-            reasons.append(f"Volume climax: {vc_details['volume_ratio']:.1f}x")
+        if mo_details.get('reversal_bonus'):
+            reasons.append("Reversal candle confirmed")
+
+        if vc_details.get('extreme_volume_climax'):
+            reasons.append("Extreme volume climax (>8x)!")
 
         if self.vix_data:
             reasons.append(f"VIX: {self.vix_data['current']:.1f}")

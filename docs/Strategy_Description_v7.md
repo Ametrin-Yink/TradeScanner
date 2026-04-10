@@ -1,6 +1,6 @@
 # Strategy Description v8.0
 
-**Version**: 8.0 | **Updated**: 2026-04-09 | **Strategy D updated to v7.1** | **Strategies**: 8 (A-H, A has A1/A2 sub-modes)
+**Version**: 8.0 | **Updated**: 2026-04-09 | **Strategy F updated to v8.0** | **Strategies**: 8 (A-H, A has A1/A2 sub-modes)
 
 ---
 
@@ -9,8 +9,8 @@
 ### Indicators
 
 | Indicator   | Formula                                                      |
-| ----------- | ------------------------------------------------------------ |
-| ATR14       | SMA(TR, 14); TR = max(H−L, \|H−C_prev\|, \|L−C_prev\|)       |
+| ----------- | ------------------------------------------------------------ | -------- | --- | -------- | --- |
+| ATR14       | SMA(TR, 14); TR = max(H−L,                                   | H−C_prev | ,   | L−C_prev | )   |
 | EMA(n)      | C × m + EMA_prev × (1−m); m = 2/(n+1)                        |
 | RSI14       | 100 − 100/(1 + SMA(gain,14)/SMA(loss,14))                    |
 | CLV         | (close − low) / (high − low)                                 |
@@ -192,7 +192,7 @@ A2 triggers when price is still inside base. CP measures price compression only 
 
 ### Entry / Exit
 
-**Entry (A1)**: Price>pivot×1.01, Vol>1.5×avg20d, CLV≥0.65, prefer after 10:30 AM ET  
+**Entry (A1)**: Price>pivot×1.01, Vol>1.5×avg20d, CLV≥0.65, prefer after 10:30 AM ET
 **Entry (A2)**: Entry at platform_high (pivot breakout level). Reject if no volume dry-up (vol_5d/vol_20d ≥0.80)
 
 **Stop**:
@@ -482,8 +482,8 @@ Price action (cap 2.0): shooting star (upper shadow>=2x body, CLV>0.7)=+1.0, lon
 
 ### Entry / Exit
 
-**Entry**: Close<resistance−0.3×ATR, Vol≥1.5×avg20d, CLV≤0.35, not within 5d of earnings  
-**Stop**: `min(resistance_high+0.5×ATR, entry×1.05)`  
+**Entry**: Close<resistance−0.3×ATR, Vol≥1.5×avg20d, CLV≤0.35, not within 5d of earnings
+**Stop**: `min(resistance_high+0.5×ATR, entry×1.05)`
 **Target**: `entry − 2.5 × (stop − entry)`
 
 ---
@@ -579,70 +579,86 @@ Confirmation bonus via 10-day OBV slope (linear regression, 0-1.0):
 
 ### Entry / Exit
 
-**Entry**: Support level confirmed; RSI < 40; within 10% of 60d low; Wyckoff signals preferred  
-**Stop**: `support_low − 0.5 × ATR` (removed 6% fallback)  
+**Entry**: Support level confirmed; RSI < 40; within 10% of 60d low; Wyckoff signals preferred
+**Stop**: `support_low − 0.5 × ATR` (removed 6% fallback)
 **Target**: `entry + 2.5 × (entry − stop)` (cap at EMA50 if within 15%)
 
 ---
 
 ## Strategy F: CapitulationRebound
 
-**Type**: Long | **Regime**: VIX 15–35 | **Max Raw**: 15.0 | **Dimensions**: MO(5) + EX(6) + VC(4)  
+**Type**: Long | **Regime**: VIX 15–35 | **Max Raw**: 16.5 | **Dimensions**: MO(5.5) + EX(6) + VC(5)
 **EXTREME_EXEMPT**: True (exempt from 0.3× scalar)
+
+v8.0 changes: Removed redundant filters (dollar volume, listing days, ADR, basic requirements -- all handled by Phase 0). Removed reversal confirmation as a hard gate (moved to MO bonus only). Replaced EMA distance double-counting in MO with RSI velocity scoring. Removed profit efficiency penalty (dead code). Removed time-based exit. VC max increased to 5.0 with extended volume tiers.
 
 ### Pre-filter
 
-| Filter              | Condition                                               |
-| ------------------- | ------------------------------------------------------- |
-| RSI14               | < 25                                                    |
-| Price vs EMA50      | < EMA50 − 3×ATR                                         |
-| Gaps down OR streak | ≥2 gap-downs in last 5d **OR** ≥5 consecutive down-days |
-| Dollar volume       | > $50M avg20d                                           |
-| Listed              | > 50 days                                               |
-| VIX                 | 15–35 (reject <15; Tier B cap if >35)                   |
+| Filter              | Condition                                                      |
+| ------------------- | -------------------------------------------------------------- |
+| RSI14               | < 25                                                           |
+| Price vs EMA50      | < EMA50 − 3×ATR                                                |
+| Gaps down OR streak | ≥2 gap-downs in last 5d **OR** ≥5 consecutive down-days        |
+| Earnings gap        | Reject single >5% gap-down (likely earnings, not capitulation) |
+| VIX                 | 15–35 (reject <15; Tier B cap if >35)                          |
 
-### MO -- Momentum Overextension (max 5.0)
+Note: Dollar volume, listing days, ADR, and basic volume checks removed from strategy filter -- Phase 0 handles these universally. Reversal confirmation is no longer a gate; extreme conditions alone can qualify.
 
-Code uses ATR multiples for distance scoring, not percentage:
+### MO — Momentum Overextension (max 5.5)
 
-| RSI14 | Score   | Distance below EMA50 (ATR multiples) | Score   |
-| ----- | ------- | ------------------------------------ | ------- |
-| <12   | 3.0     | >10x ATR                             | 2.0     |
-| 12-15 | 2.5-3.0 | 7-10x ATR                            | 1.5-2.0 |
-| 15-18 | 2.0-2.5 | 5-7x ATR                             | 1.0-1.5 |
-| 18-25 | 0.5-2.0 | 3-5x ATR                             | 0-1.0   |
-| >25   | 0       | <3x ATR                              | 0       |
+| RSI14 | Score   |
+| ----- | ------- |
+| <12   | 3.0     |
+| 12–15 | 2.5–3.0 |
+| 15–18 | 2.0–2.5 |
+| 18–25 | 0.5–2.0 |
+| >25   | 0       |
 
-Also: +2.0 for bullish RSI divergence detected.
+| RSI velocity (10d RSI drop) | Score   |
+| --------------------------- | ------- |
+| ≥20 points                  | 2.0     |
+| 15–20 points                | 1.5–2.0 |
+| 10–15 points                | 1.0–1.5 |
+| 5–10 points                 | 0.5–1.0 |
+| <5 points                   | 0       |
+
+RSI velocity is computed from RSI(14) series: `max(0, RSI_10d_ago − current_RSI)`. Measures speed of panic selling -- fast drops indicate capitulation.
+
+Also: +2.0 for bullish RSI divergence detected. +0.5 for strong reversal candle (body majority or outside day).
+
+Total cap: 5.5
+
+Note: EMA distance in ATR terms was previously scored here (up to +2.0) but removed in v8.0 to eliminate double-counting with EX dimension.
 
 ### EX — Extension Level (max 6.0)
 
-| (EMA50 - price) / ATR | Score   | Gap-down days (5d) | Score | Down-day streak | Score |
+| (EMA50 − price) / ATR | Score   | Gap-down days (5d) | Score | Down-day streak | Score |
 | --------------------- | ------- | ------------------ | ----- | --------------- | ----- |
-| >8x                   | 3.0     | >=4                | 2.0   | >=5             | 1.0   |
-| 6-8x                  | 2.0-3.0 | 3                  | 1.5   | 3-4             | 0.5   |
-| 4-6x                  | 1.0-2.0 | 2                  | 1.0   |                 |       |
-| <4x                   | 0-1.0   |                    |       |                 |       |
+| >8×                   | 3.0     | ≥4                 | 2.0   | ≥5              | 1.0   |
+| 6–8×                  | 2.0–3.0 | 3                  | 1.5   | 3–4             | 0.5   |
+| 4–6×                  | 1.0–2.0 | 2                  | 1.0   |                 |       |
+| <4×                   | 0–1.0   |                    |       |                 |       |
 
-### VC — Volume Confirmation (max 4.0)
+### VC — Volume Confirmation (max 5.0)
 
 | Vol / avg20d | Score   |
 | ------------ | ------- |
-| >5×          | 3.0     |
+| >8×          | 4.0     |
+| 6–8×         | 3.5     |
+| 5–6×         | 3.0     |
 | 4–5×         | 2.5–3.0 |
 | 3–4×         | 2.0–2.5 |
 | 2–3×         | 1.0–2.0 |
 | 1.5–2×       | 0.3–1.0 |
 | <1.5×        | 0       |
 
-Bonus: +1.0 if CLV>0.65 AND vol>1.5×avg20d (capitulation candle confirmation)
+Bonus: +1.0 if CLV>0.65 AND vol>1.5×avg20d (capitulation candle confirmation). Total cap: 5.0.
 
 ### Entry / Exit
 
-**Entry**: EOD close only  
-**Stop**: `entry − 2.0×ATR`  
-**Target**: EMA50 (mean reversion)  
-**Time stop**: Exit if not +5% toward target within 10 days
+**Entry**: EOD close price
+**Stop**: `entry − 2.0×ATR`
+**Target**: EMA8 (quick mean reversion), EMA21 as secondary target for partial exits
 
 ---
 
@@ -714,17 +730,17 @@ Sector alignment bonus: +1.0 if sector ETF confirms gap direction
 
 ### Entry / Exit
 
-**Entry (Long)**: Break of consolidation high; Vol≥1.5×avg20d  
-**Entry (Short)**: Break of consolidation low; Vol≥1.5×avg20d  
-**Stop (Long)**: `max(consolidation_low−0.5×ATR, gap_open×0.95)`  
-**Stop (Short)**: `min(consolidation_high+0.5×ATR, gap_open×1.05)`  
+**Entry (Long)**: Break of consolidation high; Vol≥1.5×avg20d
+**Entry (Short)**: Break of consolidation low; Vol≥1.5×avg20d
+**Stop (Long)**: `max(consolidation_low−0.5×ATR, gap_open×0.95)`
+**Stop (Short)**: `min(consolidation_high+0.5×ATR, gap_open×1.05)`
 **Target**: `entry ± 2.5 × (entry − stop)`
 
 ---
 
 ## Strategy H: RelativeStrengthLong
 
-**Type**: Long | **Regime**: Bear, neutral | **Max Raw**: 13.0 | **Dimensions**: RD(4) + SH(4) + CQ(3) + VC(2)  
+**Type**: Long | **Regime**: Bear, neutral | **Max Raw**: 13.0 | **Dimensions**: RD(4) + SH(4) + CQ(3) + VC(2)
 **EXTREME_EXEMPT**: True
 
 ### Pre-filter
@@ -783,7 +799,7 @@ Max possible: 2.5 (EMA8 + EMA21 full hold) + 1.0 baseline = 3.5, but capped by d
 
 ### Entry / Exit
 
-**Entry**: RS≥80th 5+ days, Price>EMA21 positive slope, Vol≥1.2×avg20d; prefer SPY down-day  
-**Stop**: `max(EMA50×0.99, entry×0.93)`  
-**Target**: `entry + 3.0 × (entry − stop)`  
+**Entry**: RS≥80th 5+ days, Price>EMA21 positive slope, Vol≥1.2×avg20d; prefer SPY down-day
+**Stop**: `max(EMA50×0.99, entry×0.93)`
+**Target**: `entry + 3.0 × (entry − stop)`
 **Regime exit**: If SPY crosses above EMA21 (bear→neutral), move to Stage 3 trailing stop

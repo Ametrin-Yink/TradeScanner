@@ -89,9 +89,11 @@ class TestCapitulationReboundDocumentation:
         assert 'df[\'close\'].iloc[-1]' in source or "df['close']" in source, \
             "Entry should use daily close price from dataframe"
 
-        # Verify target uses EMA50
-        assert 'ema50' in source.lower(), \
-            "Target should be based on EMA50"
+        # Verify target uses EMA8 (quick mean reversion) with EMA21 as secondary
+        assert 'ema8' in source.lower(), \
+            "Target should be based on EMA8 (quick mean reversion)"
+        assert 'ema21' in source.lower() or 'ema50' in source.lower(), \
+            "Should reference a secondary/longer-term EMA for partial exits"
 
         # Verify ATR-based stop
         assert 'atr' in source.lower(), \
@@ -117,11 +119,11 @@ class TestCapitulationReboundDocumentation:
         import inspect
         source = inspect.getsource(CapitulationReboundStrategy._calculate_vc)
 
-        # Verify volume climax check
-        assert 'volume_climax' in source.lower(), \
+        # Verify volume climax check (extended tiers for true capitulation)
+        assert 'volume_climax' in source.lower() or 'extreme_volume_climax' in source.lower(), \
             "Code should check for volume climax"
-        assert 'volume_climax_threshold' in source, \
-            "Code should use volume_climax_threshold parameter"
+        assert 'volume_ratio' in source, \
+            "Code should use volume ratio for scoring"
 
     def _extract_capitulation_section(self, content):
         """Extract the CapitulationRebound section from the markdown."""
@@ -175,14 +177,14 @@ class TestCapitulationReboundEntryCalculation:
             mock_ind_instance = MagicMock()
             mock_ind_instance.indicators = {
                 'atr': {'atr': current_price * 0.02},
-                'ema': {'ema50': current_price * 0.95}
+                'ema': {'ema8': current_price * 0.98, 'ema21': current_price * 0.93, 'ema50': current_price * 0.95}
             }
             mock_ind.return_value = mock_ind_instance
 
             dimensions = [
                 ScoringDimension(name='MO', score=3.0, max_score=5.0, details={}),
                 ScoringDimension(name='EX', score=2.0, max_score=6.0, details={}),
-                ScoringDimension(name='VC', score=3.0, max_score=4.0, details={}),
+                ScoringDimension(name='VC', score=3.0, max_score=5.0, details={}),
             ]
 
             entry, stop, target = mock_strategy.calculate_entry_exit(
@@ -194,33 +196,90 @@ class TestCapitulationReboundEntryCalculation:
                 f"Entry {entry} should equal daily close {round(current_price, 2)}"
 
     def test_target_is_ema50(self, mock_strategy, sample_df):
-        """Verify target equals EMA50."""
+        """Verify target equals EMA8 (quick mean reversion)."""
         from core.strategies.capitulation_rebound import ScoringDimension
 
         current_price = sample_df['close'].iloc[-1]
-        ema50 = current_price * 0.95  # Mock EMA50 below price
+        ema8 = current_price * 0.98  # Mock EMA8 below price
 
         with patch('core.strategies.capitulation_rebound.TechnicalIndicators') as mock_ind:
             mock_ind_instance = MagicMock()
             mock_ind_instance.indicators = {
                 'atr': {'atr': current_price * 0.02},
-                'ema': {'ema50': ema50}
+                'ema': {'ema8': ema8, 'ema21': current_price * 0.93, 'ema50': current_price * 0.90}
             }
             mock_ind.return_value = mock_ind_instance
 
             dimensions = [
                 ScoringDimension(name='MO', score=3.0, max_score=5.0, details={}),
                 ScoringDimension(name='EX', score=2.0, max_score=6.0, details={}),
-                ScoringDimension(name='VC', score=3.0, max_score=4.0, details={}),
+                ScoringDimension(name='VC', score=3.0, max_score=5.0, details={}),
             ]
 
             entry, stop, target = mock_strategy.calculate_entry_exit(
                 'AAPL', sample_df, dimensions, 8.0, 'B'
             )
 
-            # Target should be EMA50 (rounded to 2 decimals)
-            assert abs(target - round(ema50, 2)) < 0.01, \
-                f"Target {target} should equal EMA50 {round(ema50, 2)}"
+            # Target should be EMA8 (rounded to 2 decimals)
+            assert abs(target - round(ema8, 2)) < 0.01, \
+                f"Target {target} should equal EMA8 {round(ema8, 2)}"
+
+
+class TestCapitulationReboundV8Changes:
+    """Test v8.0 refactor changes: time exit removed, RSI velocity, simplified filter."""
+
+    def test_time_exit_removed(self):
+        """Verify check_time_exit method has been removed."""
+        from core.strategies.capitulation_rebound import CapitulationReboundStrategy
+        assert not hasattr(CapitulationReboundStrategy, 'check_time_exit'), \
+            "check_time_exit should be removed"
+
+    def test_filter_passes_through(self):
+        """Verify filter() always returns True (all gates in _prefilter_symbol)."""
+        from core.strategies.capitulation_rebound import CapitulationReboundStrategy
+        strategy = CapitulationReboundStrategy.__new__(CapitulationReboundStrategy)
+        assert strategy.filter('TEST', pd.DataFrame({'close': [1]})) is True
+
+    def test_reversal_not_in_prefilter(self):
+        """Verify _prefilter_symbol does not reject based on reversal confirmation."""
+        from core.strategies.capitulation_rebound import CapitulationReboundStrategy
+        import inspect
+        source = inspect.getsource(CapitulationReboundStrategy._prefilter_symbol)
+        assert '_check_reversal_confirmation' not in source, \
+            "_prefilter_symbol should not call _check_reversal_confirmation"
+
+    def test_rsi_velocity_calculates(self):
+        """Verify _calculate_rsi_velocity returns positive value for fast drops."""
+        from core.strategies.capitulation_rebound import CapitulationReboundStrategy
+
+        # Create a DataFrame with realistic price movement followed by capitulation
+        dates = pd.date_range('2024-01-01', periods=40, freq='D')
+        # First 25 days: gradual uptrend (RSI in normal range)
+        prices = list(range(90, 115)) + [105, 95, 88, 80, 73, 68, 65, 62, 60, 58, 57, 56, 55, 54, 53]
+        df = pd.DataFrame({
+            'open': [p - 0.5 for p in prices],
+            'high': [p + 1 for p in prices],
+            'low': [p - 1.5 for p in prices],
+            'close': prices,
+            'volume': [3_000_000] * 40
+        }, index=dates)
+
+        strategy = CapitulationReboundStrategy.__new__(CapitulationReboundStrategy)
+        velocity = strategy._calculate_rsi_velocity(df)
+
+        # RSI should have dropped significantly during capitulation
+        assert velocity > 5, \
+            f"RSI velocity should be positive for fast drop, got {velocity:.1f}"
+
+    def test_mo_uses_rsi_velocity_not_ema_distance(self):
+        """Verify _calculate_mo uses RSI velocity instead of EMA distance."""
+        from core.strategies.capitulation_rebound import CapitulationReboundStrategy
+        import inspect
+        source = inspect.getsource(CapitulationReboundStrategy._calculate_mo)
+        assert 'rsi_velocity' in source, \
+            "_calculate_mo should reference rsi_velocity"
+        assert 'atr_multiple' not in source, \
+            "_calculate_mo should not reference atr_multiple"
 
 
 if __name__ == '__main__':
