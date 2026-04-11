@@ -254,13 +254,13 @@ class PullbackEntryStrategy(BaseStrategy):
             }
         ))
 
-        # Dimension 2: Retracement Structure (RC) — 0-8 points
+        # Dimension 2: Retracement Structure (RC) — 0-6 points (rebalanced from 8)
         rc_data = ind.calculate_retracement_structure()
-        rc_score = rc_data['total_score']
+        rc_score = rc_data['total_score'] * 0.75  # Scale 8->6
         dimensions.append(ScoringDimension(
             name='RC',
             score=rc_score,
-            max_score=8.0,
+            max_score=6.0,
             details={
                 'tightness_score': rc_data.get('tightness_score', 0),
                 'support_score': rc_data.get('support_score', 0),
@@ -294,7 +294,7 @@ class PullbackEntryStrategy(BaseStrategy):
             }
         ))
 
-        # Dimension 4: Environment Bonus - +2/-10 points (v7.0: momentum persistence replaces gap veto)
+        # Dimension 4: Environment Bonus - 0-4 points (rebalanced from 2)
         bonus_score = 0
 
         # v5.0: Sector leadership bonus (0-1.0) based on sector ETF performance
@@ -313,7 +313,7 @@ class PullbackEntryStrategy(BaseStrategy):
         dimensions.append(ScoringDimension(
             name='BONUS',
             score=bonus_score,
-            max_score=2.0,
+            max_score=4.0,
             details={
                 'sector': sector,
                 'sector_leadership_score': sector_leadership_score,

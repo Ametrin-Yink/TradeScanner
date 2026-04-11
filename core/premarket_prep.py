@@ -271,7 +271,7 @@ class PreMarketPrep:
         logger.info(f"  Criteria: market cap >= $2B, price ${self.MIN_PRICE}-{self.MAX_PRICE}, volume >= {self.MIN_AVG_VOLUME:,}")
 
         # Batch queries instead of N+1
-        market_data_by_symbol = self.db.get_market_data_latest(stocks, limit=50)
+        market_data_by_symbol = self.db.get_market_data_latest(stocks, limit=280)
         stock_info_batch = self.db.get_stock_info_batch(stocks)
 
         qualifying_stocks = []

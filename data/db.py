@@ -1,9 +1,11 @@
 """SQLite database operations."""
+import atexit
 import sqlite3
 import json
 import pickle
 import logging
 import threading
+import weakref
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional, Any
@@ -14,6 +16,15 @@ from config.settings import DATA_DIR
 
 logger = logging.getLogger(__name__)
 
+# Track all Database instances for cleanup at exit
+_instances: weakref.WeakSet = weakref.WeakSet()
+
+def _close_all_instances():
+    for inst in list(_instances):
+        inst.close()
+
+atexit.register(_close_all_instances)
+
 DB_PATH = DATA_DIR / "market_data.db"
 
 class Database:
@@ -23,17 +34,36 @@ class Database:
         self.db_path = db_path
         self._local = threading.local()
         self._init_db()
+        _instances.add(self)
+
+    def close(self):
+        """Close the thread-local database connection."""
+        if hasattr(self._local, 'conn') and self._local.conn is not None:
+            self._local.conn.close()
+            self._local.conn = None
+
+    def __del__(self):
+        """Ensure connection is closed on garbage collection."""
+        self.close()
 
     def _init_db(self):
-        with sqlite3.connect(self.db_path) as conn:
+        conn = sqlite3.connect(self.db_path)
+        try:
             conn.executescript(SCHEMA)
             self._migrate_db(conn)
+            conn.commit()
+        finally:
+            conn.close()
         self._add_performance_indexes()
 
     def _add_performance_indexes(self):
-        with sqlite3.connect(self.db_path) as conn:
+        conn = sqlite3.connect(self.db_path)
+        try:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_market_data_symbol ON market_data(symbol)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_tier1_cache_date ON tier1_cache(cache_date)")
+            conn.commit()
+        finally:
+            conn.close()
 
     def _migrate_db(self, conn: sqlite3.Connection):
         """Migrate database schema if needed."""

@@ -309,8 +309,8 @@ class AccumulationBottomStrategy(BaseStrategy):
         if current_price > ema8 and ema8 < ema21:
             return 2.0
 
-        # Downtrend still intact - minimal score
-        return 0.5
+        # Downtrend still intact but showing exhaustion - minimal score bumped to 1.0
+        return 1.0
 
     def _calculate_al(self, df: pd.DataFrame) -> float:
         """Accumulation Level quality - touches, interval, width (v7.0).
@@ -383,8 +383,8 @@ class AccumulationBottomStrategy(BaseStrategy):
         |-----------------------------------|-------|
         | > 0.30                           | 3.0   |
         | 0.15-0.30                        | 1.5-3.0 (linear) |
-        | 0.05-0.15                        | 0.5-1.5 (linear) |
-        | 0-0.05                           | 0 |
+        | 0.03-0.15                        | 0.5-1.5 (linear) |
+        | 0-0.03                           | 0 |
         | < 0                              | 0 (distribution) |
 
         Confirmation bonus (0-1.0):
@@ -423,8 +423,8 @@ class AccumulationBottomStrategy(BaseStrategy):
             div_score = 3.0
         elif divergence >= 0.15:
             div_score = 1.5 + (divergence - 0.15) / 0.15 * 1.5
-        elif divergence >= 0.05:
-            div_score = 0.5 + (divergence - 0.05) / 0.10 * 1.0
+        elif divergence >= 0.03:
+            div_score = 0.5 + (divergence - 0.03) / 0.12 * 1.0
         else:
             div_score = 0.0
 

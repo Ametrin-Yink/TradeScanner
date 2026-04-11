@@ -262,10 +262,12 @@ class SupportBounceStrategy(BaseStrategy):
 
         # Dimension 2: Volume Dynamics (VD) - 5 points max
         if is_falling_knife:
-            logger.debug(f"{symbol}: Volume trap veto (Vol:{volume_ratio:.2f}x, CLV:{clv:.2f})")
-            return []
-
-        vd_score, vd_details = self._calculate_vd(volume_ratio, df)
+            logger.debug(f"{symbol}: Volume trap penalty (Vol:{volume_ratio:.2f}x, CLV:{clv:.2f})")
+            # Penalize instead of veto — score capped at 1.0 instead of full calculation
+            vd_score, vd_details = 0.0, {'volume_trap_penalty': True, 'volume_ratio': volume_ratio, 'clv': clv}
+        else:
+            vd_score, vd_details = self._calculate_vd(volume_ratio, df)
+            vd_score = min(vd_score, 5.0)
         dimensions.append(ScoringDimension(
             name='VD',
             score=vd_score,

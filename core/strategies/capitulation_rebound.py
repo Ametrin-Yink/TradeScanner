@@ -180,6 +180,7 @@ class CapitulationReboundStrategy(BaseStrategy):
 
         yesterday_high = yesterday['high']
         yesterday_low = yesterday['low']
+        yesterday_close = yesterday['close']
 
         body_size = abs(today_close - today_open)
         lower_wick = min(today_open, today_close) - today_low
@@ -454,9 +455,10 @@ class CapitulationReboundStrategy(BaseStrategy):
         | 3-4x | 2.0-2.5 |
         | 2-3x | 1.0-2.0 |
         | 1.5-2x | 0.3-1.0 |
-        | <1.5x | 0 |
+        | 1.2-1.5x | 0.1-0.3 (gentle entry) |
+        | <1.2x | 0 |
 
-        Bonus: +1.0 if CLV>0.65 AND vol>1.5x avg20d
+        Bonus: +1.0 if CLV>0.65 AND vol>1.2x avg20d
         """
         volume_data = ind.indicators.get('volume', {})
         volume_ratio = volume_data.get('volume_ratio', 1.0)
@@ -489,10 +491,12 @@ class CapitulationReboundStrategy(BaseStrategy):
             vc_score += 1.0 + (volume_ratio - 2) * 1.0
         elif volume_ratio > 1.5:
             vc_score += 0.3 + (volume_ratio - 1.5) * 1.4
-        # else: <1.5x = 0
+        elif volume_ratio > 1.2:
+            vc_score += 0.1 + (volume_ratio - 1.2) / 0.3 * 0.2
+        # else: <1.2x = 0
 
-        # Capitulation candle bonus (line 502): +1.0 if CLV>0.65 AND vol>1.5x
-        if clv > 0.65 and volume_ratio > 1.5:
+        # Capitulation candle bonus (line 502): +1.0 if CLV>0.65 AND vol>1.2x
+        if clv > 0.65 and volume_ratio > 1.2:
             vc_score += 1.0
             details['capitulation_candle'] = True
 
