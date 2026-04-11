@@ -58,8 +58,29 @@ class Database:
             logger.info("Migrating stocks table: adding earnings_fetched_at column")
             conn.execute("ALTER TABLE stocks ADD COLUMN earnings_fetched_at TEXT")
 
+        if 'shares_outstanding' not in columns:
+            logger.info("Migrating stocks table: adding shares_outstanding column")
+            conn.execute("ALTER TABLE stocks ADD COLUMN shares_outstanding REAL")
+
+        if 'shares_outstanding_date' not in columns:
+            logger.info("Migrating stocks table: adding shares_outstanding_date column")
+            conn.execute("ALTER TABLE stocks ADD COLUMN shares_outstanding_date TEXT")
+
         # Migrate tier1_cache table for v5.0/v7.0 columns
         self._migrate_tier1_cache(conn)
+
+        # Create regime_cache table if not exists
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS regime_cache (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                regime TEXT NOT NULL,
+                allocation TEXT NOT NULL,
+                ai_regime TEXT,
+                ai_confidence INTEGER,
+                ai_reasoning TEXT,
+                cache_date TEXT
+            )
+        """)
 
     def _migrate_tier1_cache(self, conn: sqlite3.Connection):
         """Add v5.0/v7.0/v7.1 columns to tier1_cache table."""
@@ -297,6 +318,8 @@ class Database:
         Returns:
             Dictionary of metrics or None if not found
         """
+        import json
+
         with self.get_connection() as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.execute(
@@ -308,7 +331,16 @@ class Database:
             if row is None:
                 return None
 
-            return dict(row)
+            data = dict(row)
+            # Parse JSON TEXT columns back to lists
+            for col in ('supports', 'resistances'):
+                val = data.get(col)
+                if isinstance(val, str):
+                    try:
+                        data[col] = json.loads(val)
+                    except (json.JSONDecodeError, TypeError):
+                        data[col] = []
+            return data
 
     def get_all_tier1_cache(self) -> Dict[str, Dict[str, Any]]:
         """Retrieve all Tier 1 cache metrics.
@@ -316,15 +348,57 @@ class Database:
         Returns:
             Dict mapping symbol to metrics
         """
+        import json
+
         with self.get_connection() as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.execute("SELECT * FROM tier1_cache")
 
             result = {}
             for row in cursor.fetchall():
-                result[row['symbol']] = dict(row)
+                data = dict(row)
+                # Parse JSON TEXT columns back to lists
+                for col in ('supports', 'resistances'):
+                    val = data.get(col)
+                    if isinstance(val, str):
+                        try:
+                            data[col] = json.loads(val)
+                        except (json.JSONDecodeError, TypeError):
+                            data[col] = []
+                result[row['symbol']] = data
 
             return result
+
+    def save_regime(self, regime: str, allocation: Dict, ai_regime: str = None,
+                    ai_confidence: int = None, ai_reasoning: str = None):
+        """Save Phase 1 regime result for Phase 2 to load."""
+        import json
+        with self.get_connection() as conn:
+            conn.execute("""
+                INSERT INTO regime_cache (id, regime, allocation, ai_regime,
+                                         ai_confidence, ai_reasoning, cache_date)
+                VALUES (1, ?, ?, ?, ?, ?, date('now'))
+                ON CONFLICT(id) DO UPDATE SET
+                    regime=excluded.regime, allocation=excluded.allocation,
+                    ai_regime=excluded.ai_regime, ai_confidence=excluded.ai_confidence,
+                    ai_reasoning=excluded.ai_reasoning, cache_date=excluded.cache_date
+            """, (regime, json.dumps(allocation), ai_regime, ai_confidence, ai_reasoning))
+
+    def load_regime(self) -> Optional[Dict[str, Any]]:
+        """Load Phase 1 regime result. Returns None if Phase 1 hasn't run."""
+        import json
+        with self.get_connection() as conn:
+            row = conn.execute("SELECT * FROM regime_cache WHERE id = 1").fetchone()
+            if row is None:
+                return None
+            return {
+                'regime': row[1],
+                'allocation': json.loads(row[2]),
+                'ai_regime': row[3],
+                'ai_confidence': row[4],
+                'ai_reasoning': row[5],
+                'cache_date': row[6],
+            }
 
     def get_market_data_latest(self, symbols: List[str], limit: int = 20) -> Dict[str, List]:
         """Single query: latest N rows per symbol for all symbols."""
@@ -629,6 +703,35 @@ class Database:
                 (market_cap, symbol)
             )
 
+    def update_shares_outstanding(self, symbol: str, shares: float, date_str: str):
+        """Update shares outstanding for a stock.
+
+        Args:
+            symbol: Stock symbol
+            shares: Number of shares outstanding
+            date_str: ISO date string when fetched
+        """
+        with self.get_connection() as conn:
+            conn.execute(
+                "UPDATE stocks SET shares_outstanding = ?, shares_outstanding_date = ? WHERE symbol = ?",
+                (shares, date_str, symbol)
+            )
+
+    def update_market_cap_from_shares(self, symbol: str, shares: float, close_price: float):
+        """Recompute market_cap = shares_outstanding × close_price.
+
+        Args:
+            symbol: Stock symbol
+            shares: Number of shares outstanding
+            close_price: Latest closing price
+        """
+        if shares and close_price:
+            with self.get_connection() as conn:
+                conn.execute(
+                    "UPDATE stocks SET market_cap = ? WHERE symbol = ?",
+                    (shares * close_price, symbol)
+                )
+
     def get_stock_earnings_date(self, symbol: str) -> Optional[str]:
         """Get cached next earnings date for a stock.
 
@@ -719,20 +822,21 @@ class Database:
             return [row[0] for row in cursor.fetchall()]
 
     def get_active_stocks_min_market_cap(self, min_market_cap: float = 2e9) -> List[str]:
-        """Get active stocks with market cap >= minimum.
+        """Get active stocks with market cap >= minimum AND Tier 1 cache available.
 
         Args:
             min_market_cap: Minimum market cap in USD (default $2B)
 
         Returns:
-            List of stock symbols meeting criteria
+            List of stock symbols meeting criteria with cached data
         """
         with self.get_connection() as conn:
             cursor = conn.execute(
-                """SELECT symbol FROM stocks
-                WHERE category = 'stocks'
-                AND is_active = 1
-                AND (market_cap >= ? OR market_cap IS NULL)""",
+                """SELECT DISTINCT s.symbol FROM stocks s
+                INNER JOIN tier1_cache tc ON tc.symbol = s.symbol
+                WHERE s.category = 'stocks'
+                AND s.is_active = 1
+                AND (s.market_cap >= ? OR s.market_cap IS NULL)""",
                 (min_market_cap,)
             )
             return [row[0] for row in cursor.fetchall()]

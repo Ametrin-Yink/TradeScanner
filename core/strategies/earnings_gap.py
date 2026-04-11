@@ -401,7 +401,7 @@ class EarningsGapStrategy(BaseStrategy):
             risk = stop - entry
             target = round(entry - risk * 2.5, 2)
 
-        return entry, stop, target
+        return entry, stop, target, ""
 
     def build_match_reasons(
         self,

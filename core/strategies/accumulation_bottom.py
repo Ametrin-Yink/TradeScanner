@@ -591,10 +591,10 @@ class AccumulationBottomStrategy(BaseStrategy):
 
     def calculate_entry_exit(self, symbol: str, df: pd.DataFrame,
                             dimensions: List[ScoringDimension],
-                            score: float, tier: str) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+                            score: float, tier: str) -> Tuple[Optional[float], Optional[float], Optional[float], str]:
         """Calculate entry, stop, target for long position.
 
-        DOCUMENTATION: "CLV >= 0.60 for long entry"
+        DOCUMENTATION: "CLV >= 0.60 for long entry" (recommendation, not gate)
         """
         current_price = df['close'].iloc[-1]
         ind = TechnicalIndicators(df)
@@ -603,18 +603,20 @@ class AccumulationBottomStrategy(BaseStrategy):
         level = self._get_support_level(df)
         support_low = level['low'] if level else df['low'].tail(20).min()
 
-        # DOCUMENTATION: CLV >= 0.60 for long entry
+        # DOCUMENTATION: CLV >= 0.60 for long entry (recommendation)
         clv = (current_price - df['low'].iloc[-1]) / (df['high'].iloc[-1] - df['low'].iloc[-1])
+        entry_warnings = []
         if clv < 0.60:
-            logger.debug(f"ACC_REJ: {symbol} - CLV {clv:.2f} < 0.60")
-            return None, None, None
+            entry_warnings.append(f"CLV {clv:.2f} < 0.60")
+            logger.debug(f"ACC_WARN: {symbol} - CLV {clv:.2f} < 0.60")
 
         entry = round(current_price, 2)
         stop = round(support_low - 0.5 * atr, 2)
         risk = entry - stop
         target = round(entry + risk * 2.5, 2)
 
-        return entry, stop, target
+        warning = "; ".join(entry_warnings) if entry_warnings else ""
+        return entry, stop, target, warning
 
     def build_match_reasons(self, symbol: str, df: pd.DataFrame,
                            dimensions: List[ScoringDimension],

@@ -815,7 +815,7 @@ class SupportBounceStrategy(BaseStrategy):
 
         entry = round(entry, 2)
 
-        return entry, stop, target
+        return entry, stop, target, ""
 
     def build_match_reasons(
         self,

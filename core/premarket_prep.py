@@ -113,6 +113,10 @@ class PreMarketPrep:
             logger.warning(f"  Failed: {fetch_stats['failed']} symbols")
             errors.extend(fetch_stats['errors'])
 
+        # Step 3b: Recompute market cap from shares_outstanding × latest_close
+        logger.info("\n[3b/7] Recomputing market cap from shares × price...")
+        self._recompute_market_caps()
+
         # Step 4: Apply pre-filter (market cap, price, volume)
         logger.info("\n[4/6] Applying pre-filter criteria...")
         prefilter_stats = self._apply_prefilter()
@@ -124,17 +128,17 @@ class PreMarketPrep:
         logger.info("\n[5/6] Updating earnings dates...")
         self._update_earnings_dates(qualifying_stocks)
 
-        # Step 6: Calculate Tier 1 universal metrics
-        logger.info("\n[6/7] Calculating Tier 1 universal metrics...")
+        # Step 5: Calculate Tier 1 universal metrics
+        logger.info("\n[5/7] Calculating Tier 1 universal metrics...")
         tier1_count = self._calculate_tier1_cache(qualifying_stocks)
         logger.info(f"✓ Tier 1 cache calculated: {tier1_count} symbols")
 
-        # Step 6b: Update RS percentiles across universe
-        logger.info("\n[6b/7] Updating RS percentiles...")
+        # Step 5b: Update RS percentiles across universe
+        logger.info("\n[5b/7] Updating RS percentiles...")
         self.update_rs_percentiles()
 
-        # Step 7: Pre-calculate ETF data (market/sector ETFs)
-        logger.info("\n[7/7] Pre-calculating ETF data...")
+        # Step 6: Pre-calculate ETF data (market/sector ETFs)
+        logger.info("\n[6/7] Pre-calculating ETF data...")
         etf_prep = ETFPreCalculator(db=self.db)
         etf_cache = etf_prep.calculate_all_etfs()
         logger.info(f"✓ ETF pre-calculation complete: {len(etf_cache)} ETFs cached")
@@ -267,7 +271,7 @@ class PreMarketPrep:
         logger.info(f"  Criteria: market cap >= $2B, price ${self.MIN_PRICE}-{self.MAX_PRICE}, volume >= {self.MIN_AVG_VOLUME:,}")
 
         # Batch queries instead of N+1
-        market_data_by_symbol = self.db.get_market_data_latest(stocks, limit=20)
+        market_data_by_symbol = self.db.get_market_data_latest(stocks, limit=50)
         stock_info_batch = self.db.get_stock_info_batch(stocks)
 
         qualifying_stocks = []
@@ -277,7 +281,7 @@ class PreMarketPrep:
 
         for symbol in stocks:
             rows = market_data_by_symbol.get(symbol, [])
-            if len(rows) < 5:
+            if len(rows) < 200:
                 continue
 
             latest_price = rows[0]['close']
@@ -316,8 +320,41 @@ class PreMarketPrep:
             'total_stocks': total_stocks
         }
 
+    def _recompute_market_caps(self):
+        """Recompute market_cap = shares_outstanding × latest_close_price for all stocks.
+
+        Shares outstanding changes rarely (stock splits, buybacks), so we compute
+        market cap from shares × price instead of calling yfinance.info daily.
+        """
+        stocks = self.universe_manager.get_stocks()
+        # Single query: latest close per symbol
+        market_data = self.db.get_market_data_latest(stocks, limit=1)
+
+        updated = 0
+        with self.db.get_connection() as conn:
+            for sym in stocks:
+                rows = market_data.get(sym, [])
+                if not rows:
+                    continue
+                close = rows[0]['close']
+                row = conn.execute(
+                    "SELECT shares_outstanding FROM stocks WHERE symbol = ?",
+                    (sym,)
+                ).fetchone()
+                if row and row[0]:
+                    conn.execute(
+                        "UPDATE stocks SET market_cap = ? WHERE symbol = ?",
+                        (row[0] * close, sym)
+                    )
+                    updated += 1
+
+        logger.info(f"  Recomputed market cap for {updated}/{len(stocks)} stocks")
+
     def _update_earnings_dates(self, symbols: List[str]):
         """Update earnings dates for stocks with expired/missing cache.
+
+        Also fetches shares outstanding during this call to spread 2,895
+        API calls across the month instead of batching on one day.
 
         Uses ticker.calendar (4 quarters only) instead of
         ticker.earnings_dates (full history) to reduce memory usage.
@@ -334,13 +371,13 @@ class PreMarketPrep:
             if not cached_date:
                 needs_update.append(symbol)
             else:
-                # Check if earnings has passed
                 try:
                     cached_dt = datetime.fromisoformat(cached_date).date()
-                    if cached_dt < today:
+                    # Refetch if earnings has passed OR cache is >7 days old
+                    if cached_dt < today or (today - cached_dt).days > 7:
                         needs_update.append(symbol)
                 except:
-                    needs_update.append(symbol)  # Invalid date format, refetch
+                    needs_update.append(symbol)
 
         if not needs_update:
             logger.info("  All earnings dates up to date")
@@ -363,6 +400,18 @@ class PreMarketPrep:
             def fetch_earnings_for_symbol(symbol):
                 try:
                     ticker = yf.Ticker(symbol)
+
+                    # Fetch shares outstanding (piggyback on earnings update)
+                    try:
+                        info = ticker.info
+                        if info:
+                            shares = info.get('sharesOutstanding') or info.get('floatShares')
+                            if shares and shares > 0:
+                                today_str = datetime.now().date().isoformat()
+                                self.db.update_shares_outstanding(symbol, float(shares), today_str)
+                    except:
+                        pass
+
                     calendar = ticker.calendar
 
                     earnings_date = None
@@ -455,7 +504,7 @@ class PreMarketPrep:
                 try:
                     # Get market data from database
                     df = self._get_symbol_data(symbol)
-                    if df is None or len(df) < 50:
+                    if df is None or len(df) < 200:
                         continue
 
                     # Calculate Tier 1 metrics (earnings already cached in Step 5)

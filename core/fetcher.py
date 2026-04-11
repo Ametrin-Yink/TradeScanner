@@ -332,96 +332,94 @@ class DataFetcher:
         interval: str = "1d",
         use_cache: bool = True
     ) -> Dict[str, pd.DataFrame]:
-        """
-        Fetch data for multiple stocks with incremental updates.
+        """Fetch data for multiple stocks using batch yf.download.
 
-        Uses batch yf.download for symbols without cache, and incremental
-        fetch for symbols with existing cached data.
+        All symbols are fetched via yf.download() batch calls (50 per batch).
+        Results are merged with DB history and truncated to 280 trading days.
 
         Args:
             symbols: List of stock symbols
-            period: Data period (for non-cached fetches)
+            period: Data period (for new symbols without DB data)
             interval: Data interval
-            use_cache: Whether to use cached data
+            use_cache: Ignored - all symbols use batch download
 
         Returns:
             Dict mapping symbol to DataFrame
         """
         results = {}
         failed_symbols = []
+        batch_size = 50
 
-        logger.info(f"Fetching data for {len(symbols)} symbols (cache enabled: {use_cache})")
+        logger.info(f"Fetching data for {len(symbols)} symbols via batch download")
 
-        if use_cache:
-            # Split into cached vs non-cached
-            no_cache_symbols = []
-            has_cache_symbols = []
+        for i in range(0, len(symbols), batch_size):
+            batch = symbols[i:i + batch_size]
+            batch_num = i // batch_size + 1
+            total_batches = (len(symbols) + batch_size - 1) // batch_size
+            logger.info(f"Batch {batch_num}/{total_batches}: {len(batch)} symbols")
 
-            for sym in symbols:
-                cached_df, latest_date = self._get_cached_data(sym)
-                if cached_df is not None and latest_date is not None:
-                    has_cache_symbols.append((sym, cached_df, latest_date))
+            batch_results = self._download_batch_yf(batch, period="5d", interval=interval)
+
+            for sym, df in batch_results.items():
+                if df is not None and not df.empty:
+                    # Merge with DB history
+                    merged = self._merge_batch_with_db_cache(sym, df)
+                    self._save_to_db(sym, merged, incremental=False)
+                    results[sym] = df  # Return fresh data, not merged
                 else:
-                    no_cache_symbols.append(sym)
+                    failed_symbols.append(sym)
 
-            # Batch download for symbols without cache
-            if no_cache_symbols:
-                logger.info(f"Batch downloading {len(no_cache_symbols)} symbols without cache")
-                batch_size = 50
-                for i in range(0, len(no_cache_symbols), batch_size):
-                    batch = no_cache_symbols[i:i + batch_size]
-                    logger.info(f"Batch download: {len(batch)} symbols")
-                    batch_results = self._download_batch_yf(batch, period="13mo", interval=interval)
+            if i + batch_size < len(symbols):
+                time.sleep(self.request_delay)
 
-                    for sym, df in batch_results.items():
-                        if df is not None and not df.empty:
-                            self._save_to_db(sym, df, incremental=False)
-                            results[sym] = df
-
-                    # Rate limit between batches
-                    if i + batch_size < len(no_cache_symbols):
-                        time.sleep(self.request_delay)
-
-                    gc.collect()
-
-            # Incremental fetch for symbols with cache
-            if has_cache_symbols:
-                with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-                    future_to_symbol = {
-                        executor.submit(self._fetch_incremental, sym, cached_df, latest_date): sym
-                        for sym, cached_df, latest_date in has_cache_symbols
-                    }
-
-                    for future in as_completed(future_to_symbol):
-                        symbol = future_to_symbol[future]
-                        try:
-                            df = future.result()
-                            if df is not None and not df.empty:
-                                self._save_to_db(symbol, df, incremental=True)
-                                results[symbol] = df
-                        except Exception as e:
-                            logger.error(f"Error fetching {symbol}: {e}")
-                            failed_symbols.append(symbol)
-        else:
-            # No cache mode: batch download all
-            batch_size = 50
-            for i in range(0, len(symbols), batch_size):
-                batch = symbols[i:i + batch_size]
-                batch_results = self._download_batch_yf(batch, period=period, interval=interval)
-
-                for sym, df in batch_results.items():
-                    if df is not None and not df.empty:
-                        self._save_to_db(sym, df, incremental=False)
-                        results[sym] = df
-
-                if i + batch_size < len(symbols):
-                    time.sleep(self.request_delay)
+            gc.collect()
 
         logger.info(f"Successfully fetched {len(results)} symbols, {len(failed_symbols)} failed")
         if failed_symbols:
             logger.warning(f"Failed symbols: {failed_symbols}")
 
         return results
+
+    def _merge_batch_with_db_cache(self, symbol: str, batch_df: pd.DataFrame) -> pd.DataFrame:
+        """Merge batch download with DB history, deduplicate by date.
+
+        Args:
+            symbol: Stock symbol
+            batch_df: Fresh DataFrame from batch download (5 days)
+
+        Returns:
+            Merged DataFrame with ~280 trading days of history
+        """
+        try:
+            with self.db.get_connection() as conn:
+                cursor = conn.execute(
+                    "SELECT date, open, high, low, close, volume FROM market_data WHERE symbol = ? ORDER BY date",
+                    (symbol,)
+                )
+                rows = cursor.fetchall()
+        except Exception:
+            return batch_df
+
+        if not rows:
+            return batch_df
+
+        db_df = pd.DataFrame(rows, columns=['date', 'open', 'high', 'low', 'close', 'volume'])
+        db_df['date'] = pd.to_datetime(db_df['date'])
+        db_df.set_index('date', inplace=True)
+
+        # Deduplicate: remove DB rows that overlap with batch dates
+        batch_dates = set(batch_df.index)
+        db_df = db_df[~db_df.index.isin(batch_dates)]
+
+        # Merge and sort
+        merged = pd.concat([db_df, batch_df])
+        merged.sort_index(inplace=True)
+
+        # Keep last 280 trading days
+        if len(merged) > 280:
+            merged = merged.tail(280)
+
+        return merged
 
     def download_batch(
         self,

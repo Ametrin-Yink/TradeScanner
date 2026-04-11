@@ -290,7 +290,7 @@ class CompleteScanner:
         try:
             # Run Phase 0 runner as subprocess with real-time output streaming
             proc = subprocess.Popen(
-                [sys.executable, '-m', 'core.phase0_runner'],
+                [sys.executable, 'scripts/run_phase0.py'],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,

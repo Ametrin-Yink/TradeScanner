@@ -71,6 +71,7 @@ class StrategyMatch:
     match_reasons: List[str] = field(default_factory=list)
     technical_snapshot: Dict[str, Any] = field(default_factory=dict)
     regime: str = 'neutral'  # NEW: for position sizing reference
+    entry_warning: str = ""  # Non-empty if entry conditions were suboptimal but candidate still matched
 
 
 @dataclass
@@ -202,19 +203,13 @@ class BaseStrategy(ABC):
         dimensions: List[ScoringDimension],
         score: float,
         tier: str
-    ) -> Tuple[float, float, float]:
+    ) -> Tuple[Optional[float], Optional[float], Optional[float], str]:
         """
         Calculate entry, stop loss, and take profit prices.
 
-        Args:
-            symbol: Stock symbol
-            df: OHLCV DataFrame
-            dimensions: Dimension scores
-            score: Total score
-            tier: Tier (S/A/B/C)
-
         Returns:
-            Tuple of (entry_price, stop_loss, take_profit)
+            Tuple of (entry_price, stop_loss, take_profit, entry_warning)
+            entry_warning is empty string if conditions are met, non-empty otherwise.
         """
         pass
 
@@ -248,6 +243,11 @@ class BaseStrategy(ABC):
             List of StrategyMatch objects (max max_candidates)
         """
         matches = []
+        screened = 0
+        passed_filter = 0
+        scored = 0
+        tier_rejected = 0
+        entry_warned = 0
 
         # Get phase0_data if available (contains pre-computed indicators)
         phase0_data = getattr(self, 'phase0_data', {})
@@ -267,9 +267,13 @@ class BaseStrategy(ABC):
                     logger.debug(f"Insufficient data for {symbol}")
                     continue
 
+                screened += 1
+
                 # Filter
                 if not self.filter(symbol, df):
                     continue
+
+                passed_filter += 1
 
                 # Calculate dimensions
                 dimensions = self.calculate_dimensions(symbol, df)
@@ -278,13 +282,20 @@ class BaseStrategy(ABC):
 
                 # Calculate score and tier
                 score, tier = self.calculate_score(dimensions, df, symbol)
+                scored += 1
                 if tier == 'C':
+                    tier_rejected += 1
                     continue
 
-                # Calculate entry/exit
-                entry, stop, target = self.calculate_entry_exit(symbol, df, dimensions, score, tier)
+                # Calculate entry/exit — always produce valid levels, never gate
+                entry, stop, target, entry_warning = self.calculate_entry_exit(symbol, df, dimensions, score, tier)
                 if entry is None:
-                    continue
+                    # Strategy did not compute levels — use safe defaults
+                    entry = round(current_price, 2)
+                    stop = round(entry * 0.95, 2)
+                    target = round(entry * 1.05, 2)
+                    entry_warning = "Entry conditions not met, using current price"
+                entry_warned += 1 if entry_warning else 0
 
                 # Calculate confidence
                 confidence = self.calculate_confidence(score, tier)
@@ -303,7 +314,8 @@ class BaseStrategy(ABC):
                     take_profit=target,
                     confidence=confidence,
                     match_reasons=reasons,
-                    technical_snapshot=snapshot
+                    technical_snapshot=snapshot,
+                    entry_warning=entry_warning
                 ))
 
             except Exception as e:
@@ -311,7 +323,16 @@ class BaseStrategy(ABC):
                 continue
 
         # Sort by confidence and return top max_candidates
-        return sorted(matches, key=lambda x: x.confidence, reverse=True)[:max_candidates]
+        results = sorted(matches, key=lambda x: x.confidence, reverse=True)[:max_candidates]
+
+        # Log screening funnel
+        logger.info(
+            f"{self.NAME}: screened:{screened} -> filter:{passed_filter} -> "
+            f"scored:{scored} -> tierC_rej:{tier_rejected} -> "
+            f"entry_warn:{entry_warned} -> final:{len(results)}"
+        )
+
+        return results
 
     def _get_data(self, symbol: str) -> Optional[pd.DataFrame]:
         """Get cached or fetch data for symbol.

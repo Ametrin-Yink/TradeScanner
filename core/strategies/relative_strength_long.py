@@ -360,7 +360,7 @@ class RelativeStrengthLongStrategy(BaseStrategy):
         risk = entry - stop
         target = round(entry + risk * 2.0, 2)
 
-        return entry, stop, target
+        return entry, stop, target, ""
 
     def build_match_reasons(self, symbol: str, df: pd.DataFrame,
                            dimensions: List[ScoringDimension],

@@ -533,7 +533,7 @@ class CapitulationReboundStrategy(BaseStrategy):
         # Keep target1 alias for compatibility
         self.current_target1 = entry
 
-        return entry, stop, target
+        return entry, stop, target, ""
 
     def build_match_reasons(
         self,

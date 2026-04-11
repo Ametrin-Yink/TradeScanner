@@ -67,11 +67,16 @@ class StockUniverseManager:
                         # yfinance uses: BRK-A, BRK-B (not BRK/A, BRK/B or BRK.A, BRK.B)
                         symbol = symbol.replace('.', '-').replace('/', '-')
 
+                        try:
+                            market_cap = float(row.get('Market Cap', 0))
+                        except (ValueError, TypeError):
+                            market_cap = None
+
                         stocks.append({
                             'symbol': symbol,
                             'name': name,
-                            'sector': sector
-                            # market_cap is NOT loaded from CSV - fetched from yfinance
+                            'sector': sector,
+                            'market_cap': market_cap if market_cap and market_cap > 0 else None
                         })
 
             logger.info(f"Loaded {len(stocks)} stocks from CSV")
@@ -136,7 +141,7 @@ class StockUniverseManager:
                     name=stock['name'],
                     sector=stock['sector'],
                     category='stocks',
-                    market_cap=None  # Market cap fetched from yfinance, not CSV
+                    market_cap=stock.get('market_cap')
                 )
                 stocks_added += 1
 

@@ -146,7 +146,7 @@ SPY above EMA200: {spy_above_ema200}
 EMA50 above EMA200: {ema50_above_200}
 """
 
-            prompt = f"""Analyze the current US stock market regime based on technical indicators and news.
+            prompt = f"""As a professional macro US stock market trader, Analyze the current US stock market regime based on technical indicators and news.
 
 TECHNICAL CONTEXT:
 {technical_context}
@@ -155,10 +155,10 @@ MARKET NEWS SUMMARY:
 {news_summary}
 
 Select ONE regime from these 6 options:
-1. bull_strong: Strong uptrend, VIX low (<20), SPY above EMA50>EMA200
-2. bull_moderate: Moderate uptrend, VIX normal (20-25), positive momentum
+1. bull_strong: Strong uptrend, VIX very low
+2. bull_moderate: Moderate uptrend, VIX normal, positive momentum
 3. neutral: Mixed signals, consolidation, no clear trend
-4. bear_moderate: Moderate downtrend, VIX elevated (25-30), SPY below EMA50
+4. bear_moderate: Moderate downtrend, VIX elevated, SPY below EMA50
 5. bear_strong: Strong downtrend, SPY below EMA200, distribution patterns
 6. extreme_vix: Fear/volatility spike, VIX >30, panic selling (OVERRIDES others)
 
@@ -178,7 +178,7 @@ Return ONLY JSON:
                 "temperature": 0.2
             }
 
-            response = requests.post(url, headers=headers, json=payload, timeout=30)
+            response = requests.post(url, headers=headers, json=payload, timeout=180)
             response.raise_for_status()
 
             data = response.json()

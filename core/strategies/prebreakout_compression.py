@@ -98,7 +98,8 @@ class PreBreakoutCompressionStrategy(MomentumBreakoutStrategy):
 
         ema200 = ind.indicators.get('ema', {}).get('ema200')
         if ema200 is None or current_price <= ema200:
-            logger.debug(f"A2_REJ: {symbol} - Price {current_price:.2f} <= EMA200 {ema200:.2f}")
+            ema_str = f"{ema200:.2f}" if ema200 is not None else "N/A"
+            logger.debug(f"A2_REJ: {symbol} - Price {current_price:.2f} <= EMA200 {ema_str}")
             return False
 
         ret_3m = data.get('ret_3m')
@@ -173,7 +174,9 @@ class PreBreakoutCompressionStrategy(MomentumBreakoutStrategy):
             }
 
         platform_high = platform['platform_high']
-        platform_range_pct = platform['platform_range_pct']
+        platform_range_pct = platform.get('platform_range_pct', 0.0)
+        if platform_range_pct is None:
+            platform_range_pct = 0.0
         breakout_pct = (current_price - platform_high) / platform_high
         clv = ind.calculate_clv()
         current_volume = df['volume'].iloc[-1]
@@ -304,6 +307,8 @@ class PreBreakoutCompressionStrategy(MomentumBreakoutStrategy):
     def _count_contraction_waves(self, df: pd.DataFrame, platform: Dict) -> int:
         """Count contraction waves in platform period."""
         platform_days = platform.get('platform_days', 30)
+        if platform_days is None or not isinstance(platform_days, int):
+            platform_days = 30
         if len(df) < platform_days:
             return 0
 
@@ -349,24 +354,25 @@ class PreBreakoutCompressionStrategy(MomentumBreakoutStrategy):
         current_price = df['close'].iloc[-1]
 
         # Validate: need a platform or valid 60d range
+        entry_warnings = []
         if not platform:
             high_60d = df['high'].tail(60).max()
             low_60d = df['low'].tail(60).min()
             if high_60d <= 0 or low_60d <= 0 or high_60d == low_60d:
-                return None, None, None
+                return None, None, None, ""  # No valid range, let base_strategy fallback
             platform_high = high_60d
             platform_low = low_60d
         else:
             platform_high = platform['platform_high']
             platform_low = platform['platform_low']
 
-        # Validate: volume dry-up required (vol_5d/vol_20d < 0.80)
+        # Validate: volume dry-up recommended (vol_5d/vol_20d < 0.80)
         vol_5d = df['volume'].tail(5).mean()
         vol_20d = df['volume'].tail(20).mean()
         dry_up_ratio = vol_5d / vol_20d if vol_20d > 0 else 1.0
         if dry_up_ratio >= 0.80:
-            logger.debug(f"A2_ENTRY_REJ: {symbol} - No volume dry-up ({dry_up_ratio:.2f} >= 0.80)")
-            return None, None, None
+            entry_warnings.append(f"No volume dry-up ({dry_up_ratio:.2f} >= 0.80)")
+            logger.debug(f"A2_ENTRY_WARN: {symbol} - No volume dry-up ({dry_up_ratio:.2f} >= 0.80)")
 
         # Entry at pivot (breakout trigger), not current price
         if current_price >= platform_high:
@@ -385,7 +391,8 @@ class PreBreakoutCompressionStrategy(MomentumBreakoutStrategy):
         else:
             target = round(entry + risk * 3, 2)
 
-        return entry, stop, target
+        warning = "; ".join(entry_warnings) if entry_warnings else ""
+        return entry, stop, target, warning
 
     def build_match_reasons(
         self,
@@ -413,16 +420,50 @@ class PreBreakoutCompressionStrategy(MomentumBreakoutStrategy):
                 max_range_pct=self.PARAMS['platform_max_range'],
                 concentration_threshold=self.PARAMS['concentration_threshold']
             )
+        if platform is None:
+            lookback_days = self.PARAMS['platform_lookback']
+            if isinstance(lookback_days, tuple):
+                lookback_days = lookback_days[1]  # Use upper bound (e.g., 60)
+            platform_high = df['high'].tail(lookback_days).max()
+            platform_low = df['low'].tail(lookback_days).min()
+            range_val = (platform_high - platform_low) / platform_low if platform_low and platform_low > 0 else 0.0
+            platform = {
+                'platform_days': lookback_days,
+                'platform_range_pct': range_val,
+                'platform_high': platform_high,
+                'platform_low': platform_low,
+                'volume_contraction_ratio': 1.0,
+                'concentration_ratio': 0.0,
+                'contraction_quality': 0.0,
+                'is_valid': True,
+            }
 
         pattern_type = cq.details.get('pattern_type', 'VCP') if cq else 'VCP'
         distance_from_pivot = cp.details.get('distance_from_pivot', 0) * 100
 
+        # Guard against None/invalid values from detect_vcp_platform
+        p_days = platform.get('platform_days', 60)
+        if p_days is None:
+            p_days = 60
+        p_range = platform.get('platform_range_pct', 0.0)
+        if p_range is None:
+            p_range = 0.0
+        v_ratio = vc.details.get('volume_ratio', 0)
+        if v_ratio is None:
+            v_ratio = 0
+        ema50_dist = tc.details.get('ema50_distance', 0)
+        if ema50_dist is None:
+            ema50_dist = 0
+        dist_52w = tc.details.get('distance_from_52w_high', 0)
+        if dist_52w is None:
+            dist_52w = 0
+
         return [
             f"Score: {score:.2f}/15 (Tier {tier}-{position_pct*100:.0f}%)",
             f"TC:{tc.score:.2f} CQ:{cq.score:.2f} CP:{cp.score:.2f} VC:{vc.score:.2f}",
-            f"{pattern_type.upper()} {platform['platform_days']}d compression (+/-{platform['platform_range_pct']*100:.1f}%)",
-            f"Distance from pivot: {distance_from_pivot:.1f}% | Vol {vc.details.get('volume_ratio', 0):.1f}x",
-            f"50EMA: {tc.details.get('ema50_distance', 0)*100:.1f}% | 52w: {tc.details.get('distance_from_52w_high', 0)*100:.1f}%"
+            f"{pattern_type.upper()} {p_days}d compression (+/-{p_range*100:.1f}%)",
+            f"Distance from pivot: {distance_from_pivot:.1f}% | Vol {v_ratio:.1f}x",
+            f"50EMA: {ema50_dist*100:.1f}% | 52w: {dist_52w*100:.1f}%"
         ]
 
     def screen(self, symbols: List[str], max_candidates: int = 5) -> List[StrategyMatch]:

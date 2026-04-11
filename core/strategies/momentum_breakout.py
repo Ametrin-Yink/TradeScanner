@@ -814,28 +814,24 @@ class MomentumBreakoutStrategy(BaseStrategy):
         volume_ratio = vc_dim.details.get('volume_ratio', 0) if vc_dim else 0
         clv = vc_dim.details.get('clv', 0) if vc_dim else 0
 
-        # v7.0 Fix: Validate entry conditions
+        # v7.0 Fix: Validate entry conditions (recommendation, not gate)
         # Entry (A1): Price>pivot×1.01, Vol>1.5×, CLV≥0.65
-        entry_conditions_met = True
+        entry_warnings = []
 
         # Check price > pivot × 1.01
         if current_price < pivot * 1.01:
-            entry_conditions_met = False
-            logger.debug(f"MB_ENTRY_REJ: {symbol} - Price {current_price:.2f} < pivot×1.01 {pivot*1.01:.2f}")
+            entry_warnings.append(f"Price {current_price:.2f} < pivot×1.01 {pivot*1.01:.2f}")
+            logger.debug(f"MB_ENTRY_WARN: {symbol} - Price {current_price:.2f} < pivot×1.01 {pivot*1.01:.2f}")
 
         # Check volume > 1.5× avg20d
         if volume_ratio < 1.5:
-            entry_conditions_met = False
-            logger.debug(f"MB_ENTRY_REJ: {symbol} - Volume ratio {volume_ratio:.2f} < 1.5×")
+            entry_warnings.append(f"Volume ratio {volume_ratio:.2f} < 1.5×")
+            logger.debug(f"MB_ENTRY_WARN: {symbol} - Volume ratio {volume_ratio:.2f} < 1.5×")
 
         # Check CLV ≥ 0.65
         if clv < 0.65:
-            entry_conditions_met = False
-            logger.debug(f"MB_ENTRY_REJ: {symbol} - CLV {clv:.2f} < 0.65")
-
-        # If entry conditions not met, return invalid entry
-        if not entry_conditions_met:
-            return None, None, None
+            entry_warnings.append(f"CLV {clv:.2f} < 0.65")
+            logger.debug(f"MB_ENTRY_WARN: {symbol} - CLV {clv:.2f} < 0.65")
 
         entry = round(current_price, 2)
 
@@ -861,7 +857,8 @@ class MomentumBreakoutStrategy(BaseStrategy):
         else:
             target = round(entry + risk * 3, 2)  # 3R baseline
 
-        return entry, stop, target
+        warning = "; ".join(entry_warnings) if entry_warnings else ""
+        return entry, stop, target, warning
 
     def build_match_reasons(
         self,

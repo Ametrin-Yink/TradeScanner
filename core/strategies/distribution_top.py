@@ -544,15 +544,20 @@ class DistributionTopStrategy(BaseStrategy):
         else:
             resistance_high = df['high'].tail(20).max()
 
+        # Entry conditions (recommendations, not gates)
+        entry_warnings = []
+
         # Entry condition 1: Close < resistance - 0.3x ATR
         entry_threshold = resistance_high - 0.3 * atr
         if current_price > entry_threshold:
-            return None, None, None
+            entry_warnings.append(f"Price {current_price:.2f} > threshold {entry_threshold:.2f}")
+            logger.debug(f"DT_ENTRY_WARN: {symbol} - Price {current_price:.2f} > threshold {entry_threshold:.2f}")
 
         # Entry condition 2: Vol >= 1.5x avg20d
         avg_volume = df['volume'].tail(20).mean()
         if avg_volume > 0 and df['volume'].iloc[-1] < avg_volume * 1.5:
-            return None, None, None
+            entry_warnings.append(f"Volume below 1.5x avg20d")
+            logger.debug(f"DT_ENTRY_WARN: {symbol} - Volume below 1.5x avg20d")
 
         # Entry condition 3: CLV <= 0.35
         if high - low > 0:
@@ -560,19 +565,22 @@ class DistributionTopStrategy(BaseStrategy):
         else:
             clv = 0.5
         if clv > 0.35:
-            return None, None, None
+            entry_warnings.append(f"CLV {clv:.2f} > 0.35")
+            logger.debug(f"DT_ENTRY_WARN: {symbol} - CLV {clv:.2f} > 0.35")
 
         # Entry condition 4: Not within 5d of earnings
         days_to_earnings = data.get('days_to_earnings')
         if days_to_earnings is not None and 0 <= days_to_earnings <= 5:
-            return None, None, None
+            entry_warnings.append(f"Within {days_to_earnings}d of earnings")
+            logger.debug(f"DT_ENTRY_WARN: {symbol} - Within {days_to_earnings}d of earnings")
 
         entry = round(current_price, 2)
         stop = round(min(resistance_high + 0.5 * atr, entry * 1.05), 2)
         risk = stop - entry
         target = round(entry - risk * 2.5, 2)
 
-        return entry, stop, target
+        warning = "; ".join(entry_warnings) if entry_warnings else ""
+        return entry, stop, target, warning
 
     def build_match_reasons(self, symbol: str, df: pd.DataFrame,
                            dimensions: List[ScoringDimension],

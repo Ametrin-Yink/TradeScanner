@@ -371,7 +371,7 @@ class PullbackEntryStrategy(BaseStrategy):
         # Reference target (3R)
         target = round(entry_price + risk * 3, 2)
 
-        return entry_price, stop_loss, target
+        return entry_price, stop_loss, target, ""
 
     def build_match_reasons(
         self,

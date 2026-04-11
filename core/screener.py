@@ -615,6 +615,38 @@ class StrategyScreener:
 
             logger.info(f"Redistributed {added} extra candidates from strategies with surplus")
 
+            # If slots still unused after exhausting all strategy candidates,
+            # fill from any strategy's best remaining (even if already at allocation)
+            remaining_slots = unused_slots - added
+            if remaining_slots > 0:
+                logger.info(f"{remaining_slots} slots still empty, filling from best remaining candidates")
+
+                # Collect ALL candidates not yet selected
+                selected_symbols = set()
+                for letter, cands in selected_by_letter.items():
+                    for c in cands:
+                        selected_symbols.add(c.symbol)
+
+                pool = [c for c in all_candidates if c.symbol not in selected_symbols]
+                pool.sort(key=lambda x: x.technical_snapshot.get('score', 0), reverse=True)
+
+                filled = 0
+                for c in pool:
+                    if filled >= remaining_slots:
+                        break
+                    sector = c.technical_snapshot.get('sector', 'Unknown')
+                    if sector != 'Unknown' and sector_counts.get(sector, 0) >= SECTOR_MAX:
+                        continue
+                    letter = STRATEGY_NAME_TO_LETTER.get(c.strategy, 'Z')
+                    if letter not in selected_by_letter:
+                        selected_by_letter[letter] = []
+                    selected_by_letter[letter].append(c)
+                    if sector != 'Unknown':
+                        sector_counts[sector] = sector_counts.get(sector, 0) + 1
+                    filled += 1
+
+                logger.info(f"Filled {filled}/{remaining_slots} remaining slots from best remaining candidates")
+
         # Flatten and handle duplicates with sector cap
         SECTOR_MAX = 4  # Soft cap per sector
         sector_counts = defaultdict(int)  # Track sector counts

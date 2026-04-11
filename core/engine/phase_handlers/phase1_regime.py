@@ -43,6 +43,14 @@ class Phase1RegimeHandler(PhaseHandler):
             logger.info(f"Final Regime: {regime}")
             logger.info(f"Strategy allocation: {allocation}")
 
+            # Cache regime for Phase 2 to load
+            db.save_regime(
+                regime=regime, allocation=allocation,
+                ai_regime=ai_regime,
+                ai_confidence=analysis.get('confidence', 50),
+                ai_reasoning=analysis.get('reasoning', '')
+            )
+
         except Exception as e:
             logger.error(f"AI regime detection failed: {e}, using technical fallback")
             spy_df = db.get_tier3_cache('SPY')
@@ -52,6 +60,9 @@ class Phase1RegimeHandler(PhaseHandler):
             regime = regime_detector.detect_regime(spy_df, vix_df)
             allocation = regime_detector.get_allocation(regime)
             analysis = {'confidence': 0, 'reasoning': f'Fallback: {e}'}
+
+            # Cache fallback regime
+            db.save_regime(regime=regime, allocation=allocation)
 
         return PhaseResult(success=True, data={
             'regime': regime,
