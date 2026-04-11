@@ -43,7 +43,7 @@ DEFAULT_SETTINGS = {
         "chart_candles": 60,
         "web_port": 19801,
         "retention_days": 60,
-        "base_url": "http://47.90.229.136:19801",
+        "base_url": "https://ametrin-maco.tail81da69.ts.net",
     },
     "notification": {
         "discord_enabled": True,

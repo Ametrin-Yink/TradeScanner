@@ -61,32 +61,6 @@ api/server.py                # Flask API on port 19801
 scheduler.py                 # Main entry point, 7-phase workflow
 ```
 
-## Quick Start
-
-```bash
-# Install dependencies
-pip install -r requirements.txt
-
-# Test scan (skips universe sync)
-python scheduler.py --test --symbols AAPL,MSFT,NVDA
-
-# Debug mode with verbose logging and pipeline summary
-python scheduler.py --test --symbols AAPL --debug
-
-# Full workflow
-python scheduler.py
-python scheduler.py --force  # skip trading day check
-
-# Phase 0 only
-python -c "from core.premarket_prep import run_premarket_prep; run_premarket_prep()"
-
-# Web server
-python api/server.py
-
-# Tests
-python -m pytest tests/ -v
-```
-
 ## 7-Phase Workflow
 
 | Phase | Component        | Duration  | Description                                         |
@@ -134,6 +108,8 @@ Position sizing scales by regime: bull=1.0x/0.3x, neutral=0.8x, bear_moderate/be
 
 - Flask API on port 19801
 - Phase 0 runs in subprocess for memory isolation
+- Reports accessible via Tailscale Funnel: `https://ametrin-maco.tail81da69.ts.net/reports/report_YYYY-MM-DD.html`
+- Tailscale Funnel service runs via systemd (`tailscale-funnel.service`), survives reboots
 
 ## Restructure (April 2026)
 
