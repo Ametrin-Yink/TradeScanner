@@ -380,6 +380,29 @@ class BaseStrategy(ABC):
             snapshot[f'{dim.name.lower()}_score'] = dim.score
             snapshot.update(dim.details)
 
+        # Add key technical indicators from phase0_data for AI scoring
+        phase0_data = getattr(self, 'phase0_data', {})
+        symbol_data = phase0_data.get(symbol, {})
+
+        snapshot['rsi'] = symbol_data.get('rsi_14')
+        snapshot['volume_ratio'] = symbol_data.get('volume_ratio')
+        snapshot['adr_percent'] = symbol_data.get('adr_pct')
+        snapshot['rs_percentile'] = symbol_data.get('rs_percentile')
+
+        # EMA alignment: EMA8 > EMA21 > EMA50 (bullish for long strategies)
+        ema8 = symbol_data.get('ema8')
+        ema21 = symbol_data.get('ema21')
+        ema50 = symbol_data.get('ema50')
+        price = snapshot['current_price']
+        if ema8 and ema21 and ema50 and price:
+            snapshot['ema_alignment'] = bool(ema8 > ema21 > ema50)
+            snapshot['ema21_distance_pct'] = round((price - ema21) / ema21 * 100, 2)
+        else:
+            snapshot['ema_alignment'] = False
+            snapshot['ema21_distance_pct'] = 0
+
+        snapshot['sector'] = symbol_data.get('sector')
+
         return snapshot
 
     def _check_basic_requirements(self, df: pd.DataFrame) -> bool:

@@ -53,7 +53,6 @@ def _load_regime(db):
         ai_regime = analysis['sentiment']
         regime = regime_detector.detect_regime_ai(
             spy_df, vix_df,
-            analysis.get('tavily_results', []),
             ai_regime
         )
         allocation = regime_detector.get_allocation(regime)
@@ -187,18 +186,17 @@ def investigate_earnings_gap(screener, symbols, phase0_data):
 
     for symbol in symbols:
         data = phase0_data.get(symbol, {})
-        days_to_earnings = data.get('days_to_earnings')
+        days_since_earnings = data.get('days_since_earnings')
         gap_1d_pct = data.get('gap_1d_pct', 0)
         gap_vol_ratio = data.get('gap_volume_ratio', 1.0)
         rs_pct = data.get('rs_percentile', 0)
         gap_direction = data.get('gap_direction', 'none')
 
-        if days_to_earnings is None or days_to_earnings >= 0:
-            gap_stats['not_post_earnings'] += 1
+        if days_since_earnings is None:
+            gap_stats['no_earnings_data'] += 1
             continue
 
-        gap_stats['post_earnings'] += 1
-        days_post = abs(days_to_earnings)
+        gap_stats['has_last_earnings'] += 1
         gap_size = abs(gap_1d_pct)
 
         if gap_size >= 0.10:
@@ -208,8 +206,8 @@ def investigate_earnings_gap(screener, symbols, phase0_data):
         else:
             max_days = 2
 
-        if days_post > max_days or days_post < 1:
-            gap_stats[f'outside_window(post={days_post},max={max_days})'] += 1
+        if days_since_earnings > max_days or days_since_earnings < 1:
+            gap_stats[f'outside_window(post={days_since_earnings},max={max_days})'] += 1
             continue
 
         gap_stats['in_window'] += 1
@@ -245,11 +243,11 @@ def investigate_earnings_gap(screener, symbols, phase0_data):
     closest = []
     for symbol in symbols:
         data = phase0_data.get(symbol, {})
-        days_to_earnings = data.get('days_to_earnings')
+        days_since_earnings = data.get('days_since_earnings')
         gap_1d_pct = data.get('gap_1d_pct', 0)
         gap_vol_ratio = data.get('gap_volume_ratio', 1.0)
-        if days_to_earnings is not None and days_to_earnings < 0:
-            closest.append((symbol, abs(gap_1d_pct), abs(days_to_earnings), gap_vol_ratio))
+        if days_since_earnings is not None and 1 <= days_since_earnings <= 5:
+            closest.append((symbol, abs(gap_1d_pct), days_since_earnings, gap_vol_ratio))
 
     closest.sort(key=lambda x: -x[0])
     logger.info("Top 10 EarningsGap candidates (by gap size):")
@@ -302,7 +300,7 @@ def run_phase2(all_mode=False):
 
     if all_mode:
         allocation = {
-            'A1': 4, 'A2': 4, 'B': 4, 'C': 4, 'D': 4, 'E': 4, 'F': 0, 'G': 4, 'H': 4
+            'A1': 4, 'A2': 4, 'B': 4, 'C': 4, 'D': 4, 'E': 4, 'F': 4, 'G': 4, 'H': 4
         }
         logger.info("=" * 60)
         logger.info("PHASE 2: Strategy Screening (ALL STRATEGIES TEST)")
@@ -358,7 +356,8 @@ def run_phase2(all_mode=False):
             continue
 
         t0 = time.time()
-        candidates = strategy.screen(symbols, max_candidates=max_slots)
+        screen_count = max_slots + 4  # screen extra for round-robin fill
+        candidates = strategy.screen(symbols, max_candidates=screen_count)
         elapsed = time.time() - t0
 
         strategy_results[strategy.NAME] = {

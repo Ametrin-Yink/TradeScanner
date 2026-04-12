@@ -426,7 +426,6 @@ class CompleteScanner:
             # Use AI regime with technical validation
             regime = self.regime_detector.detect_regime_ai(
                 spy_df, vix_df,
-                analysis.get('tavily_results', []),
                 ai_regime
             )
 

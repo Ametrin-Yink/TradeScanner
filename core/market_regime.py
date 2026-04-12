@@ -5,73 +5,25 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-# Phase 1 Allocation Table (30 total slots) - clean A-H naming with A1/A2 sub-modes
+# Phase 1 Allocation Table (30 total slots) - minimum 2 per strategy
 REGIME_ALLOCATION_TABLE: Dict[str, Dict[str, int]] = {
     'bull_strong': {
-        'A1': 4,  # MomentumBreakout (confirmed)
-        'A2': 4,  # PreBreakoutCompression (pre-breakout)
-        'B': 6,   # PullbackEntry
-        'C': 4,   # SupportBounce
-        'D': 0,   # DistributionTop
-        'E': 0,   # AccumulationBottom
-        'F': 0,   # CapitulationRebound
-        'G': 8,   # EarningsGap
-        'H': 4,   # RelativeStrengthLong
+        'A1': 4, 'A2': 4, 'B': 4, 'C': 4, 'D': 2, 'E': 2, 'F': 2, 'G': 6, 'H': 2,
     },
     'bull_moderate': {
-        'A1': 4,
-        'A2': 4,
-        'B': 6,
-        'C': 4,
-        'D': 0,
-        'E': 0,
-        'F': 0,
-        'G': 8,
-        'H': 4,
+        'A1': 4, 'A2': 4, 'B': 4, 'C': 4, 'D': 2, 'E': 2, 'F': 2, 'G': 6, 'H': 2,
     },
     'neutral': {
-        'A1': 3,
-        'A2': 3,
-        'B': 5,
-        'C': 5,
-        'D': 4,
-        'E': 4,
-        'F': 0,
-        'G': 3,
-        'H': 3,
+        'A1': 3, 'A2': 3, 'B': 4, 'C': 4, 'D': 4, 'E': 4, 'F': 2, 'G': 3, 'H': 3,
     },
     'bear_moderate': {
-        'A1': 2,
-        'A2': 2,
-        'B': 4,
-        'C': 4,
-        'D': 5,
-        'E': 5,
-        'F': 2,
-        'G': 0,
-        'H': 6,
+        'A1': 2, 'A2': 2, 'B': 4, 'C': 4, 'D': 4, 'E': 4, 'F': 2, 'G': 2, 'H': 6,
     },
     'bear_strong': {
-        'A1': 1,  # NEW: A gets 2 slots in bear_strong (split A1/A2)
-        'A2': 1,
-        'B': 0,
-        'C': 4,
-        'D': 6,
-        'E': 6,
-        'F': 8,
-        'G': 0,
-        'H': 4,  # Reduced from 6 to make room for A
+        'A1': 2, 'A2': 2, 'B': 2, 'C': 3, 'D': 5, 'E': 5, 'F': 6, 'G': 2, 'H': 3,
     },
     'extreme_vix': {
-        'A1': 0,
-        'A2': 0,
-        'B': 0,
-        'C': 0,
-        'D': 3,
-        'E': 3,
-        'F': 12,
-        'G': 0,
-        'H': 12,
+        'A1': 2, 'A2': 2, 'B': 2, 'C': 2, 'D': 2, 'E': 2, 'F': 8, 'G': 2, 'H': 8,
     }
 }
 
@@ -185,12 +137,12 @@ class MarketRegimeDetector:
         return preliminary_regime
 
     def detect_regime_ai(self, spy_df: pd.DataFrame, vix_df: pd.DataFrame,
-                         tavily_results: list, ai_sentiment: str) -> str:
+                         ai_sentiment: str) -> str:
         """
-        Select regime from 6 options based on technical + news analysis.
+        Select regime from 6 options based on technical + AI web search analysis.
 
         Priority:
-        1. If VIX > 30 AND tavily shows fear/extreme volatility -> extreme_vix
+        1. If VIX > 30 -> extreme_vix (hard override)
         2. Apply hard rules (SPY/IWM technical floor)
         3. Use ai_sentiment if valid regime
         4. Fallback to technical detection
@@ -217,7 +169,10 @@ class MarketRegimeDetector:
         # Step 2: Get IWM data for hard rules
         iwm_df = self._get_iwm_data()
 
-        # Step 3: Apply hard rules
+        # Step 3: Contradiction logging — flag when AI regime disagrees with technicals
+        self._log_contradictions(preliminary_regime, spy_df, vix_df)
+
+        # Step 4: Apply hard rules
         spy_data = {
             'price': spy_df['close'].iloc[-1],
             'ema50': spy_df['close'].ewm(span=50, adjust=False).mean().iloc[-1]
@@ -228,6 +183,37 @@ class MarketRegimeDetector:
         logger.info(f"Final regime: {final_regime} (preliminary: {preliminary_regime})")
 
         return final_regime
+
+    def _log_contradictions(self, ai_regime: str, spy_df: pd.DataFrame, vix_df: pd.DataFrame):
+        """Log warnings when AI regime contradicts technical indicators."""
+        close = spy_df['close']
+        price = close.iloc[-1]
+        ema21 = close.ewm(span=21, adjust=False).mean().iloc[-1]
+        ema50 = close.ewm(span=50, adjust=False).mean().iloc[-1]
+        ema200 = close.ewm(span=200, adjust=False).mean().iloc[-1]
+        vix = vix_df['close'].iloc[-1] if vix_df is not None and not vix_df.empty else 20.0
+
+        contradictions = []
+
+        if ai_regime == 'bull_strong':
+            if vix > 20:
+                contradictions.append(f"bull_strong but VIX={vix:.1f} (>20)")
+            if price < ema21:
+                contradictions.append("bull_strong but SPY < EMA21")
+        elif ai_regime == 'bull_moderate':
+            if vix > 25:
+                contradictions.append(f"bull_moderate but VIX={vix:.1f} (>25)")
+            if price < ema50:
+                contradictions.append("bull_moderate but SPY < EMA50")
+        elif ai_regime == 'bear_moderate':
+            if price > ema50:
+                contradictions.append("bear_moderate but SPY > EMA50")
+        elif ai_regime == 'bear_strong':
+            if price > ema200:
+                contradictions.append("bear_strong but SPY > EMA200")
+
+        if contradictions:
+            logger.warning(f"AI regime contradiction: {'; '.join(contradictions)}")
 
     def _get_iwm_data(self) -> Optional[pd.DataFrame]:
         """

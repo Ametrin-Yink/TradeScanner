@@ -9,7 +9,7 @@ Automated US stock trading opportunity scanner analyzing stocks with market cap 
 - **3-Tier Pre-Calculation**: Universal, lazy strategy-specific, and market data tiers
 - **Unified Scoring**: 0-15 point system, 4 dimensions per strategy
 - **Regime-Based Allocation**: 30 slots dynamically distributed by market regime
-- **AI Analysis**: AI integration with Tavily research
+- **AI Analysis**: AI-powered regime detection with built-in web search
 - **Web Reports**: Interactive HTML reports with top 30 table + top 10 deep analysis
 - **Automated Scheduling**: Runs daily at 3:00 AM ET
 
@@ -40,7 +40,7 @@ core/
 ├── stock_universe.py        # Stock database management
 ├── premarket_prep.py        # Phase 0: DB init, Tier 1/3, market cap filter
 ├── market_regime.py         # Regime detection + allocation tables
-├── market_analyzer.py       # Phase 1: AI + Tavily market analysis
+├── market_analyzer.py       # Phase 1: AI market analysis (enable_search)
 ├── screener.py              # Phase 2: Multi-strategy screening
 ├── ai_confidence_scorer.py  # Phase 3: Top 30 selection
 ├── analyzer.py              # Phase 4: Deep analysis for top 10
@@ -66,7 +66,7 @@ scheduler.py                 # Main entry point, 7-phase workflow
 | Phase | Component        | Duration  | Description                                         |
 | ----- | ---------------- | --------- | --------------------------------------------------- |
 | 0     | PreMarketPrep    | 15-20 min | Init stock DB, Tier 1/3 pre-calc, market cap filter |
-| 1     | AIMarketRegime   | 3-5 min   | Tavily + AI regime detection                        |
+| 1     | AIMarketRegime   | 30-60s    | DashScope enable_search regime detection            |
 | 2     | StrategyScreener | 10-15 min | Screen 30 slots, duplicate handling                 |
 | 3     | AIScoring        | 5-10 min  | Top 30 selection, parallel AI                       |
 | 4     | DeepAnalysis     | 10-15 min | Tavily + AI deep analysis for top 10                |

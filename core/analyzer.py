@@ -43,9 +43,8 @@ class OpportunityAnalyzer:
         """Initialize analyzer."""
         self.fetcher = fetcher or DataFetcher()
         self.dashscope_api_key = settings.get_secret('dashscope.api_key')
-        self.tavily_api_key = settings.get_secret('tavily.api_key')
         self.dashscope_base = settings.get_secret('dashscope.api_base') or settings.get('ai', {}).get('api_base', 'https://coding.dashscope.aliyuncs.com/v1')
-        self.model = settings.get_secret('dashscope.model') or settings.get('ai', {}).get('model', 'qwen-max')
+        self.model = 'qwen3.6-plus'
 
     def analyze_opportunity(
         self,
@@ -72,7 +71,7 @@ class OpportunityAnalyzer:
         else:
             df = self.fetcher.fetch_stock_data(symbol, period="3mo", interval="1d")
 
-        # Tavily search for symbol news
+        # AI web search for symbol news
         news = self._search_symbol_news(symbol)
 
         # AI analysis
@@ -138,28 +137,41 @@ class OpportunityAnalyzer:
         return analyzed
 
     def _search_symbol_news(self, symbol: str) -> list:
-        """Search for symbol-specific news."""
-        if not self.tavily_api_key:
+        """Search for symbol-specific news using DashScope enable_search."""
+        if not self.dashscope_api_key:
             return []
 
         try:
-            url = "https://api.tavily.com/search"
-            headers = {"Content-Type": "application/json"}
+            url = f"{self.dashscope_base}/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {self.dashscope_api_key}",
+                "Content-Type": "application/json"
+            }
             payload = {
-                "api_key": self.tavily_api_key,
-                "query": f"{symbol} stock news analysis today",
-                "max_results": 3,
-                "search_depth": "basic"
+                "model": self.model,
+                "messages": [
+                    {"role": "system", "content": f"Search for the latest news about {symbol} stock. Summarize the top 3 most relevant news items with headlines and brief summaries. Return as a JSON array: [{{\"title\": \"...\", \"content\": \"...\"}}]"},
+                    {"role": "user", "content": f"Find and summarize the latest news for {symbol} stock"}
+                ],
+                "temperature": 0.2,
+                "enable_search": True
             }
 
-            response = requests.post(url, headers=headers, json=payload, timeout=20)
+            response = requests.post(url, headers=headers, json=payload, timeout=90)
             response.raise_for_status()
 
             data = response.json()
-            return [r.get('content', '')[:300] for r in data.get('results', [])]
+            content = data['choices'][0]['message']['content']
+
+            import re
+            json_match = re.search(r'\[.*\]', content, re.DOTALL)
+            if json_match:
+                return json.loads(json_match.group())[:3]
+
+            return [{'title': 'AI search result', 'content': content[:300]}]
 
         except Exception as e:
-            logger.warning(f"News search failed for {symbol}: {e}")
+            logger.warning(f"AI news search failed for {symbol}: {e}")
             return []
 
     def _call_ai_with_retry(
@@ -172,7 +184,7 @@ class OpportunityAnalyzer:
         """Call AI API with retry logic."""
         for attempt in range(max_retries + 1):
             try:
-                timeout = 60 + (attempt * 30)  # Increase timeout on retry
+                timeout = 120 + (attempt * 60)  # Increase timeout on retry
                 response = requests.post(url, headers=headers, json=payload, timeout=timeout)
                 response.raise_for_status()
                 return response.json()
@@ -305,7 +317,7 @@ Provide analysis in JSON format:
     ) -> list:
         """
         Deep analysis for top 10 candidates by AI score.
-        Uses Tavily search + AI for detailed technical + news analysis.
+        Uses DashScope enable_search + AI for detailed technical + news analysis.
 
         Args:
             scored_candidates: List of ScoredCandidate (top 30)
@@ -343,10 +355,10 @@ Provide analysis in JSON format:
         return analyzed
 
     def _deep_analyze_single(self, candidate, regime):
-        """Deep analysis for single candidate with Tavily + AI."""
+        """Deep analysis for single candidate with AI web search."""
         try:
-            # Search Tavily for stock news
-            news_results = self._tavily_search_stock(candidate.symbol)
+            # AI web search for stock news
+            news_results = self._search_stock_news(candidate.symbol)
 
             # Perform AI deep analysis
             analysis = self._ai_deep_analysis(candidate, news_results, regime)
@@ -360,27 +372,46 @@ Provide analysis in JSON format:
             logger.error(f"Deep analysis failed for {candidate.symbol}: {e}")
             return candidate
 
-    def _tavily_search_stock(self, symbol: str) -> list:
-        """Search Tavily for stock-specific news."""
+    def _search_stock_news(self, symbol: str) -> list:
+        """Search for stock-specific news using DashScope enable_search."""
         try:
-            from core.market_analyzer import MarketAnalyzer
-            ma = MarketAnalyzer()
-            queries = [
-                f"{symbol} stock news today analysis",
-                f"{symbol} earnings outlook forecast"
-            ]
-            results = []
-            for q in queries:
-                results.extend(ma.tavily_search(q, max_results=2))
-            return results
+            url = f"{self.dashscope_base}/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {self.dashscope_api_key}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "model": self.model,
+                "messages": [
+                    {"role": "system", "content": f"Search for the latest news about {symbol}. Return a JSON array of up to 3 items: [{{\"title\": \"...\", \"content\": \"...\"}}]"},
+                    {"role": "user", "content": f"Find the latest news and analysis for {symbol} stock"}
+                ],
+                "temperature": 0.2,
+                "enable_search": True
+            }
+
+            response = requests.post(url, headers=headers, json=payload, timeout=90)
+            response.raise_for_status()
+
+            data = response.json()
+            content = data['choices'][0]['message']['content']
+
+            import re
+            json_match = re.search(r'\[.*\]', content, re.DOTALL)
+            if json_match:
+                return json.loads(json_match.group())[:3]
+
+            return [{'title': 'AI search result', 'content': content[:300]}]
+
         except Exception as e:
-            logger.error(f"Tavily search failed for {symbol}: {e}")
+            logger.error(f"AI news search failed for {symbol}: {e}")
             return []
 
     def _ai_deep_analysis(self, candidate, news_results, regime):
-        """Call AI for detailed analysis with Tavily news context."""
+        """Call AI for detailed analysis with news context."""
         news_summary = "\n".join([
             f"- {r.get('title', '')}: {r.get('content', '')[:200]}"
+            if isinstance(r, dict) else f"- {str(r)[:200]}"
             for r in news_results[:5]
         ])
 
@@ -401,9 +432,10 @@ Provide analysis in JSON format:
 
             prompt = f"""Deep analysis for {candidate.symbol} ({candidate.strategy}):
 
-Entry: {candidate.entry_price}, Stop: {candidate.stop_loss}, Target: {candidate.take_profit}
+Entry: ${candidate.entry_price:.2f}, Stop: ${candidate.stop_loss:.2f}, Target: ${candidate.take_profit:.2f}
 Market Regime: {regime}
 AI Confidence: {candidate.confidence}%
+R/R Ratio: {(candidate.take_profit - candidate.entry_price) / max(candidate.entry_price - candidate.stop_loss, 0.01):.1f}x
 
 Technical Reasons:
 {chr(10).join(f"- {r}" for r in getattr(candidate, 'match_reasons', [])[:5])}
@@ -411,43 +443,54 @@ Technical Reasons:
 Recent News:
 {news_summary or "No recent news available"}
 
-Return JSON:
+Return JSON with these fields. Be specific and cite actual data.
+Risk factors must describe TRADING risks (market events, earnings, sector weakness, volatility), NOT data quality issues.
 {{
-    "technical_outlook": "Detailed technical outlook",
-    "news_sentiment": "Positive|Neutral|Negative",
-    "key_catalysts": ["catalyst1", "catalyst2"],
+    "technical_outlook": "2-3 sentences on setup quality, key support/resistance levels, and whether technical structure confirms or contradicts the trade thesis",
+    "detailed_reasoning": "2-3 sentences explaining why this trade makes sense NOW — cite specific catalyst, news event, or market condition that supports entry timing",
+    "news_sentiment": "Positive|Neutral|Negative — based on whether recent news supports or contradicts the trade",
+    "key_catalysts": ["2 specific catalysts that could drive price toward target, not generic descriptions"],
     "risk_level": "Low|Medium|High",
-    "detailed_reasoning": "Detailed reasoning for this trade"
+    "risk_factors": ["2 specific risks that could trigger stop loss or invalidate the setup"]
 }}"""
 
             payload = {
                 "model": self.model,
                 "messages": [
-                    {"role": "system", "content": "Expert technical analyst. Return valid JSON only."},
+                    {"role": "system", "content": "Expert technical analyst. Provide specific, data-driven analysis. Return valid JSON only, no markdown."},
                     {"role": "user", "content": prompt}
                 ],
-                "temperature": 0.3
+                "temperature": 0,
+                "seed": 42
             }
 
             data = self._call_ai_with_retry(url, headers, payload, max_retries=2)
             if data:
                 content = data['choices'][0]['message']['content']
-                json_match = __import__('re').search(r'\{[^{}]*\}', content, __import__('re').DOTALL)
-                if json_match:
-                    return json.loads(json_match.group())
+                import re as _re
+                # Try to find JSON object — handle nested braces
+                match = _re.search(r'\{(?:[^{}]|\{[^{}]*\})*\}', content, _re.DOTALL)
+                if match:
+                    return json.loads(match.group())
 
             # Fallback
+            match_reasons = getattr(candidate, 'match_reasons', [])
             return {
                 'technical_outlook': f"Entry: {candidate.entry_price}, Stop: {candidate.stop_loss}",
+                'detailed_reasoning': f"{candidate.strategy} setup at ${candidate.entry_price:.2f} with {candidate.confidence}% technical confidence. {match_reasons[0] if match_reasons else 'Pattern confirmed'}.",
                 'news_sentiment': 'Neutral',
-                'key_catalysts': news_results[:2],
-                'risk_level': 'Medium'
+                'key_catalysts': [n.get('title', '') for n in news_results[:2] if n] if news_results else [f"{candidate.strategy} pattern breakout"],
+                'risk_level': 'Medium',
+                'risk_factors': [match_reasons[1] if len(match_reasons) > 1 else f"Stop loss at {candidate.stop_loss:.2f}", "Broad market regime shift risk"]
             }
         except Exception as e:
             logger.error(f"AI deep analysis failed for {candidate.symbol}: {e}")
+            match_reasons = getattr(candidate, 'match_reasons', [])
             return {
                 'technical_outlook': f"Entry: {candidate.entry_price}, Stop: {candidate.stop_loss}",
+                'detailed_reasoning': f"{candidate.strategy} setup at ${candidate.entry_price:.2f} with {candidate.confidence}% technical confidence. {match_reasons[0] if match_reasons else 'Pattern confirmed'}.",
                 'news_sentiment': 'Neutral',
-                'key_catalysts': news_results[:2],
-                'risk_level': 'Medium'
+                'key_catalysts': [f"{candidate.strategy} pattern breakout"],
+                'risk_level': 'Medium',
+                'risk_factors': [match_reasons[1] if len(match_reasons) > 1 else f"Stop loss at {candidate.stop_loss:.2f}", "Broad market regime shift risk"]
             }

@@ -173,18 +173,22 @@ class StrategyScreener:
                         'rs_raw': cache_entry.get('rs_raw', 0) or 0,
                         'rs_percentile': cache_entry.get('rs_percentile', 50),
                         'distance_from_52w_high': cache_entry.get('distance_from_52w_high', 0),
+                        'ema8': cache_entry.get('ema8', 0),
                         'ema21': cache_entry.get('ema21', 0),
                         'ema50': cache_entry.get('ema50', 0),
                         'ema200': cache_entry.get('ema200', 0),
                         'high_60d': cache_entry.get('high_60d', 0),
                         'low_60d': cache_entry.get('low_60d', 0),
                         'volume_sma20': cache_entry.get('volume_sma', 0),
+                        'volume_ratio': cache_entry.get('volume_ratio', 1.0),
                         'data_days': cache_entry.get('data_days', len(df)),
+                        'rsi_14': cache_entry.get('rsi_14', 50),
                         # v7.0 Strategy G earnings data
                         'earnings_beat': cache_entry.get('earnings_beat', False),
                         'guidance_change': cache_entry.get('guidance_change', False),
                         'one_time_event': cache_entry.get('one_time_event', False),
                         'days_to_earnings': cache_entry.get('days_to_earnings'),
+                        'days_since_earnings': cache_entry.get('days_since_earnings'),
                         'earnings_date': cache_entry.get('earnings_date'),
                         'gap_1d_pct': cache_entry.get('gap_1d_pct', 0),
                         'gap_direction': cache_entry.get('gap_direction', 'none'),
@@ -293,19 +297,24 @@ class StrategyScreener:
                     'ret_12m': ret_12m,
                     'ret_5d': ret_5d,
                     'rs_raw': rs_raw,
+                    'rs_percentile': 50,  # Will be updated after percentile calculation
                     'distance_from_52w_high': metrics_52w.get('distance_from_high', 1.0),
+                    'ema8': ind.indicators.get('ema', {}).get('ema8', 0),
                     'ema21': ind.indicators.get('ema', {}).get('ema21', 0),
                     'ema50': ind.indicators.get('ema', {}).get('ema50', 0),
                     'ema200': ind.indicators.get('ema', {}).get('ema200', 0),
                     'high_60d': float(df['high'].tail(60).max()),
                     'low_60d': float(df['low'].tail(60).min()),
                     'volume_sma20': float(df['volume'].tail(20).mean()),
+                    'volume_ratio': ind.indicators.get('volume', {}).get('volume_ratio', 1.0),
                     'data_days': len(df),
+                    'rsi_14': ind.indicators.get('rsi', {}).get('rsi', 50),
                     # v7.0 Strategy G earnings data (from Tier 1 cache)
                     'earnings_beat': cache_entry.get('earnings_beat', False),
                     'guidance_change': cache_entry.get('guidance_change', False),
                     'one_time_event': cache_entry.get('one_time_event', False),
                     'days_to_earnings': cache_entry.get('days_to_earnings'),
+                    'days_since_earnings': cache_entry.get('days_since_earnings'),
                     'earnings_date': cache_entry.get('earnings_date'),
                     'gap_1d_pct': cache_entry.get('gap_1d_pct', 0),
                     'gap_direction': cache_entry.get('gap_direction', 'none'),
@@ -554,102 +563,70 @@ class StrategyScreener:
         Select candidates with duplicate handling and sector cap.
         If stock appears in multiple strategies, keep highest technical score.
         Apply soft sector cap of max 4 candidates per sector.
-        Return up to 30 unique candidates.
+
+        Fallback: if < 30 after normal allocation, round-robin fill from
+        remaining candidates of all strategies until 30.
         """
         from collections import defaultdict
 
-        # Group candidates by strategy letter
+        SECTOR_MAX = 4
+
+        # Group candidates by strategy letter, sorted by score
         by_strategy = defaultdict(list)
         for c in all_candidates:
             letter = STRATEGY_NAME_TO_LETTER.get(c.strategy, '')
             if letter:
                 by_strategy[letter].append(c)
+        for letter in by_strategy:
+            by_strategy[letter].sort(key=lambda x: x.technical_snapshot.get('score', 0), reverse=True)
 
-        # Select top N per strategy and track unused slots
+        # Step 1: select top N per strategy from allocation
         selected_by_letter = {}
-        unused_slots = 0  # Track slots not filled by strategies
-
         for letter, slots in allocation.items():
-            if slots == 0:
-                continue
+            selected_by_letter[letter] = by_strategy.get(letter, [])[:slots]
 
-            strategy_cands = by_strategy.get(letter, [])
-            strategy_cands.sort(key=lambda x: x.technical_snapshot.get('score', 0), reverse=True)
-            actual_cands = strategy_cands[:slots]
-            selected_by_letter[letter] = actual_cands
+        total_selected = sum(len(v) for v in selected_by_letter.values())
+        logger.info(f"Initial allocation: {total_selected} candidates from strategy slots")
 
-            # Track unused slots for redistribution
-            if len(strategy_cands) < slots:
-                unused_slots += slots - len(strategy_cands)
-                logger.debug(f"Strategy {letter}: {len(strategy_cands)}/{slots} slots filled ({slots - len(strategy_cands)} unused)")
+        # Step 2: round-robin fill if < 30
+        if total_selected < 30:
+            selected_symbols = set()
+            for letter, cands in selected_by_letter.items():
+                for c in cands:
+                    selected_symbols.add(c.symbol)
 
-        logger.info(f"Slot allocation: {sum(len(v) for v in selected_by_letter.values())} candidates selected, {unused_slots} unused slots available for redistribution")
+            # Build remaining pools per strategy (unselected candidates)
+            remaining = {}
+            for letter, cands in by_strategy.items():
+                pool = [c for c in cands if c.symbol not in selected_symbols]
+                if pool:
+                    remaining[letter] = pool
 
-        # Redistribute unused slots to strategies with extra candidates
-        if unused_slots > 0:
-            logger.info(f"Redistributing {unused_slots} unused slots to strategies with extra candidates")
-
-            # Find strategies with candidates beyond their allocated slots
-            extra_candidates = []
-            for letter, slots in allocation.items():
-                if slots == 0:
-                    continue
-                strategy_cands = by_strategy.get(letter, [])
-                if len(strategy_cands) > slots:
-                    # Add candidates beyond allocated slots
-                    for c in strategy_cands[slots:]:
-                        extra_candidates.append((c, letter))
-
-            # Sort extra candidates by score
-            extra_candidates.sort(key=lambda x: x[0].technical_snapshot.get('score', 0), reverse=True)
-
-            # Add top extra candidates up to unused slots
+            # Round-robin across strategies, one from each per pass
             added = 0
-            for candidate, letter in extra_candidates:
-                if added >= unused_slots:
-                    break
-                if letter not in selected_by_letter:
-                    selected_by_letter[letter] = []
-                selected_by_letter[letter].append(candidate)
-                added += 1
-
-            logger.info(f"Redistributed {added} extra candidates from strategies with surplus")
-
-            # If slots still unused after exhausting all strategy candidates,
-            # fill from any strategy's best remaining (even if already at allocation)
-            remaining_slots = unused_slots - added
-            if remaining_slots > 0:
-                logger.info(f"{remaining_slots} slots still empty, filling from best remaining candidates")
-
-                # Collect ALL candidates not yet selected
-                selected_symbols = set()
-                for letter, cands in selected_by_letter.items():
-                    for c in cands:
-                        selected_symbols.add(c.symbol)
-
-                pool = [c for c in all_candidates if c.symbol not in selected_symbols]
-                pool.sort(key=lambda x: x.technical_snapshot.get('score', 0), reverse=True)
-
-                filled = 0
-                for c in pool:
-                    if filled >= remaining_slots:
+            while added < 30 - total_selected and remaining:
+                any_added = False
+                for letter in list(remaining.keys()):
+                    if added >= 30 - total_selected:
                         break
-                    sector = c.technical_snapshot.get('sector', 'Unknown')
-                    if sector != 'Unknown' and sector_counts.get(sector, 0) >= SECTOR_MAX:
+                    pool = remaining[letter]
+                    candidate = pool.pop(0)
+                    # Skip duplicates
+                    if candidate.symbol in selected_symbols:
                         continue
-                    letter = STRATEGY_NAME_TO_LETTER.get(c.strategy, 'Z')
-                    if letter not in selected_by_letter:
-                        selected_by_letter[letter] = []
-                    selected_by_letter[letter].append(c)
-                    if sector != 'Unknown':
-                        sector_counts[sector] = sector_counts.get(sector, 0) + 1
-                    filled += 1
+                    if not pool:
+                        del remaining[letter]
+                    selected_symbols.add(candidate.symbol)
+                    selected_by_letter[letter].append(candidate)
+                    added += 1
+                    any_added = True
+                if not any_added:
+                    break
 
-                logger.info(f"Filled {filled}/{remaining_slots} remaining slots from best remaining candidates")
+            logger.info(f"Round-robin fill: +{added} candidates, total {total_selected + added}")
 
-        # Flatten and handle duplicates with sector cap
-        SECTOR_MAX = 4  # Soft cap per sector
-        sector_counts = defaultdict(int)  # Track sector counts
+        # Step 3: flatten, deduplicate (keep best score), sector cap
+        sector_counts = defaultdict(int)
         best_by_symbol = {}
 
         for letter, candidates in selected_by_letter.items():
@@ -658,9 +635,8 @@ class StrategyScreener:
                 sector = c.technical_snapshot.get('sector', 'Unknown')
                 current_score = c.technical_snapshot.get('score', 0)
 
-                # Skip if sector already at cap (Unknown sector exempt from cap)
                 if sector != 'Unknown' and sector_counts[sector] >= SECTOR_MAX:
-                    logger.debug(f"Skipping {symbol} ({sector}): sector at cap ({sector_counts[sector]}/{SECTOR_MAX})")
+                    logger.debug(f"Skipping {symbol} ({sector}): sector at cap")
                     continue
 
                 if symbol not in best_by_symbol:
@@ -668,10 +644,8 @@ class StrategyScreener:
                     if sector != 'Unknown':
                         sector_counts[sector] += 1
                 else:
-                    # Keep the one with higher technical score
                     existing_score = best_by_symbol[symbol].technical_snapshot.get('score', 0)
                     if current_score > existing_score:
-                        # Decrement old sector count, increment new (always decrement first)
                         old_sector = best_by_symbol[symbol].technical_snapshot.get('sector', 'Unknown')
                         if old_sector != 'Unknown':
                             sector_counts[old_sector] -= 1
@@ -679,19 +653,53 @@ class StrategyScreener:
                         if sector != 'Unknown':
                             sector_counts[sector] += 1
 
-        # Convert to list (up to 30)
-        selected = list(best_by_symbol.values())
+        final = list(best_by_symbol.values())
+        final.sort(key=lambda x: x.technical_snapshot.get('score', 0), reverse=True)
+        final = final[:30]
 
-        # Sort by score descending for consistent ordering
-        selected.sort(key=lambda x: x.technical_snapshot.get('score', 0), reverse=True)
+        # Backfill if dedup reduced us below 30
+        if len(final) < 30:
+            selected_symbols = set(c.symbol for c in final)
+            sector_counts_final = defaultdict(int)
+            for c in final:
+                sector = c.technical_snapshot.get('sector', 'Unknown')
+                if sector != 'Unknown':
+                    sector_counts_final[sector] += 1
 
-        # Limit to 30
-        final = selected[:30]
+            # Build remaining pool sorted by score
+            remaining_pool = []
+            for letter, cands in by_strategy.items():
+                for c in cands:
+                    if c.symbol not in selected_symbols:
+                        remaining_pool.append(c)
+            remaining_pool.sort(key=lambda x: x.technical_snapshot.get('score', 0), reverse=True)
 
-        logger.info(f"Selected {len(final)} unique candidates (removed {len(selected) - len(final)} duplicates)")
-        logger.info(f"Sector distribution: {dict(sector_counts)}")
+            for c in remaining_pool:
+                if len(final) >= 30:
+                    break
+                if c.symbol in selected_symbols:
+                    continue
+                sector = c.technical_snapshot.get('sector', 'Unknown')
+                if sector != 'Unknown' and sector_counts_final.get(sector, 0) >= SECTOR_MAX:
+                    continue
+                final.append(c)
+                selected_symbols.add(c.symbol)
+                if sector != 'Unknown':
+                    sector_counts_final[sector] += 1
 
-        # Set regime on all
+        final.sort(key=lambda x: x.technical_snapshot.get('score', 0), reverse=True)
+        final = final[:30]
+
+        # Recompute sector counts for logging
+        sector_final = defaultdict(int)
+        for c in final:
+            sector = c.technical_snapshot.get('sector', 'Unknown')
+            if sector != 'Unknown':
+                sector_final[sector] += 1
+
+        logger.info(f"Final: {len(final)} unique candidates")
+        logger.info(f"Sector distribution: {dict(sector_final)}")
+
         for c in final:
             c.regime = regime
 
@@ -880,13 +888,16 @@ class StrategyScreener:
             strategy._current_regime = regime
 
         # Phase 1: Screen with each active strategy
+        # Screen extra to ensure round-robin/backfill has enough candidates to reach 30
+        EXTRA_SCREEN = 10
         all_candidates = []
         for stype, strategy in active_strategies.items():
             letter = STRATEGY_NAME_TO_LETTER.get(strategy.NAME)
             max_slots = allocation.get(letter, 0)
-            candidates = strategy.screen(symbols, max_candidates=max_slots)
+            screen_count = max_slots + EXTRA_SCREEN
+            candidates = strategy.screen(symbols, max_candidates=screen_count)
             all_candidates.extend(candidates)
-            logger.info(f"{strategy.NAME}: {len(candidates)} candidates (max {max_slots})")
+            logger.info(f"{strategy.NAME}: {len(candidates)} candidates (max {max_slots} slots, screened {screen_count})")
 
         # Phase 2: Allocate by table (strict, no backfill)
         selected = self._allocate_by_table(all_candidates, allocation, regime)

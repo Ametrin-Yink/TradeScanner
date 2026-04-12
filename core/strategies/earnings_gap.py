@@ -68,16 +68,15 @@ class EarningsGapStrategy(BaseStrategy):
         phase0_data = getattr(self, 'phase0_data', {})
         data = phase0_data.get(symbol, {})
 
-        # Check earnings timing
-        days_to_earnings = data.get('days_to_earnings')
+        # Check earnings timing - use days_since_earnings (tracks post-earnings gap window)
+        days_since_earnings = data.get('days_since_earnings')
         gap_1d_pct = data.get('gap_1d_pct', 0)
 
-        if days_to_earnings is None or days_to_earnings >= 0:
-            logger.debug(f"EG_REJ: {symbol} - not post-earnings: {days_to_earnings}")
+        if days_since_earnings is None:
+            logger.debug(f"EG_REJ: {symbol} - no last_earnings_date tracked")
             return False
 
         # v7.0: Gap-size-dependent eligibility window
-        days_post_earnings = abs(days_to_earnings)
         gap_size = abs(gap_1d_pct)
 
         if gap_size >= 0.10:
@@ -87,8 +86,8 @@ class EarningsGapStrategy(BaseStrategy):
         else:
             max_days = 2
 
-        if days_post_earnings > max_days or days_post_earnings < 1:
-            logger.debug(f"EG_REJ: {symbol} - Outside eligibility window (gap={gap_size:.1%}, days={days_post_earnings}, max={max_days})")
+        if days_since_earnings > max_days or days_since_earnings < 1:
+            logger.debug(f"EG_REJ: {symbol} - Outside eligibility window (gap={gap_size:.1%}, days_since={days_since_earnings}, max={max_days})")
             return False
 
         # Check gap size
@@ -421,7 +420,7 @@ class EarningsGapStrategy(BaseStrategy):
         phase0_data = getattr(self, 'phase0_data', {})
         data = phase0_data.get(symbol, {})
         gap_pct = data.get('gap_1d_pct', 0)
-        days_to_earnings = data.get('days_to_earnings', 0)
+        days_since_earnings = data.get('days_since_earnings', 0)
         gap_vol_ratio = data.get('gap_volume_ratio', 1.0)
 
         direction = "Up" if gap_pct > 0 else "Down"
@@ -429,6 +428,6 @@ class EarningsGapStrategy(BaseStrategy):
         return [
             f"Score: {score:.2f}/15 (Tier {tier}-{position_pct*100:.0f}%)",
             f"GS:{gs.score:.2f} QC:{qc.score:.2f} TC:{tc.score:.2f} VC:{vc.score:.2f}",
-            f"{direction} gap {abs(gap_pct)*100:.1f}% | {abs(days_to_earnings)} days post-earnings | Vol {gap_vol_ratio:.1f}x",
+            f"{direction} gap {abs(gap_pct)*100:.1f}% | {days_since_earnings} days post-earnings | Vol {gap_vol_ratio:.1f}x",
             f"Consolidation quality: {qc.score:.1f}/4.0 | Volume confirm: {vc.score:.1f}/3.0"
         ]

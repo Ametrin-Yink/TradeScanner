@@ -26,6 +26,28 @@ class Phase4DeepAnalysisHandler(PhaseHandler):
         # Convert ScoredCandidate with deep_analysis to AnalyzedOpportunity for reporter
         top_10 = []
         for c in analyzed[:10]:
+            da = c.deep_analysis if hasattr(c, 'deep_analysis') and c.deep_analysis else {}
+
+            # Map catalysts from deep_analysis
+            catalysts = da.get('key_catalysts', [])
+            if isinstance(catalysts, list):
+                catalyst = '; '.join(str(x) for x in catalysts) if catalysts else ''
+            else:
+                catalyst = str(catalysts) if catalysts else ''
+
+            # Map reasoning: prefer detailed_reasoning, fallback to technical_outlook, then reasoning
+            ai_reasoning = (
+                da.get('detailed_reasoning', '')
+                or da.get('technical_outlook', '')
+                or getattr(c, 'reasoning', '')
+            )
+
+            # Map risk factors: combine ScoredCandidate risk_factors with deep_analysis risk_level
+            risk_factors = list(getattr(c, 'risk_factors', []) or [])
+            risk_level = da.get('risk_level', '')
+            if risk_level and not risk_factors:
+                risk_factors = [f"{risk_level} overall risk environment"]
+
             opp = AnalyzedOpportunity(
                 symbol=c.symbol,
                 strategy=c.strategy,
@@ -34,9 +56,9 @@ class Phase4DeepAnalysisHandler(PhaseHandler):
                 take_profit=c.take_profit,
                 confidence=c.confidence,
                 match_reasons=getattr(c, 'match_reasons', []),
-                ai_reasoning=c.deep_analysis.get('technical_outlook', '') if hasattr(c, 'deep_analysis') and c.deep_analysis else getattr(c, 'reasoning', ''),
-                catalyst='',
-                risk_factors=c.risk_factors if hasattr(c, 'risk_factors') else [],
+                ai_reasoning=ai_reasoning,
+                catalyst=catalyst,
+                risk_factors=risk_factors[:3],
                 technical_snapshot=getattr(c, 'technical_snapshot', {}),
             )
             top_10.append(opp)

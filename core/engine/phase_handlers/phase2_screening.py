@@ -1,5 +1,7 @@
 """Phase 2: Strategy Screening handler."""
 import logging
+import sqlite3
+from datetime import datetime
 
 from core.engine.base_phase import PhaseHandler, PhaseResult
 from core.engine.context import PipelineContext
@@ -41,11 +43,33 @@ class Phase2ScreeningHandler(PhaseHandler):
             market_data=tier3_data
         )
 
-        # Track symbols that didn't produce any candidate
-        candidate_symbols = {c.symbol for c in candidates}
-        fail_symbols = [s for s in symbols if s not in candidate_symbols]
+        # Identify actual data failures: symbols with neither Tier 1 cache nor
+        # market_data DB entries. Everything else that didn't match a strategy
+        # is normal — most stocks don't trigger any setup on a given day.
+        scan_date = datetime.now().strftime('%Y-%m-%d')
+        with db.get_connection() as conn:
+            conn.row_factory = sqlite3.Row
+            tier1_rows = conn.execute(
+                "SELECT symbol FROM tier1_cache WHERE cache_date = ?",
+                (scan_date,)
+            ).fetchall()
+            stock_rows = conn.execute(
+                "SELECT symbol FROM stocks WHERE is_active = 1"
+            ).fetchall()
 
-        logger.info(f"Found {len(candidates)} candidates, {len(fail_symbols)} symbols without matches")
+        cached_symbols = {row['symbol'] for row in tier1_rows}
+        stocks_with_data = {row['symbol'] for row in stock_rows}
+        fail_symbols = [
+            s for s in symbols
+            if s not in cached_symbols and s not in stocks_with_data
+        ]
+
+        no_match = len(symbols) - len(candidates) - len(fail_symbols)
+        logger.info(
+            f"Found {len(candidates)} candidates, "
+            f"{len(fail_symbols)} data failures, "
+            f"{no_match} no-match (normal)"
+        )
 
         return PhaseResult(success=True, data={
             'candidates': candidates,

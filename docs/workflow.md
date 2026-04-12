@@ -31,10 +31,10 @@ Phase 0: Data Prep (15-20 min)
 ├── Filter by market cap (≥$2B), price ($2-$3000), volume (≥100K)
 └── Calculate Tier 1 metrics for ~1,800-2,000 qualifying stocks
 
-Phase 1: AI Market Regime (3-5 min)
+Phase 1: AI Market Regime (30-60s)
 ├── Load SPY, VIX from Tier 3
-├── Tavily search (3 market news queries)
-├── AI classifies regime (technical + news)
+├── DashScope AI with enable_search (web search built-in)
+├── AI classifies regime (technical + news in one call)
 └── Get allocation from regime table (30 slots)
 
 Phase 2: Strategy Screening (10-15 min)
@@ -99,8 +99,8 @@ Phase 6: Notifications (1 min)
 **Process**:
 
 1. Load SPY, VIX from Tier 3 cached data
-2. Tavily search (3 queries: US stock market, S&P 500, VIX)
-3. AI classifies regime via DashScope (technical indicators + news sentiment)
+2. Single DashScope AI call with `enable_search: True`
+3. AI searches web internally, combines results with technical indicators, classifies regime
 4. Get allocation from regime table (30 slots total)
 
 **Validation**: VIX > 30 → force extreme_vix
@@ -203,7 +203,7 @@ python -c "from core.premarket_prep import PreMarketPrep; PreMarketPrep().run_ph
 | Phase     | Duration      |
 | --------- | ------------- |
 | Phase 0   | 15-20 min     |
-| Phase 1   | 3-5 min       |
+| Phase 1   | 30-60s        |
 | Phase 2   | 10-15 min     |
 | Phase 3   | 15-20 min     |
 | Phase 4   | 10-15 min     |

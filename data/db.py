@@ -88,6 +88,10 @@ class Database:
             logger.info("Migrating stocks table: adding earnings_fetched_at column")
             conn.execute("ALTER TABLE stocks ADD COLUMN earnings_fetched_at TEXT")
 
+        if 'last_earnings_date' not in columns:
+            logger.info("Migrating stocks table: adding last_earnings_date column")
+            conn.execute("ALTER TABLE stocks ADD COLUMN last_earnings_date TEXT")
+
         if 'shares_outstanding' not in columns:
             logger.info("Migrating stocks table: adding shares_outstanding column")
             conn.execute("ALTER TABLE stocks ADD COLUMN shares_outstanding REAL")
@@ -781,15 +785,53 @@ class Database:
                 return row[0]
             return None
 
-    def update_stock_earnings_date(self, symbol: str, earnings_date: str):
+    def get_stock_last_earnings_date(self, symbol: str) -> Optional[str]:
+        """Get the last reported earnings date for a stock.
+
+        Args:
+            symbol: Stock symbol
+
+        Returns:
+            ISO date string (YYYY-MM-DD) or None if never reported
+        """
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT last_earnings_date FROM stocks WHERE symbol = ?",
+                (symbol,)
+            )
+            row = cursor.fetchone()
+            if row and row[0]:
+                return row[0]
+            return None
+
+    def update_stock_last_earnings_date(self, symbol: str, last_earnings_date: str):
+        """Save the previous earnings date (used to track post-earnings gap setups).
+
+        Args:
+            symbol: Stock symbol
+            last_earnings_date: ISO date string of the earnings that just occurred
+        """
+        with self.get_connection() as conn:
+            conn.execute(
+                "UPDATE stocks SET last_earnings_date = ? WHERE symbol = ?",
+                (last_earnings_date, symbol)
+            )
+
+    def update_stock_earnings_date(self, symbol: str, earnings_date: str, old_date: Optional[str] = None):
         """Update next earnings date for a stock.
 
         Args:
             symbol: Stock symbol
             earnings_date: ISO date string (YYYY-MM-DD)
+            old_date: Previous earnings date that just passed (saved as last_earnings_date)
         """
         today = datetime.now().date().isoformat()
         with self.get_connection() as conn:
+            if old_date:
+                conn.execute(
+                    "UPDATE stocks SET last_earnings_date = ? WHERE symbol = ?",
+                    (old_date, symbol)
+                )
             conn.execute(
                 """UPDATE stocks SET
                     next_earnings_date = ?,

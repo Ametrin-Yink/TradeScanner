@@ -291,7 +291,7 @@ class ReportGenerator:
             </div>
             """
 
-        # Build runner-ups section (11-40) from all_candidates, excluding top 10
+        # Build runner-ups section (11-30) from all_candidates, excluding top 10
         # Get symbols in top 10 to exclude
         top_symbols = {opp.symbol for opp in opportunities[:10]}
 
@@ -306,11 +306,15 @@ class ReportGenerator:
 
             # Handle both AnalyzedOpportunity and StrategyMatch
             match_reasons = getattr(cand, 'match_reasons', [])
+            stop_loss = getattr(cand, 'stop_loss', 0)
+            take_profit = getattr(cand, 'take_profit', 0)
             runners_section += f"""
             <tr>
                 <td>{cand.symbol}</td>
                 <td>{cand.strategy}</td>
                 <td>${cand.entry_price:.2f}</td>
+                <td>${stop_loss:.2f}</td>
+                <td>${take_profit:.2f}</td>
                 <td>{cand.confidence}%</td>
                 <td>{', '.join(match_reasons[:2])}</td>
             </tr>
@@ -493,8 +497,36 @@ class ReportGenerator:
             .chart-image {{
                 width: 100%;
                 height: auto;
-                max-height: 400px;
+                max-height: 250px;
             }}
+        }}
+        @media (max-width: 600px) {{
+            .container {{ padding: 8px; }}
+            header {{ padding: 12px 16px; }}
+            header h1 {{ font-size: 18px; }}
+            .meta {{ font-size: 11px; }}
+            .sentiment {{ font-size: 10px; padding: 3px 8px; }}
+            .sentiment-details {{ padding: 8px 10px; font-size: 11px; }}
+            .sentiment-reasoning {{ font-size: 12px; }}
+            .technical-context {{ font-size: 10px !important; }}
+            .stats-compact {{ font-size: 10px; }}
+            .section-title {{ font-size: 13px; margin: 16px 0 8px 0; }}
+            .opportunity {{ padding: 10px; margin-bottom: 8px; }}
+            .opp-header {{ flex-wrap: wrap; gap: 6px; padding-bottom: 8px; margin-bottom: 8px; }}
+            .rank {{ font-size: 14px; width: 24px; }}
+            .symbol {{ font-size: 16px; }}
+            .strategy {{ font-size: 9px; padding: 1px 5px; }}
+            .confidence {{ font-size: 14px; }}
+            .trade-levels {{ gap: 4px; }}
+            .level {{ padding: 3px 6px; font-size: 10px; }}
+            .ai-analysis {{ padding: 8px; min-width: unset; }}
+            .ai-analysis h4 {{ font-size: 11px; }}
+            .ai-analysis p {{ font-size: 11px; }}
+            .badge {{ font-size: 8px; }}
+            .table-scroll {{ overflow-x: auto; -webkit-overflow-scrolling: touch; }}
+            table {{ font-size: 11px; min-width: 500px; }}
+            th, td {{ padding: 6px 8px; }}
+            .fail-symbols {{ font-size: 11px; word-break: break-all; }}
         }}
         .ai-analysis h4 {{
             margin-bottom: 8px;
@@ -557,13 +589,16 @@ class ReportGenerator:
         <h2 class="section-title">Top 10 Opportunities</h2>
         {top_section}
 
-        <h2 class="section-title">Additional Candidates (11-40)</h2>
+        <h2 class="section-title">Additional Candidates (11-{10 + runner_count})</h2>
+        <div class="table-scroll">
         <table>
             <thead>
                 <tr>
                     <th>Symbol</th>
                     <th>Strategy</th>
                     <th>Entry</th>
+                    <th>Stop</th>
+                    <th>Target</th>
                     <th>Confidence</th>
                     <th>Key Signals</th>
                 </tr>
@@ -572,6 +607,7 @@ class ReportGenerator:
                 {runners_section}
             </tbody>
         </table>
+        </div>
 
         <h2 class="section-title">Failed Symbols</h2>
         <div class="fail-symbols">

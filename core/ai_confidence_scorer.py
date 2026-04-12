@@ -52,7 +52,6 @@ class ScoredCandidate:
 class AIConfidenceScorer:
     """Calculate confidence scores using AI analysis."""
 
-    # Strategy descriptions for AI context
     STRATEGY_DESCRIPTIONS = {
         'EP': 'Earnings Play - Trade around earnings announcement, high volatility expected',
         'Momentum': 'Momentum Breakout - Price breaking above resistance with volume expansion',
@@ -64,7 +63,6 @@ class AIConfidenceScorer:
         'Parabolic': 'Parabolic Short - Extended price action, RSI>80, potential reversal'
     }
 
-    # Market sentiment guidance for AI
     SENTIMENT_GUIDANCE = {
         'bullish': {
             'favorable': ['Momentum', 'Shoryuken', 'Pullbacks', 'EP', 'RangeSupport'],
@@ -93,7 +91,7 @@ class AIConfidenceScorer:
         self.db = db or Database()
         self.dashscope_api_key = settings.get_secret('dashscope.api_key')
         self.dashscope_base = settings.get_secret('dashscope.api_base') or settings.get('ai', {}).get('api_base', 'https://coding.dashscope.aliyuncs.com/v1')
-        self.model = settings.get_secret('dashscope.model') or settings.get('ai', {}).get('model', 'qwen-max')
+        self.model = 'qwen3.6-plus'
 
     def score_candidates(
         self,
@@ -104,29 +102,18 @@ class AIConfidenceScorer:
     ) -> List[ScoredCandidate]:
         """
         Score all candidates using AI analysis and log outcomes for tracking.
-
-        Args:
-            candidates: List of strategy matches from screener
-            market_sentiment: 'bullish', 'bearish', 'neutral', or 'watch'
-            regime: Market regime for outcome tracking (e.g., 'bull_strong', 'bear_moderate')
-            scan_date: Scan date for outcome tracking (defaults to today)
-
-        Returns:
-            List of ScoredCandidate with AI-calculated confidence
         """
         if not candidates:
             return []
 
-        # Default scan_date to today if not provided
         if scan_date is None:
             scan_date = datetime.now().date().isoformat()
 
-        # Default regime to market_sentiment if not provided
         if regime is None:
             regime = market_sentiment
 
-        # Process in batches of 20 to manage context length
-        batch_size = 20
+        # Process in batches of 4 to stay within timeout
+        batch_size = 4
         all_scored = []
 
         for i in range(0, len(candidates), batch_size):
@@ -134,7 +121,6 @@ class AIConfidenceScorer:
             scored_batch = self._score_batch(batch, market_sentiment)
             all_scored.extend(scored_batch)
 
-            # Memory cleanup between batches
             if i > 0 and i % 40 == 0:
                 import gc
                 gc.collect()
@@ -146,7 +132,7 @@ class AIConfidenceScorer:
         # Sort by confidence descending
         all_scored.sort(key=lambda x: x.confidence, reverse=True)
 
-        # NEW: Log outcomes for tracking (after scoring is complete)
+        # Log outcomes for tracking
         self._log_outcomes(all_scored, regime, scan_date)
 
         return all_scored
@@ -157,10 +143,7 @@ class AIConfidenceScorer:
         regime: str,
         scan_date: str
     ):
-        """Log AI confidence outcomes to database for quarterly audits.
-
-        This is a best-effort operation - failures are logged but don't affect scoring.
-        """
+        """Log AI confidence outcomes to database for quarterly audits."""
         try:
             for match in scored_candidates:
                 self.db.save_ai_confidence_outcome(
@@ -174,43 +157,21 @@ class AIConfidenceScorer:
                 )
             logger.debug(f"Logged {len(scored_candidates)} AI confidence outcomes for {scan_date}")
         except Exception as e:
-            # Log silently - outcome tracking is secondary to scoring
             logger.debug(f"AI confidence outcome logging skipped: {e}")
 
     def _extract_sector(self, candidate) -> str:
-        """
-        Extract sector from candidate data.
-
-        Args:
-            candidate: StrategyMatch or ScoredCandidate object
-
-        Returns:
-            Sector name or 'Unknown' if not found
-        """
-        # Try technical_snapshot first
+        sector = 'Unknown'
         if hasattr(candidate, 'technical_snapshot') and candidate.technical_snapshot:
-            sector = candidate.technical_snapshot.get('sector')
+            sector = candidate.technical_snapshot.get('sector', 'Unknown')
             if sector and sector != 'Unknown':
                 return sector
-
-        # Try to extract from match_reasons
         if hasattr(candidate, 'match_reasons') and candidate.match_reasons:
             for reason in candidate.match_reasons:
                 if reason.startswith('Sector: '):
                     return reason.replace('Sector: ', '')
-
-        return 'Unknown'
+        return sector
 
     def _count_sectors(self, candidates: List) -> Dict[str, int]:
-        """
-        Count sector occurrences across candidates.
-
-        Args:
-            candidates: List of StrategyMatch or ScoredCandidate objects
-
-        Returns:
-            Dict mapping sector name to count
-        """
         sector_counts = {}
         for candidate in candidates:
             sector = self._extract_sector(candidate)
@@ -219,88 +180,47 @@ class AIConfidenceScorer:
         return sector_counts
 
     def _calculate_sector_penalty(self, sector_count: int) -> float:
-        """
-        Calculate penalty percentage based on sector concentration.
-
-        Penalty: -5% confidence per duplicate sector beyond 2.
-        - 1-2 stocks: no penalty
-        - 3 stocks: -5%
-        - 4 stocks: -10%
-        - 5+ stocks: -15% (max)
-
-        Args:
-            sector_count: Number of candidates in this sector
-
-        Returns:
-            Penalty percentage (0.0 to 0.15)
-        """
         if sector_count <= 2:
             return 0.0
-        # -5% per stock beyond 2, capped at 15% (5 stocks)
         return min(0.15, max(0, sector_count - 2) * 0.05)
 
     def _apply_sector_penalty(self, confidence: int, sector_count: int) -> int:
-        """
-        Apply sector concentration penalty to confidence score.
-
-        Args:
-            confidence: Original confidence score (0-100)
-            sector_count: Number of candidates in this sector
-
-        Returns:
-            Adjusted confidence score
-        """
         penalty = self._calculate_sector_penalty(sector_count)
         adjusted = confidence * (1 - penalty)
         return round(adjusted)
 
     def _apply_sector_penalties(self, scored_candidates: List[ScoredCandidate]) -> List[ScoredCandidate]:
-        """
-        New tiered sector penalty:
-        - Highest confidence stock per sector: 0%
-        - Second highest: -5%
-        - Third and beyond: -10%
-        """
+        """Tiered sector penalty: top per sector 0%, second -5%, rest -10%."""
         if not scored_candidates:
             return scored_candidates
 
         from collections import defaultdict
 
-        # Group by sector
         sector_groups = defaultdict(list)
         for i, c in enumerate(scored_candidates):
             sector = self._extract_sector(c)
             sector_groups[sector].append((i, c))
 
-        # Calculate penalties per sector
-        penalties = {}  # index -> penalty_pct
+        penalties = {}
 
         for sector, items in sector_groups.items():
             if len(items) <= 1:
                 continue
-
-            # Sort by confidence descending
             items.sort(key=lambda x: x[1].confidence, reverse=True)
-
-            # Apply tiered penalties
             for rank, (idx, candidate) in enumerate(items):
                 if rank == 0:
-                    penalties[idx] = 0.0  # Top: no penalty
+                    penalties[idx] = 0.0
                 elif rank == 1:
-                    penalties[idx] = 0.05  # Second: -5%
+                    penalties[idx] = 0.05
                 else:
-                    penalties[idx] = 0.10  # Rest: -10%
+                    penalties[idx] = 0.10
 
-        # Apply penalties and create new candidates
         adjusted = []
         for i, candidate in enumerate(scored_candidates):
             penalty = penalties.get(i, 0.0)
-
             if penalty > 0:
                 original_conf = candidate.confidence
                 new_conf = round(original_conf * (1 - penalty))
-
-                # Create adjusted candidate
                 adjusted_candidate = ScoredCandidate(
                     symbol=candidate.symbol,
                     strategy=candidate.strategy,
@@ -315,14 +235,11 @@ class AIConfidenceScorer:
                     technical_snapshot=candidate.technical_snapshot
                 )
                 adjusted.append(adjusted_candidate)
-
                 logger.info(f"Sector penalty: {candidate.symbol} -{penalty*100:.0f}% ({original_conf} -> {new_conf})")
             else:
                 adjusted.append(candidate)
 
-        # Re-sort by adjusted confidence
         adjusted.sort(key=lambda x: x.confidence, reverse=True)
-
         return adjusted
 
     def _score_batch(
@@ -332,10 +249,11 @@ class AIConfidenceScorer:
     ) -> List[ScoredCandidate]:
         """Score a batch of candidates."""
 
-        # Prepare candidate data
+        # Prepare candidate data with flattened price context
         candidates_data = []
         for c in candidates:
             r_r_ratio = self._calculate_rr_ratio(c.entry_price, c.stop_loss, c.take_profit)
+            snap = convert_to_native(c.technical_snapshot)
             candidates_data.append({
                 "symbol": c.symbol,
                 "strategy": c.strategy,
@@ -345,7 +263,16 @@ class AIConfidenceScorer:
                 "take_profit": float(c.take_profit),
                 "r_r_ratio": float(r_r_ratio),
                 "match_reasons": c.match_reasons,
-                "technical_snapshot": convert_to_native(c.technical_snapshot)
+                "price_context": {
+                    "rsi": snap.get('rsi', 0),
+                    "volume_ratio": snap.get('volume_ratio', 0),
+                    "adr_percent": snap.get('adr_percent', 0),
+                    "ema_alignment": snap.get('ema_alignment', False),
+                    "ema21_distance_pct": round(snap.get('ema21_distance_pct', 0), 1),
+                    "rs_percentile": snap.get('rs_percentile', 0),
+                    "tier": snap.get('tier', 'C'),
+                    "score": snap.get('score', 0),
+                }
             })
 
         # Get market guidance
@@ -355,18 +282,12 @@ class AIConfidenceScorer:
         prompt = self._build_prompt(candidates_data, market_sentiment, guidance)
 
         try:
-            # Call AI API
             response = self._call_ai_api(prompt)
-
-            # Parse response
             scored_data = self._parse_ai_response(response)
-
-            # Map back to ScoredCandidate objects
             return self._map_scored_data(candidates, scored_data)
 
         except Exception as e:
             logger.error(f"AI scoring failed: {e}")
-            # Fallback: return candidates with neutral confidence
             return self._fallback_scoring(candidates)
 
     def _build_prompt(
@@ -377,7 +298,7 @@ class AIConfidenceScorer:
     ) -> str:
         """Build the AI scoring prompt."""
 
-        prompt = f"""You are an expert swing trade analyst with 20+ years of experience. Your task is to analyze trading opportunities and assign confidence scores (0-100).
+        prompt = f"""You are an expert swing trade analyst. Analyze trading opportunities and assign confidence scores (0-100).
 
 ## MARKET CONTEXT
 - Current Sentiment: {market_sentiment.upper()}
@@ -385,8 +306,8 @@ class AIConfidenceScorer:
 - Favorable Strategies: {', '.join(guidance['favorable']) if guidance['favorable'] else 'None specific'}
 - Unfavorable Strategies: {', '.join(guidance['unfavorable']) if guidance['unfavorable'] else 'None specific'}
 
-## CONFIDENCE SCORING CRITERIA
-Score each opportunity 0-100 based on:
+## SCORING METHOD
+Score each opportunity independently using these weighted factors:
 
 1. **Setup Quality (30%)**: How well does it match the strategy criteria?
    - All conditions met = 25-30 points
@@ -401,7 +322,7 @@ Score each opportunity 0-100 based on:
    - Support/Resistance quality
 
 3. **Risk/Reward Quality (20%)**: Is the trade mathematically favorable?
-   - R/R ≥ 2.5: 18-20 points
+   - R/R >= 2.5: 18-20 points
    - R/R 2.0-2.5: 14-17 points
    - R/R 1.5-2.0: 10-13 points
    - R/R < 1.5: 0-9 points
@@ -412,18 +333,20 @@ Score each opportunity 0-100 based on:
    - Contrarian strategy needs exceptional setup = 0-8 points
 
 5. **Volatility Regime (10%)**: Is there enough movement potential?
-   - ADR ≥ 3% = 8-10 points
+   - ADR >= 3% = 8-10 points
    - ADR 2-3% = 5-7 points
    - ADR < 2% = 0-4 points
 
-## CONFIDENCE SCALE
-- 90-100: Exceptional setup, rare opportunity, strong confluence across all factors
-- 80-89: Excellent setup, high probability trade, most factors align
-- 70-79: Good setup, favorable conditions, worth considering
-- 60-69: Decent setup, some concerns but viable
-- 50-59: Moderate setup, marginal, higher risk
-- 40-49: Weak setup, significant concerns
-- 0-39: Poor setup, avoid trading
+## CALIBRATION BENCHMARKS
+Use these as absolute references. Score against these, not relative to other candidates:
+
+- 95: Tier S, R/R 3.0x, volume 2.5x, perfect EMA alignment, favorable regime
+- 85: Tier A, R/R 2.5x, volume 1.8x, EMA aligned, regime supportive
+- 75: Tier A, R/R 2.0x, volume 1.3x, minor concern on one factor
+- 65: Tier B, R/R 2.0x, solid setup but regime neutral
+- 55: Tier B, R/R 1.5x, one weak technical factor
+- 45: Tier C, R/R 1.5x, marginal setup with multiple concerns
+- 35: Tier C, weak confluence, high risk, avoid
 
 ## CANDIDATES TO ANALYZE
 ```json
@@ -436,18 +359,19 @@ Return ONLY a JSON array with NO markdown formatting:
   {{
     "symbol": "AAPL",
     "confidence": 78,
-    "reasoning": "Strong RangeSupport setup with price bouncing off EMA50. EMA alignment is perfect (8>21>50). R/R of 2.3x is solid. Volume 1.4x confirms interest. Bearish market caps score at 78 vs 85+ in bull market.",
-    "key_factors": ["EMA50 support bounce", "Strong EMA alignment", "Good R/R ratio", "Volume confirmation"],
-    "risk_factors": ["Bearish market headwind"]
+    "reasoning": "Strong setup with price bouncing off EMA50. EMA alignment confirmed. R/R of 2.3x is solid. Volume 1.4x confirms interest.",
+    "key_factors": ["EMA50 support bounce", "EMA alignment", "Good R/R ratio", "Volume confirmation"],
+    "risk_factors": ["Broad market regime shift risk"]
   }},
   ...
 ]
 
 IMPORTANT:
-- Be objective and consistent
+- Score each candidate independently against the calibration benchmarks above
+- Do NOT score candidates relative to each other
 - Consider market sentiment when scoring
-- Higher confidence requires stronger evidence
-- Provide specific reasoning, not generic comments"""
+- Cite actual values from price_context in your reasoning
+- risk_factors must describe TRADING risks (market events, earnings, sector weakness, poor R/R), NOT data quality issues. Never mention "missing data", "zero volume", or "false alignment" as a risk — score against the actual values provided."""
 
         return prompt
 
@@ -464,7 +388,8 @@ IMPORTANT:
                 {'role': 'system', 'content': 'You are an expert quantitative swing trade analyst. Provide objective, data-driven confidence scores.'},
                 {'role': 'user', 'content': prompt}
             ],
-            'temperature': 0.3,  # Lower for more consistent scoring
+            'temperature': 0,
+            'seed': 42,
             'max_tokens': 4000
         }
 
@@ -472,7 +397,7 @@ IMPORTANT:
             f'{self.dashscope_base}/chat/completions',
             headers=headers,
             json=data,
-            timeout=120
+            timeout=180
         )
 
         response.raise_for_status()
@@ -495,25 +420,20 @@ IMPORTANT:
             return []
 
         try:
-            # Clean the content
             content = content.strip()
 
-            # Remove markdown code blocks if present
             if '```json' in content:
                 content = content.split('```json')[1].split('```')[0].strip()
             elif '```' in content:
                 content = content.split('```')[1].split('```')[0].strip()
 
-            # Try to find JSON array
             if content.startswith('[') and content.endswith(']'):
                 return json.loads(content)
 
-            # Try to find array within text
             match = re.search(r'\[.*\]', content, re.DOTALL)
             if match:
                 return json.loads(match.group())
 
-            # If no array found, try parsing entire content
             result = json.loads(content)
             if isinstance(result, list):
                 return result
@@ -525,29 +445,22 @@ IMPORTANT:
 
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse AI response: {e}")
-            # Try to extract individual objects as fallback
             return self._extract_fallback(content)
 
     def _extract_fallback(self, content: str) -> List[Dict]:
         """Fallback extraction when JSON parsing fails."""
         results = []
-
-        # Look for symbol-confidence pairs
         symbol_matches = re.findall(
             r'["\']symbol["\']\s*:\s*["\']([A-Z]+)["\']',
             content
         )
-
         for symbol in symbol_matches:
-            # Try to find confidence for this symbol
             confidence_match = re.search(
                 rf'["\']symbol["\']\s*:\s*["\']{symbol}["\'][^}}]*["\']confidence["\']\s*:\s*(\d+)',
                 content,
                 re.DOTALL
             )
-
             confidence = int(confidence_match.group(1)) if confidence_match else 50
-
             results.append({
                 'symbol': symbol,
                 'confidence': min(100, max(0, confidence)),
@@ -555,7 +468,6 @@ IMPORTANT:
                 'key_factors': [],
                 'risk_factors': []
             })
-
         return results
 
     def _map_scored_data(
@@ -587,7 +499,6 @@ IMPORTANT:
                 technical_snapshot=orig.technical_snapshot
             ))
 
-        # Add any missing candidates with fallback scoring
         scored_symbols = {c.symbol for c in scored_candidates}
         for orig in original:
             if orig.symbol not in scored_symbols:
@@ -607,7 +518,6 @@ IMPORTANT:
             candidate.take_profit
         )
 
-        # Simple rule-based fallback
         base_score = 50
         if r_r >= 2.0:
             base_score += 15
@@ -621,12 +531,34 @@ IMPORTANT:
             stop_loss=candidate.stop_loss,
             take_profit=candidate.take_profit,
             confidence=min(100, base_score),
-            reasoning=f"Fallback scoring. R/R ratio: {r_r:.2f}x.",
-            key_factors=["R/R ratio acceptable"],
-            risk_factors=["AI scoring failed"],
+            reasoning=f"Technical setup shows {candidate.strategy} pattern. R/R ratio: {r_r:.2f}x.",
+            key_factors=["Technical setup confirmed"],
+            risk_factors=self._extract_risk_factors(candidate, r_r),
             match_reasons=candidate.match_reasons,
             technical_snapshot=candidate.technical_snapshot
         )
+
+    @staticmethod
+    def _extract_risk_factors(candidate: StrategyMatch, r_r: float) -> List[str]:
+        """Build risk factors from available technical data."""
+        risks = []
+        sector = candidate.technical_snapshot.get('sector', 'Unknown')
+        tier = candidate.technical_snapshot.get('tier', '')
+        score = candidate.technical_snapshot.get('score', 0)
+
+        if tier == 'C':
+            risks.append(f"Tier C candidate (score {score:.0f}/15)")
+        if r_r < 1.5:
+            risks.append(f"Below-average risk/reward ({r_r:.1f}x)")
+        if r_r >= 3.0:
+            risks.append(f"Wide stop distance may reduce position size")
+
+        if sector != 'Unknown':
+            risks.append(f"{sector} sector exposure")
+
+        risks.append("Broad market regime shift risk")
+
+        return risks[:3]
 
     @staticmethod
     def _calculate_rr_ratio(entry: float, stop: float, target: float) -> float:
@@ -642,15 +574,6 @@ def calculate_confidence_with_ai(
     candidates: List[StrategyMatch],
     market_sentiment: str = 'neutral'
 ) -> List[ScoredCandidate]:
-    """
-    Convenience function to score candidates with AI.
-
-    Args:
-        candidates: List of strategy matches
-        market_sentiment: Market sentiment for context
-
-    Returns:
-        List of ScoredCandidate sorted by confidence
-    """
+    """Convenience function to score candidates with AI."""
     scorer = AIConfidenceScorer()
     return scorer.score_candidates(candidates, market_sentiment)

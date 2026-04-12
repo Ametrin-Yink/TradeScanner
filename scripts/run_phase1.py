@@ -39,7 +39,7 @@ def run_phase1():
     logger.info(f"SPY data: {len(spy_df)} rows, last date: {spy_df.index[-1]}")
     logger.info(f"VIX data: {len(vix_df)} rows, last date: {vix_df.index[-1]}")
 
-    logger.info("\n[1/2] Running AI market analysis (Tavily + AI)...")
+    logger.info("\n[1/2] Running AI market analysis (DashScope enable_search)...")
     analysis = market_analyzer.analyze_for_regime(spy_df, vix_df)
     ai_regime = analysis['sentiment']
     ai_confidence = analysis['confidence']
@@ -55,7 +55,6 @@ def run_phase1():
     logger.info("\n[2/2] Technical regime detection + allocation...")
     regime = regime_detector.detect_regime_ai(
         spy_df, vix_df,
-        analysis.get('tavily_results', []),
         ai_regime
     )
     allocation = regime_detector.get_allocation(regime)

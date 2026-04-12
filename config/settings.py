@@ -36,7 +36,6 @@ DEFAULT_SETTINGS = {
         "api_base": "https://coding.dashscope.aliyuncs.com/v1",
         "model": "qwen-max",
         "analysis_mode": "tiered",
-        "tavily_enabled": True,
     },
     "report": {
         "generate_charts": True,

@@ -364,8 +364,9 @@ class PreMarketPrep:
         """
         today = datetime.now().date()
 
-        # Find stocks needing earnings update
+        # Find stocks needing earnings update, capturing old dates for those that passed
         needs_update = []
+        old_earnings = {}  # symbol -> old date (earnings that just passed)
         for symbol in symbols:
             cached_date = self.db.get_stock_earnings_date(symbol)
             if not cached_date:
@@ -376,6 +377,9 @@ class PreMarketPrep:
                     # Refetch if earnings has passed OR cache is >7 days old
                     if cached_dt < today or (today - cached_dt).days > 7:
                         needs_update.append(symbol)
+                        # Save old date if earnings just passed (not just stale cache)
+                        if cached_dt < today:
+                            old_earnings[symbol] = cached_date
                 except:
                     needs_update.append(symbol)
 
@@ -397,7 +401,9 @@ class PreMarketPrep:
 
             batch_updated = [0]
 
-            def fetch_earnings_for_symbol(symbol):
+            batch_old_earnings = {s: old_earnings.get(s) for s in batch}
+
+            def fetch_earnings_for_symbol(symbol, old_date):
                 try:
                     ticker = yf.Ticker(symbol)
 
@@ -431,7 +437,7 @@ class PreMarketPrep:
                                             date = date_val
                                         if date >= today:
                                             earnings_date = date.isoformat()
-                                            self.db.update_stock_earnings_date(symbol, earnings_date)
+                                            self.db.update_stock_earnings_date(symbol, earnings_date, old_date=old_date)
                                             with fetch_lock:
                                                 batch_updated[0] += 1
                                             break
@@ -463,7 +469,7 @@ class PreMarketPrep:
                     logger.debug(f"Failed to fetch earnings for {symbol}: {e}")
 
             with ThreadPoolExecutor(max_workers=2) as executor:
-                futures = {executor.submit(fetch_earnings_for_symbol, s): s for s in batch}
+                futures = {executor.submit(fetch_earnings_for_symbol, s, batch_old_earnings.get(s)): s for s in batch}
                 for future in as_completed(futures):
                     future.result()
 
@@ -727,6 +733,7 @@ class PreMarketPrep:
             # Earnings date from DB cache
             earnings_date = self.db.get_stock_earnings_date(symbol)
             days_to_earnings = None
+            days_since_earnings = None
             earnings_beat = False
             guidance_change = False
             one_time_event = False
@@ -736,6 +743,16 @@ class PreMarketPrep:
                     today = datetime.now().date()
                     ed = datetime.fromisoformat(earnings_date).date()
                     days_to_earnings = (ed - today).days
+                except:
+                    pass
+
+            # Track days since last reported earnings (for Strategy G post-earnings gap setups)
+            last_earnings_date = self.db.get_stock_last_earnings_date(symbol)
+            if last_earnings_date:
+                try:
+                    today = datetime.now().date()
+                    led = datetime.fromisoformat(last_earnings_date).date()
+                    days_since_earnings = (today - led).days
                 except:
                     pass
 
@@ -864,6 +881,7 @@ class PreMarketPrep:
                 'data_days': len(df),
                 'accum_ratio_15d': accum_ratio,
                 'days_to_earnings': days_to_earnings,
+                'days_since_earnings': days_since_earnings,
                 'earnings_date': earnings_date,
                 'earnings_beat': earnings_beat,
                 'guidance_change': guidance_change,

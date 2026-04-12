@@ -33,9 +33,7 @@ class Phase1RegimeHandler(PhaseHandler):
             ai_regime = analysis['sentiment']
 
             regime = regime_detector.detect_regime_ai(
-                spy_df, vix_df,
-                analysis.get('tavily_results', []),
-                ai_regime
+                spy_df, vix_df, ai_regime
             )
             allocation = regime_detector.get_allocation(regime)
 

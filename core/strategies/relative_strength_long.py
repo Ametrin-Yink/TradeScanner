@@ -35,7 +35,7 @@ class RelativeStrengthLongStrategy(BaseStrategy):
 
     NAME = "RelativeStrengthLong"
     STRATEGY_TYPE = StrategyType.H
-    DESCRIPTION = "RelativeStrengthLong v7.0 - RS leaders in bear/neutral markets"
+    DESCRIPTION = "RelativeStrengthLong v7.0 - RS leaders relative to market"
     DIMENSIONS = ['RD', 'SH', 'CQ', 'VC']
     DIRECTION = 'long'
 
@@ -47,13 +47,7 @@ class RelativeStrengthLongStrategy(BaseStrategy):
     }
 
     def filter(self, symbol: str, df: pd.DataFrame) -> bool:
-        """Hard gate: Only in bear/neutral regimes. RS >= 80th percentile."""
-        # Get regime from screener context
-        regime = getattr(self, '_current_regime', 'neutral')
-        if regime not in ['bear_moderate', 'bear_strong', 'extreme_vix', 'neutral']:
-            logger.debug(f"RS_REJ: {symbol} - not in bear/neutral regime: {regime}")
-            return False
-
+        """Hard gate: RS >= 80th percentile. No regime restriction."""
         data = self.phase0_data.get(symbol, {}) if hasattr(self, 'phase0_data') else {}
 
         # RS percentile gate (v7.0: >=80th for 5+ consecutive days)
@@ -64,7 +58,7 @@ class RelativeStrengthLongStrategy(BaseStrategy):
 
         # v7.0: RS consecutive days tracked for scoring bonus (not a hard gate)
         # Market cap and volume already enforced by Phase 0 prefilter ($2B, 100K)
-        logger.debug(f"RS_PASS: {symbol} - RS leader in {regime}")
+        logger.debug(f"RS_PASS: {symbol} - RS leader ({rs_pct:.0f}th)")
         return True
 
     def calculate_dimensions(self, symbol: str, df: pd.DataFrame) -> List[ScoringDimension]:

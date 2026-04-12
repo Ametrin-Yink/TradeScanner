@@ -10,6 +10,8 @@ dist/
 build/
 *.manifest
 *.spec
+*.pyo
+*.pyd
 
 # Virtual environments
 venv/
@@ -28,20 +30,19 @@ env/
 # Environment & Secrets
 .env
 .env.*
+*.local
 config/secrets.json
 
 # Data & Logs
 *.log
 logs/
-.remember/logs/
 *.db
 *.sqlite
 *.sqlite3
-data/market_data.db
 
-# Generated reports & charts
-web/reports/*.html
-data/charts/*.png
+# Generated reports, charts
+web/reports/
+data/charts/
 
 # Testing
 .pytest_cache/
