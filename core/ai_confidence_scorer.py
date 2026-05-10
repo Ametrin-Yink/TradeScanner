@@ -101,7 +101,10 @@ class AIConfidenceScorer:
         scan_date: str = None
     ) -> List[ScoredCandidate]:
         """
-        Score all candidates using AI analysis and log outcomes for tracking.
+        Score all candidates using two-trial batch shuffling and log outcomes.
+
+        Runs 2 trials with different batch compositions, averages scores per
+        symbol to reduce LLM variance from batch composition bias.
         """
         if not candidates:
             return []
@@ -112,19 +115,13 @@ class AIConfidenceScorer:
         if regime is None:
             regime = market_sentiment
 
-        # Process in batches of 4 to stay within timeout
-        batch_size = 4
-        all_scored = []
+        # Run 2 trials with different batch shuffles
+        trial1 = self._run_trial(candidates, market_sentiment, seed=42)
+        trial2 = self._run_trial(candidates, market_sentiment, seed=43)
 
-        for i in range(0, len(candidates), batch_size):
-            batch = candidates[i:i + batch_size]
-            scored_batch = self._score_batch(batch, market_sentiment)
-            all_scored.extend(scored_batch)
-
-            if i > 0 and i % 40 == 0:
-                import gc
-                gc.collect()
-                logger.debug(f"AI scoring: Processed {i} candidates, garbage collected")
+        # Average scores per symbol
+        all_scored = self._average_trial_scores(trial1, trial2)
+        logger.info(f"Two-trial scoring: confidence range {min(c.confidence for c in all_scored)}-{max(c.confidence for c in all_scored)}")
 
         # Apply sector concentration penalty
         all_scored = self._apply_sector_penalties(all_scored)
@@ -136,6 +133,68 @@ class AIConfidenceScorer:
         self._log_outcomes(all_scored, regime, scan_date)
 
         return all_scored
+
+    def _run_trial(
+        self,
+        candidates: List[StrategyMatch],
+        market_sentiment: str,
+        seed: int
+    ) -> List[ScoredCandidate]:
+        """Run one complete scoring trial with a specific batch shuffle."""
+        import random
+
+        batch_size = 4
+        shuffled = list(candidates)
+        random.Random(seed).shuffle(shuffled)
+
+        all_scored = []
+        for i in range(0, len(shuffled), batch_size):
+            batch = shuffled[i:i + batch_size]
+            scored_batch = self._score_batch(batch, market_sentiment)
+            all_scored.extend(scored_batch)
+
+        logger.info(f"Trial (seed={seed}): scored {len(all_scored)} candidates")
+        return all_scored
+
+    def _average_trial_scores(
+        self,
+        trial1: List[ScoredCandidate],
+        trial2: List[ScoredCandidate]
+    ) -> List[ScoredCandidate]:
+        """Average confidence scores across two trials, keep reasoning from higher-scoring trial."""
+        map1 = {c.symbol: c for c in trial1}
+        map2 = {c.symbol: c for c in trial2}
+
+        all_symbols = set(map1.keys()) | set(map2.keys())
+        averaged = []
+
+        for symbol in all_symbols:
+            c1 = map1.get(symbol)
+            c2 = map2.get(symbol)
+
+            if c1 and c2:
+                avg_conf = round((c1.confidence + c2.confidence) / 2)
+                # Use the candidate with higher score for the reasoning text
+                better = c1 if c1.confidence >= c2.confidence else c2
+                averaged.append(ScoredCandidate(
+                    symbol=better.symbol,
+                    strategy=better.strategy,
+                    entry_price=better.entry_price,
+                    stop_loss=better.stop_loss,
+                    take_profit=better.take_profit,
+                    confidence=avg_conf,
+                    reasoning=better.reasoning,
+                    key_factors=better.key_factors,
+                    risk_factors=better.risk_factors,
+                    match_reasons=better.match_reasons,
+                    technical_snapshot=better.technical_snapshot
+                ))
+            elif c1:
+                averaged.append(c1)
+            else:
+                averaged.append(c2)
+
+        return averaged
 
     def _log_outcomes(
         self,

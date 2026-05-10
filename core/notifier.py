@@ -73,7 +73,7 @@ class DiscordNotifier:
                 }
             ],
             "footer": {
-                "text": "Trade Scanner by AI CIO"
+                "text": "TradeScanner by Ametrin"
             }
         }
 

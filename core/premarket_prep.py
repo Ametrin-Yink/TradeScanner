@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
+import pytz
 from core.stock_universe import StockUniverseManager, get_all_market_etfs
 from core.fetcher import DataFetcher
 from core.indicators import TechnicalIndicators
@@ -26,6 +27,23 @@ from data.db import Database
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
+
+
+def strip_intraday_data(df: pd.DataFrame) -> pd.DataFrame:
+    """Drop today's incomplete intraday bar, returning only complete days.
+
+    When fetching data during market hours, yfinance returns an incomplete
+    bar for the current day. This strips it so all downstream calculations
+    use only settled daily close prices.
+    """
+    if df.empty:
+        return df
+    today_et = datetime.now(pytz.timezone('America/New_York')).date()
+    last_idx = df.index[-1]
+    last_date = last_idx.date() if hasattr(last_idx, 'date') else last_idx.date()
+    if last_date == today_et:
+        return df.iloc[:-1]
+    return df
 
 
 class PreMarketPrep:
@@ -182,6 +200,7 @@ class PreMarketPrep:
             try:
                 df = self.fetcher.fetch_stock_data(symbol, period="13mo", interval="1d")
                 if df is not None and not df.empty:
+                    df = strip_intraday_data(df)
                     tier3_data[symbol] = df
                     # Cache in database
                     self.db.save_tier3_cache(symbol, df)
@@ -512,6 +531,9 @@ class PreMarketPrep:
                     df = self._get_symbol_data(symbol)
                     if df is None or len(df) < 200:
                         continue
+
+                    # Strip today's incomplete intraday bar if running during market hours
+                    df = strip_intraday_data(df)
 
                     # Calculate Tier 1 metrics (earnings already cached in Step 5)
                     metrics = self._calculate_tier1_metrics(symbol, df)

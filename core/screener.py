@@ -7,6 +7,19 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 import pandas as pd
+import pytz
+
+
+def strip_intraday_data(df: pd.DataFrame) -> pd.DataFrame:
+    """Drop today's incomplete intraday bar, returning only complete days."""
+    if df.empty:
+        return df
+    today_et = datetime.now(pytz.timezone('America/New_York')).date()
+    last_idx = df.index[-1]
+    last_date = last_idx.date() if hasattr(last_idx, 'date') else last_idx.date()
+    if last_date == today_et:
+        return df.iloc[:-1]
+    return df
 
 from core.fetcher import DataFetcher
 from core.strategies import (
@@ -154,6 +167,9 @@ class StrategyScreener:
                         df = self._get_data(symbol)
                     if df is None or len(df) < 50:
                         continue
+
+                    # Strip today's incomplete intraday bar
+                    df = strip_intraday_data(df)
 
                     # Calculate indicators (temporarily, don't store)
                     ind = TechnicalIndicators(df, symbol=symbol)
