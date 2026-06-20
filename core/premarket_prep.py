@@ -24,7 +24,6 @@ from core.etf_prep import ETFPreCalculator
 from core.constants import SECTOR_ETFS
 from data.db import Database
 from config.settings import settings
-from core.sector_manager import SectorManager
 from core.swing_detector import detect_swings, cluster_levels
 
 logger = logging.getLogger(__name__)
@@ -76,14 +75,12 @@ class PreMarketPrep:
         db: Optional[Database] = None,
         max_workers: int = 8,
         batch_size: int = 100,
-        sectors: Optional[List[str]] = None
     ):
         self.db = db or Database()
         self.fetcher = DataFetcher(db=self.db, max_workers=max_workers)
         self.universe_manager = StockUniverseManager(db=self.db)
         self.max_workers = max_workers
         self.batch_size = batch_size
-        self.sectors = sectors
 
     def run_phase0(self) -> Dict:
         """Execute complete Phase 0 data preparation.
@@ -106,8 +103,6 @@ class PreMarketPrep:
         logger.info("=" * 50)
         logger.info("PHASE 0: Pre-Market Data Preparation")
         logger.info("=" * 50)
-        if self.sectors:
-            logger.info(f"Sector Focus: {self.sectors}")
 
         # Step 1: Initialize stock database
         logger.info("\n[1/6] Initializing stock database...")
@@ -165,14 +160,6 @@ class PreMarketPrep:
         etf_prep = ETFPreCalculator(db=self.db)
         etf_cache = etf_prep.calculate_all_etfs()
         logger.info(f"✓ ETF pre-calculation complete: {len(etf_cache)} ETFs cached")
-
-        # Step 6b: Calculate sector benchmarks (synthetic ETFs from sector averages)
-        logger.info("\n[6b/7] Calculating sector benchmarks...")
-        from core.sector_benchmark import SectorBenchmarkCalculator
-        bench_calc = SectorBenchmarkCalculator(db=self.db)
-        sector_benchmarks = bench_calc.calculate_all()
-        etf_cache.update(sector_benchmarks)
-        logger.info(f"✓ Sector benchmarks: {len(sector_benchmarks)} sectors")
 
         duration = (datetime.now() - start_time).total_seconds()
 
@@ -269,14 +256,7 @@ class PreMarketPrep:
                 - filtered_by_volume: Count filtered by volume
                 - total_stocks: Total stocks checked
         """
-        # Always use sector-assigned stocks; fall back to all stocks if none assigned
-        stocks = SectorManager().get_pipeline_stocks(sectors=self.sectors, db=self.db)
-        if not stocks:
-            stocks = self.universe_manager.get_stocks(min_market_cap=None)
-        if self.sectors:
-            logger.info(f"Sector filter: {len(stocks)} stocks in {self.sectors}")
-        else:
-            logger.info(f"Using all sector-assigned stocks: {len(stocks)}")
+        stocks = self.universe_manager.get_stocks(min_market_cap=None)
         total_stocks = len(stocks)
 
         logger.info(f"Applying pre-filter to {total_stocks} stocks...")
