@@ -1,5 +1,6 @@
 """Report generator - sector-first HTML reports with amber palette."""
 import logging
+import re
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Optional
@@ -69,13 +70,39 @@ SECTOR_CARD = """<div class="card">
 {highlights_html}
 </div></div>"""
 
-HIGHLIGHT_ROW = """<tr><td class="sym">{symbol}</td><td class="name">{name}</td><td class="num">${price:.2f}</td><td><span class="badge {reason_cls}">{reason}</span></td><td class="num">${entry:.2f}</td><td class="num">${stop:.2f}</td><td class="num">${target:.2f}</td><td class="num">{rr}</td></tr>"""
+HIGHLIGHT_ROW = """<tr><td class="sym">{symbol}</td><td class="name">{name}</td><td class="num">${price:.2f}</td><td><span class="badge {reason_cls}">{reason}</span></td><td class="num">${entry:.2f}</td><td class="num">${stop:.2f}</td><td class="num">${target:.2f}</td><td class="num">{rr}</td><td class="num">{size}</td><td class="num">${cost}</td><td class="num">${risk_dollars}</td><td><span class="badge badge-neutral">{horizon}</span></td></tr>"""
 
 
 class ReportGenerator:
     def __init__(self):
         self.reports_dir = REPORTS_DIR
         self.max_reports = settings.get('report', {}).get('max_reports', 15)
+
+    def _compute_diff(self, highlights, scan_date):
+        """Compare today's picks to yesterday's report."""
+        yesterday = (datetime.strptime(scan_date, '%Y-%m-%d') - timedelta(days=1)).strftime('%Y-%m-%d')
+        yesterday_report = self.reports_dir / f"report_{yesterday}.html"
+        if not yesterday_report.exists():
+            return ""
+
+        yesterday_text = yesterday_report.read_text(encoding='utf-8')
+        yesterday_symbols = set(re.findall(r'class="sym">([A-Z]+)', yesterday_text))
+        today_symbols = set(h.symbol for h in highlights)
+
+        new_picks = today_symbols - yesterday_symbols
+        removed = yesterday_symbols - today_symbols
+        unchanged = today_symbols & yesterday_symbols
+
+        parts = []
+        if new_picks:
+            parts.append(f'+{len(new_picks)} new')
+        if removed:
+            parts.append(f'-{len(removed)} removed')
+        if unchanged:
+            parts.append(f'={len(unchanged)} unchanged')
+        if parts:
+            return f'<div class="header-meta" style="margin-top:4px">{" &middot; ".join(parts)} vs yesterday</div>'
+        return ""
 
     def generate_report(self, analysis_result: dict) -> str:
         market = analysis_result['market']
@@ -84,19 +111,23 @@ class ReportGenerator:
         timestamp = analysis_result.get('timestamp', datetime.now().isoformat())
         scan_date = datetime.now().strftime('%Y-%m-%d')
 
-        html = self._build_html(market, sectors, focus, timestamp)
+        html = self._build_html(market, sectors, focus, timestamp, scan_date)
         report_path = self.reports_dir / f"report_{scan_date}.html"
         report_path.write_text(html, encoding='utf-8')
         logger.info(f"Report generated: {report_path}")
         self._cleanup_old_reports()
         return str(report_path)
 
-    def _build_html(self, market, sectors, focus, timestamp) -> str:
+    def _build_html(self, market, sectors, focus, timestamp, scan_date=None) -> str:
         parts = ['<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>TradeScanner · ', market.date, '</title><style>', STYLE, '</style></head><body>']
 
         # Header
         total_stocks = len(set(h.symbol for s in sectors for h in s.highlights))
-        parts.append(f'<div class="header"><div><h1>TradeScanner</h1><div class="header-meta">{market.date} &middot; {len(sectors)} tags &middot; {total_stocks} picks</div></div><div class="header-meta" style="text-align:right;font-size:10px">{timestamp[:16]}</div></div>')
+        all_highlights = [h for s in sectors for h in s.highlights]
+        parts.append(f'<div class="header"><div><h1>TradeScanner</h1><div class="header-meta">{market.date} &middot; {len(sectors)} tags &middot; {total_stocks} picks</div>')
+        if scan_date:
+            parts.append(self._compute_diff(all_highlights, scan_date))
+        parts.append('</div><div class="header-meta" style="text-align:right;font-size:10px">' + timestamp[:16] + '</div></div>')
 
         # Heatmap Bar
         max_chg = max(abs(s.daily_change) for s in sectors if s.daily_change is not None) or 1
@@ -162,16 +193,35 @@ class ReportGenerator:
                               'Breakout': 'badge-up', 'Strong Momentum': 'badge-up', 'Good R/R': 'badge-up'}
                 rows = []
                 for h in s.highlights:
+                    # Reason badge with embedded RS metric for Strong Momentum
+                    if h.reason == 'Strong Momentum':
+                        rs_val = getattr(h, 'rs_percentile', None)
+                        if rs_val is not None:
+                            rs_ord = f"{int(rs_val)}{'th' if 10<=int(rs_val)%100<=20 else {1:'st',2:'nd',3:'rd'}.get(int(rs_val)%10,'th')}"
+                            reason_display = f"Strong Momentum (RS {rs_ord})"
+                        else:
+                            reason_display = h.reason
+                    else:
+                        reason_display = h.reason
                     rr_str = f"{h.rr:.1f}x" if h.rr > 0 else "--"
+                    size_str = str(getattr(h, 'position_size', 0))
+                    cost_str = f"{getattr(h, 'position_cost', 0):,.0f}"
+                    risk_str = f"{getattr(h, 'risk_dollars', 0):,.0f}"
+                    horizon_str = getattr(h, 'time_horizon', '--')
                     rows.append(HIGHLIGHT_ROW.format(
                         symbol=h.symbol, name=h.name or h.symbol, price=h.price,
-                        reason=h.reason, reason_cls=reason_map.get(h.reason, 'badge-neutral'),
-                        entry=h.entry, stop=h.stop, target=h.target, rr=rr_str))
-                highlights_html = '<table style="margin-top:8px"><thead><tr><th>Symbol</th><th>Name</th><th>Price</th><th>Reason</th><th>Entry</th><th>Stop</th><th>Target</th><th>R/R</th></tr></thead><tbody>' + ''.join(rows) + '</tbody></table>'
+                        reason=reason_display, reason_cls=reason_map.get(h.reason, 'badge-neutral'),
+                        entry=h.entry, stop=h.stop, target=h.target, rr=rr_str,
+                        size=size_str, cost=cost_str, risk_dollars=risk_str, horizon=horizon_str))
+                highlights_html = '<table style="margin-top:8px"><thead><tr><th>Symbol</th><th>Name</th><th>Price</th><th>Reason</th><th>Entry</th><th>Stop</th><th>Target</th><th>R/R</th><th>Size</th><th>Cost</th><th>Risk</th><th>Horizon</th></tr></thead><tbody>' + ''.join(rows) + '</tbody></table>'
 
+            if not s.outlook or s.outlook == f"{s.name} sector: no AI analysis available.":
+                outlook_html = '<span style="color:var(--ash);font-style:italic">AI analysis unavailable -- using fallback data</span>'
+            else:
+                outlook_html = s.outlook
             parts.append(SECTOR_CARD.format(
                 name=s.name, chg_cls=chg_cls, daily_change=chg_str,
-                outlook=s.outlook or '',
+                outlook=outlook_html,
                 drivers=drivers_html or '<span class="dim">--</span>',
                 risks=risks_html or '<span class="dim">--</span>',
                 highlights_html=highlights_html))
