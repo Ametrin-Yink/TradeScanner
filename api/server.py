@@ -16,6 +16,7 @@ from core.market_analyzer import MarketAnalyzer
 from core.selector import CandidateSelector
 from core.analyzer import OpportunityAnalyzer
 from core.reporter import ReportGenerator
+from api.config_api import config_api
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -42,6 +43,7 @@ app = Flask(__name__)
 db = Database()
 db._migrate_to_tags()
 fetcher = DataFetcher(db=db)
+app.register_blueprint(config_api)
 
 
 @app.route('/')
