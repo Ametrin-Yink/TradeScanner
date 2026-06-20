@@ -5,7 +5,6 @@ fetches market data for all stocks, calculates Tier 1 universal metrics,
 and pre-calculates all ETF data (market/sector ETFs).
 Stocks with market cap <$2B are filtered out during pre-calculation.
 """
-import gc
 import logging
 import threading
 import time
@@ -25,6 +24,8 @@ from core.etf_prep import ETFPreCalculator
 from core.constants import SECTOR_ETFS
 from data.db import Database
 from config.settings import settings
+from core.sector_manager import SectorManager
+from core.swing_detector import detect_swings, cluster_levels
 
 logger = logging.getLogger(__name__)
 
@@ -60,27 +61,29 @@ class PreMarketPrep:
     7. Pre-calculate ETF data (market/sector ETFs)
     """
 
-    # Minimum market cap for screening ($2B)
-    MIN_MARKET_CAP = 2e9
+    # Minimum market cap for screening (disabled — all sector stocks pass)
+    MIN_MARKET_CAP = 0
 
-    # Price range filter
-    MIN_PRICE = 2.0
-    MAX_PRICE = 3000.0
+    # Price range filter (relaxed for curated universe)
+    MIN_PRICE = 0.01
+    MAX_PRICE = 99999.0
 
-    # Minimum average volume (100K)
-    MIN_AVG_VOLUME = 100000
+    # Minimum average volume (relaxed — curated stocks may have low volume)
+    MIN_AVG_VOLUME = 1000
 
     def __init__(
         self,
         db: Optional[Database] = None,
-        max_workers: int = 4,
-        batch_size: int = 50
+        max_workers: int = 8,
+        batch_size: int = 100,
+        sectors: Optional[List[str]] = None
     ):
         self.db = db or Database()
         self.fetcher = DataFetcher(db=self.db, max_workers=max_workers)
         self.universe_manager = StockUniverseManager(db=self.db)
         self.max_workers = max_workers
         self.batch_size = batch_size
+        self.sectors = sectors
 
     def run_phase0(self) -> Dict:
         """Execute complete Phase 0 data preparation.
@@ -103,6 +106,8 @@ class PreMarketPrep:
         logger.info("=" * 50)
         logger.info("PHASE 0: Pre-Market Data Preparation")
         logger.info("=" * 50)
+        if self.sectors:
+            logger.info(f"Sector Focus: {self.sectors}")
 
         # Step 1: Initialize stock database
         logger.info("\n[1/6] Initializing stock database...")
@@ -160,6 +165,14 @@ class PreMarketPrep:
         etf_prep = ETFPreCalculator(db=self.db)
         etf_cache = etf_prep.calculate_all_etfs()
         logger.info(f"✓ ETF pre-calculation complete: {len(etf_cache)} ETFs cached")
+
+        # Step 6b: Calculate sector benchmarks (synthetic ETFs from sector averages)
+        logger.info("\n[6b/7] Calculating sector benchmarks...")
+        from core.sector_benchmark import SectorBenchmarkCalculator
+        bench_calc = SectorBenchmarkCalculator(db=self.db)
+        sector_benchmarks = bench_calc.calculate_all()
+        etf_cache.update(sector_benchmarks)
+        logger.info(f"✓ Sector benchmarks: {len(sector_benchmarks)} sectors")
 
         duration = (datetime.now() - start_time).total_seconds()
 
@@ -221,44 +234,17 @@ class PreMarketPrep:
         Returns:
             Dict with fetch statistics
         """
-        success = 0
-        failed = 0
-        errors = []
         total = len(symbols)
 
-        logger.info(f"Fetching market data for {total} symbols (batch mode, cache enabled)...")
+        logger.info(f"Fetching market data for {total} symbols (cache enabled)...")
 
-        # Process in batches to avoid memory issues AND respect rate limits
-        # With max_workers=4 and request_delay=0.15s, effective rate is ~27 req/sec
-        for i in range(0, total, self.batch_size):
-            batch = symbols[i:i + self.batch_size]
-            batch_num = i // self.batch_size + 1
-            total_batches = (total + self.batch_size - 1) // self.batch_size
-
-            logger.info(f"Fetching batch {batch_num}/{total_batches}: {len(batch)} symbols")
-
-            # Use batch fetch with parallel workers (4 workers, 0.15s delay between requests)
-            results = self.fetcher.fetch_multiple(batch, period="13mo", interval="1d", use_cache=True)
-
-            success += len(results)
-            batch_failed = len(batch) - len(results)
-            failed += batch_failed
-
-            if batch_failed > 0:
-                failed_symbols = [s for s in batch if s not in results]
-                errors.extend([f"{s}: No data returned" for s in failed_symbols])
-
-            logger.debug(f"  Batch complete: {len(results)} success, {batch_failed} failed")
-
-            # Rate limit pause between batches to avoid yfinance throttling
-            # 0.1s per symbol in batch, capped at 5 seconds
-            if i + self.batch_size < total:
-                pause = min(5.0, 0.1 * len(batch))
-                time.sleep(pause)
-
-            # Memory cleanup between batches
-            import gc
-            gc.collect()
+        results = self.fetcher.fetch_multiple(symbols, period="13mo", interval="1d", use_cache=True)
+        success = len(results)
+        failed = total - success
+        errors = []
+        if failed > 0:
+            failed_symbols = [s for s in symbols if s not in results]
+            errors.extend([f"{s}: No data returned" for s in failed_symbols])
 
         return {
             'total': total,
@@ -283,59 +269,27 @@ class PreMarketPrep:
                 - filtered_by_volume: Count filtered by volume
                 - total_stocks: Total stocks checked
         """
-        stocks = self.universe_manager.get_stocks(min_market_cap=None)
+        # Always use sector-assigned stocks; fall back to all stocks if none assigned
+        stocks = SectorManager().get_pipeline_stocks(sectors=self.sectors, db=self.db)
+        if not stocks:
+            stocks = self.universe_manager.get_stocks(min_market_cap=None)
+        if self.sectors:
+            logger.info(f"Sector filter: {len(stocks)} stocks in {self.sectors}")
+        else:
+            logger.info(f"Using all sector-assigned stocks: {len(stocks)}")
         total_stocks = len(stocks)
 
         logger.info(f"Applying pre-filter to {total_stocks} stocks...")
         logger.info(f"  Criteria: market cap >= $2B, price ${self.MIN_PRICE}-{self.MAX_PRICE}, volume >= {self.MIN_AVG_VOLUME:,}")
 
         # Batch queries instead of N+1
-        market_data_by_symbol = self.db.get_market_data_latest(stocks, limit=280)
-        stock_info_batch = self.db.get_stock_info_batch(stocks)
-
-        qualifying_stocks = []
-        filtered_by_cap = 0
-        filtered_by_price = 0
-        filtered_by_volume = 0
-
-        for symbol in stocks:
-            rows = market_data_by_symbol.get(symbol, [])
-            if len(rows) < 200:
-                continue
-
-            latest_price = rows[0]['close']
-            avg_volume = sum(r['volume'] for r in rows) / len(rows)
-
-            if latest_price < self.MIN_PRICE or latest_price > self.MAX_PRICE:
-                filtered_by_price += 1
-                continue
-
-            if avg_volume < self.MIN_AVG_VOLUME:
-                filtered_by_volume += 1
-                continue
-
-            info = stock_info_batch.get(symbol, {})
-            market_cap = info.get('market_cap', 0) or 0
-            if market_cap < self.MIN_MARKET_CAP:
-                filtered_by_cap += 1
-                continue
-
-            qualifying_stocks.append(symbol)
-
-        total_filtered = total_stocks - len(qualifying_stocks)
-
-        logger.info(f"Pre-filter complete:")
-        logger.info(f"  Total stocks: {total_stocks}")
-        logger.info(f"  Qualifying: {len(qualifying_stocks)}")
-        logger.info(f"  Filtered by market cap (<$2B): {filtered_by_cap}")
-        logger.info(f"  Filtered by price (not $2-3000): {filtered_by_price}")
-        logger.info(f"  Filtered by volume (<100K): {filtered_by_volume}")
-
+        # All sector-assigned stocks pass — no filters needed
+        logger.info(f"All {total_stocks} stocks pass (filters disabled for curated universe)")
         return {
-            'qualifying_stocks': qualifying_stocks,
-            'filtered_by_cap': filtered_by_cap,
-            'filtered_by_price': filtered_by_price,
-            'filtered_by_volume': filtered_by_volume,
+            'qualifying_stocks': stocks,
+            'filtered_by_cap': 0,
+            'filtered_by_price': 0,
+            'filtered_by_volume': 0,
             'total_stocks': total_stocks
         }
 
@@ -409,7 +363,7 @@ class PreMarketPrep:
         logger.info(f"  Fetching earnings for {len(needs_update)}/{len(symbols)} stocks")
 
         # Fetch in small batches with parallel workers and aggressive memory cleanup
-        batch_size = 20
+        batch_size = 50
         updated = 0
         total_batches = (len(needs_update) + batch_size - 1) // batch_size
         fetch_lock = threading.Lock()
@@ -487,16 +441,15 @@ class PreMarketPrep:
                 except Exception as e:
                     logger.debug(f"Failed to fetch earnings for {symbol}: {e}")
 
-            with ThreadPoolExecutor(max_workers=2) as executor:
+            with ThreadPoolExecutor(max_workers=8) as executor:
                 futures = {executor.submit(fetch_earnings_for_symbol, s, batch_old_earnings.get(s)): s for s in batch}
                 for future in as_completed(futures):
                     future.result()
 
             updated += batch_updated[0]
 
-            # Aggressive GC after each batch
-            gc.collect()
-            time.sleep(0.5)
+            # Rate limit pause between batches
+            time.sleep(0.1)
 
         logger.info(f"  Updated earnings dates for {updated} stocks")
 
@@ -511,47 +464,27 @@ class PreMarketPrep:
         """
         cached_count = 0
         total = len(symbols)
-        batch_size = 200  # Process in batches to control memory
 
-        logger.info(f"  Processing {total} stocks in batches of {batch_size}...")
+        logger.info(f"  Processing {total} stocks...")
 
-        for batch_start in range(0, total, batch_size):
-            batch_end = min(batch_start + batch_size, total)
-            batch = symbols[batch_start:batch_end]
+        for i, symbol in enumerate(symbols):
+            if (i + 1) % 50 == 0:
+                logger.info(f"    Progress: {i + 1}/{total}...")
 
-            logger.info(f"  Batch {(batch_start // batch_size) + 1}/{(total + batch_size - 1) // batch_size}: {batch_start + 1}-{batch_end}")
+            try:
+                df = self._get_symbol_data(symbol)
+                if df is None or len(df) < 50:
+                    continue
 
-            for i, symbol in enumerate(batch):
-                global_idx = batch_start + i
-                if (global_idx + 1) % 50 == 0:
-                    logger.info(f"    Progress: {global_idx + 1}/{total}...")
+                df = strip_intraday_data(df)
 
-                try:
-                    # Get market data from database
-                    df = self._get_symbol_data(symbol)
-                    if df is None or len(df) < 200:
-                        continue
+                metrics = self._calculate_tier1_metrics(symbol, df)
+                if metrics:
+                    self.db.save_tier1_cache(symbol, metrics)
+                    cached_count += 1
 
-                    # Strip today's incomplete intraday bar if running during market hours
-                    df = strip_intraday_data(df)
-
-                    # Calculate Tier 1 metrics (earnings already cached in Step 5)
-                    metrics = self._calculate_tier1_metrics(symbol, df)
-                    if metrics:
-                        self.db.save_tier1_cache(symbol, metrics)
-                        cached_count += 1
-
-                    # Explicit cleanup after each symbol
-                    del df
-                    if (global_idx + 1) % 20 == 0:
-                        gc.collect()
-
-                except Exception as e:
-                    logger.debug(f"Failed to calculate Tier 1 for {symbol}: {e}")
-
-            # Force garbage collection between batches
-            gc.collect()
-            logger.debug(f"  Batch complete. Memory cleaned.")
+            except Exception as e:
+                logger.debug(f"Failed to calculate Tier 1 for {symbol}: {e}")
 
         return cached_count
 
@@ -824,6 +757,21 @@ class PreMarketPrep:
             supports = sr_levels.get('support', [])
             resistances = sr_levels.get('resistance', [])
 
+            # Augment with swing detection
+            try:
+                swing_highs, swing_lows = detect_swings(df, order=5)
+                swing_high_zones = cluster_levels(swing_highs, tolerance=0.005)
+                swing_low_zones = cluster_levels(swing_lows, tolerance=0.005)
+                swing_supports = [z['level'] for z in swing_low_zones]
+                swing_resistances = [z['level'] for z in swing_high_zones]
+            except Exception:
+                swing_supports = []
+                swing_resistances = []
+
+            # Merge: combine existing SR levels with swing detection levels, deduplicate, take top 5
+            all_supports = list(dict.fromkeys(list(supports) + swing_supports))
+            all_resistances = list(dict.fromkeys(list(resistances) + swing_resistances))
+
             # Nearest support/resistance distance (use large value if no level found)
             nearest_support = max([s for s in supports if s < current_price], default=None)
             nearest_resistance = min([r for r in resistances if r > current_price], default=None)
@@ -862,18 +810,17 @@ class PreMarketPrep:
             sector = stock_info.get('sector', '') if stock_info else ''
             sector_etf_symbol = self._get_sector_etf_symbol(sector)
 
-            # Sector alignment (Strategy G): check if sector ETF trend confirms gap direction
+            # Sector alignment (Strategy G): use synthetic sector benchmark from etf_cache
             sector_aligned = False
-            if sector_etf_symbol:
-                sector_etf_data = self.db.get_tier1_cache(sector_etf_symbol)
-                if sector_etf_data:
-                    sector_etf_price = sector_etf_data.get('current_price', 0)
-                    sector_etf_ema21 = sector_etf_data.get('ema21', 0)
-                    if sector_etf_price > 0 and sector_etf_ema21 > 0:
-                        if gap_direction == 'up' and sector_etf_price > sector_etf_ema21:
-                            sector_aligned = True
-                        elif gap_direction == 'down' and sector_etf_price < sector_etf_ema21:
-                            sector_aligned = True
+            sector_benchmark = self.db.get_etf_cache(sector)  # sector name, not ETF symbol
+            if sector_benchmark:
+                sector_etf_price = sector_benchmark.get('current_price', 0)  # 0 for synthetic
+                sector_etf_ema21 = 0  # synthetic benchmarks don't have EMA21
+                # Use market_trend instead: 'uptrend' means aligned for long, 'downtrend' for short
+                if gap_direction == 'up' and sector_benchmark.get('market_trend') == 'uptrend':
+                    sector_aligned = True
+                elif gap_direction == 'down' and sector_benchmark.get('market_trend') == 'downtrend':
+                    sector_aligned = True
 
             return {
                 'cache_date': datetime.now().date().isoformat(),
@@ -921,8 +868,8 @@ class PreMarketPrep:
                 'vcp_tightness': vcp_tightness,
                 'vcp_volume_ratio': vcp_volume_ratio,
                 # v7.1: Support/Resistance levels (Strategies C, D)
-                'supports': [float(x) for x in supports[:5]],  # Top 5 support levels
-                'resistances': [float(x) for x in resistances[:5]],  # Top 5 resistance levels
+                'supports': [float(x) for x in all_supports[:5]],  # Top 5 support levels (SR + swing)
+                'resistances': [float(x) for x in all_resistances[:5]],  # Top 5 resistance levels (SR + swing)
                 'nearest_support_distance_pct': nearest_support_distance_pct,
                 'nearest_resistance_distance_pct': nearest_resistance_distance_pct,
                 # v7.1: Consecutive down-days (Strategy F)
