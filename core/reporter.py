@@ -51,7 +51,11 @@ tr:hover{background:rgba(212,168,83,.03)}
 .bar-fill{border-radius:3px 3px 0 0;width:100%;min-height:3px}
 .bar-label{font-size:8px;color:var(--frost);margin-top:4px;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;width:100%}
 .bar-pct{font-size:9px;font-weight:600;margin-bottom:2px}
-.fold-toggle{cursor:pointer;user-select:none;transition:background .15s}.fold-toggle:hover{background:var(--gold-dim);border-radius:4px}.fold-toggle h3::before{content:'\25BC\00a0';font-size:9px;transition:transform .2s}.fold-toggle.collapsed h3::before{content:'\25B6\00a0'}.fold-body{overflow:hidden;transition:max-height .3s;max-height:5000px;opacity:1}.fold-body.hidden{max-height:0;opacity:0}
+.fold-toggle{cursor:pointer;user-select:none;transition:background .15s}.fold-toggle:hover{background:var(--gold-dim);border-radius:4px}.fold-toggle h3::before{content:'\\25BC\\00a0';font-size:9px;transition:transform .2s}.fold-toggle.collapsed h3::before{content:'\\25B6\\00a0'}.fold-body{overflow:hidden;transition:max-height .3s;max-height:5000px;opacity:1}.fold-body.hidden{max-height:0;opacity:0}
+.chart-inline{display:none;margin-top:8px;padding:8px;background:var(--bg-root);border-radius:var(--radius);border:1px solid var(--divider)}
+.chart-inline canvas{display:block;max-width:100%}
+.sym-link{cursor:pointer;color:var(--gold);text-decoration:underline}
+.sym-link:hover{color:#e8c865}
 """
 
 BAR_CHART_JS = """<script>
@@ -64,51 +68,47 @@ function showTag(n){
   var hint=document.getElementById('tag-hint');
   if(hint)hint.style.display='none';
 }
+var _ck=null;
+function setChartApiKey(k){_ck=k;}
+function _key(){return _ck||sessionStorage.getItem('tradescanner_api_key')||localStorage.getItem('tradescanner_api_key')||'';}
 
-var _chartApiKey=null;
-function setChartApiKey(k){_chartApiKey=k;}
-
-async function showChart(sym){
-  var key=_chartApiKey||sessionStorage.getItem('tradescanner_api_key')||localStorage.getItem('tradescanner_api_key')||'';
-  var overlay=document.getElementById('chart-overlay');
-  if(!overlay){overlay=document.createElement('div');overlay.id='chart-overlay';overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center';document.body.appendChild(overlay);}
-  overlay.innerHTML='<div style="color:var(--frost);font-size:14px;margin-bottom:8px">'+sym+'</div><canvas id="chart-canvas" width="900" height="400"></canvas><div style="margin-top:8px"><button onclick="document.getElementById(\\'chart-overlay\\').remove()" style="background:var(--bg-surface);color:var(--frost);border:1px solid var(--border);padding:6px 16px;border-radius:4px;cursor:pointer">Close</button></div>';
-  overlay.style.display='flex';
-  overlay.onclick=function(e){if(e.target===overlay)overlay.remove();};
-
+async function showChart(sym,tagName){
+  var anchor='chart-'+tagName.replace(/[^a-zA-Z0-9]/g,'-');
+  var container=document.getElementById(anchor);
+  if(!container)return;
+  container.style.display='block';
+  container.scrollIntoView({behavior:'smooth'});
+  container.innerHTML='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px"><span style="color:var(--gold);font-weight:600;font-size:13px">'+sym+'</span><span style="color:var(--ash);font-size:10px">loading...</span></div><canvas id="'+anchor+'-canvas" style="width:100%;height:400px"></canvas>';
   try{
-    var resp=await fetch('/api/data/ohlc/'+sym,{headers:{'Authorization':'Bearer '+key}});
+    var resp=await fetch('/api/data/ohlc/'+sym,{headers:{'Authorization':'Bearer '+_key()}});
     var d=await resp.json();
-    if(!d.data||d.data.length===0)return;
-    drawCandles(d.data,d.supports||[],d.resistances||[]);
-  }catch(e){console.error(e);}
+    if(!d.data||d.data.length===0){container.innerHTML='';return;}
+    drawCandles(anchor+'-canvas',d.data,d.supports||[],d.resistances||[],sym);
+  }catch(e){container.innerHTML='<div style="color:var(--ember)">Chart load failed</div>';}
 }
 
-function drawCandles(data, supports, resistances){
-  var c=document.getElementById('chart-canvas');if(!c)return;
+function drawCandles(canvasId,data,supports,resistances,sym){
+  var c=document.getElementById(canvasId);if(!c)return;
   var ctx=c.getContext('2d');
-  var W=c.width,H=c.height,margin={top:20,right:60,bottom:40,left:60};
+  var W=c.parentNode.clientWidth||900;c.width=W;c.height=400;
+  var H=c.height,margin={top:20,right:70,bottom:40,left:70};
   var pw=W-margin.left-margin.right,ph=H-margin.top-margin.bottom;
   ctx.fillStyle='#0b1019';ctx.fillRect(0,0,W,H);
 
-  var prices=data.map(function(d){return [d.high,d.low];}).flat();
+  var prices=[];data.forEach(function(d){prices.push(d.high,d.low);});
   supports.forEach(function(s){prices.push(s);});
   resistances.forEach(function(r){prices.push(r);});
   var minP=Math.min.apply(null,prices),maxP=Math.max.apply(null,prices);
   var range=maxP-minP||1;
-  var barW=Math.max(1,(pw/data.length)*0.7);
-  var gap=(pw/data.length)-barW;
+  var barW=Math.max(1.5,(pw/data.length)*0.7);barW=Math.min(barW,8);
 
-  // Grid lines
-  ctx.strokeStyle='rgba(28,39,56,0.5)';ctx.lineWidth=0.5;
+  ctx.strokeStyle='rgba(28,39,56,0.4)';ctx.lineWidth=0.5;
   for(var i=0;i<=5;i++){
     var y=margin.top+(ph/5)*i;
     ctx.beginPath();ctx.moveTo(margin.left,y);ctx.lineTo(W-margin.right,y);ctx.stroke();
     var price=maxP-(range/5)*i;
-    ctx.fillStyle='#5d6d80';ctx.font='9px monospace';ctx.fillText(price.toFixed(1),W-margin.right+4,y+3);
+    ctx.fillStyle='#5d6d80';ctx.font='9px monospace';ctx.fillText(price.toFixed(1),W-margin.right+4,y+4);
   }
-
-  // Date labels
   ctx.fillStyle='#5d6d80';ctx.font='9px monospace';ctx.textAlign='center';
   for(var i=0;i<data.length;i+=Math.max(1,Math.floor(data.length/8))){
     var x=margin.left+i*(pw/data.length)+barW/2;
@@ -116,37 +116,38 @@ function drawCandles(data, supports, resistances){
   }
   ctx.textAlign='start';
 
-  // Candles
   for(var i=0;i<data.length;i++){
     var d=data[i],x=margin.left+i*(pw/data.length);
-    var openY=margin.top+(maxP-d.open)/range*ph;
-    var closeY=margin.top+(maxP-d.close)/range*ph;
-    var highY=margin.top+(maxP-d.high)/range*ph;
-    var lowY=margin.top+(maxP-d.low)/range*ph;
-    var color=d.close>=d.open?'#7ecb5a':'#e0553d';
-    ctx.strokeStyle=color;ctx.lineWidth=1;
-    ctx.beginPath();ctx.moveTo(x+barW/2,highY);ctx.lineTo(x+barW/2,lowY);ctx.stroke();
-    ctx.fillStyle=color;
-    var bodyH=Math.max(1,Math.abs(closeY-openY));
-    ctx.fillRect(x,Math.min(openY,closeY),barW,bodyH);
+    var oy=margin.top+(maxP-d.open)/range*ph;
+    var cy=margin.top+(maxP-d.close)/range*ph;
+    var hy=margin.top+(maxP-d.high)/range*ph;
+    var ly=margin.top+(maxP-d.low)/range*ph;
+    var clr=d.close>=d.open?'#7ecb5a':'#e0553d';
+    ctx.strokeStyle=clr;ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(x+barW/2,hy);ctx.lineTo(x+barW/2,ly);ctx.stroke();
+    ctx.fillStyle=clr;
+    var bh=Math.max(1,Math.abs(cy-oy));
+    ctx.fillRect(x,Math.min(oy,cy),barW,bh);
   }
 
-  // Support lines
-  ctx.strokeStyle='rgba(126,203,90,0.6)';ctx.lineWidth=1;ctx.setLineDash([4,4]);
-  for(var i=0;i<supports.length;i++){
-    var y=margin.top+(maxP-supports[i])/range*ph;
-    ctx.beginPath();ctx.moveTo(margin.left,y);ctx.lineTo(W-margin.right,y);ctx.stroke();
-    ctx.fillStyle='#7ecb5a';ctx.fillText('S: '+supports[i].toFixed(1),margin.left+4,y-2);
-  }
-
-  // Resistance lines
-  ctx.strokeStyle='rgba(224,85,61,0.6)';ctx.lineWidth=1;ctx.setLineDash([4,4]);
-  for(var i=0;i<resistances.length;i++){
-    var y=margin.top+(maxP-resistances[i])/range*ph;
-    ctx.beginPath();ctx.moveTo(margin.left,y);ctx.lineTo(W-margin.right,y);ctx.stroke();
-    ctx.fillStyle='#e0553d';ctx.fillText('R: '+resistances[i].toFixed(1),margin.left+4,y-2);
-  }
   ctx.setLineDash([]);
+  for(var i=0;i<supports.length;i++){
+    var sy=margin.top+(maxP-supports[i])/range*ph;
+    ctx.strokeStyle='rgba(126,203,90,0.8)';ctx.lineWidth=1.5;
+    ctx.beginPath();ctx.moveTo(margin.left,sy);ctx.lineTo(W-margin.right,sy);ctx.stroke();
+    ctx.fillStyle='#7ecb5a';ctx.font='bold 11px monospace';
+    ctx.fillText('S'+i+': $'+supports[i].toFixed(2),margin.left+2,sy-3);
+  }
+  for(var i=0;i<resistances.length;i++){
+    var ry=margin.top+(maxP-resistances[i])/range*ph;
+    ctx.strokeStyle='rgba(224,85,61,0.8)';ctx.lineWidth=1.5;
+    ctx.beginPath();ctx.moveTo(margin.left,ry);ctx.lineTo(W-margin.right,ry);ctx.stroke();
+    ctx.fillStyle='#e0553d';ctx.font='bold 11px monospace';
+    ctx.fillText('R'+i+': $'+resistances[i].toFixed(2),margin.left+2,ry-3);
+  }
+
+  var title=document.getElementById(canvasId).parentNode.querySelector('div');
+  if(title)title.innerHTML='<span style="color:var(--gold);font-weight:600;font-size:13px">'+sym+'</span><span style="color:var(--ash);font-size:10px">S:'+supports.length+' | R:'+resistances.length+'</span>';
 }
 </script>"""
 
@@ -162,9 +163,10 @@ SECTOR_CARD = """<div class="card tag-card" id="tag-{anchor}" style="display:non
 <div class="detail-row" style="margin-top:4px"><span class="detail-label">Risks</span></div>
 {risks}
 {highlights_html}
+<div class="chart-inline" id="chart-{anchor}"></div>
 </div></div>"""
 
-HIGHLIGHT_ROW = """<tr><td class="sym" style="cursor:pointer;text-decoration:underline;color:var(--gold)" onclick="showChart('{symbol}')">{symbol}</td><td class="name">{name}</td><td class="num">${price:.2f}</td><td><span class="badge {reason_cls}">{reason}</span></td><td class="num">${entry:.2f}</td><td class="num">${stop:.2f}</td><td class="num">${target:.2f}</td><td class="num">{rr}</td><td class="num">{size}</td><td class="num">${cost}</td><td class="num">${risk_dollars}</td><td><span class="badge badge-neutral">{horizon}</span></td></tr>"""
+HIGHLIGHT_ROW = """<tr><td class="sym sym-link" onclick="showChart('{symbol}','{tag_name}')">{symbol}</td><td class="name">{name}</td><td class="num">${price:.2f}</td><td><span class="badge {reason_cls}">{reason}</span></td><td class="num">${entry:.2f}</td><td class="num">${stop:.2f}</td><td class="num">${target:.2f}</td><td class="num">{rr}</td><td class="num">{size}</td><td class="num">${cost}</td><td class="num">${risk_dollars}</td><td><span class="badge badge-neutral">{horizon}</span></td></tr>"""
 
 
 class ReportGenerator:
@@ -178,7 +180,7 @@ class ReportGenerator:
         if not yesterday_report.exists():
             return ""
         yesterday_text = yesterday_report.read_text(encoding='utf-8')
-        yesterday_symbols = set(re.findall(r'class="sym">([A-Z]+)', yesterday_text))
+        yesterday_symbols = set(re.findall(r'class="sym[^"]*">([A-Z]+)', yesterday_text))
         today_symbols = set(h.symbol for h in highlights)
         parts = []
         new_picks = today_symbols - yesterday_symbols
@@ -221,7 +223,6 @@ class ReportGenerator:
             bg = "var(--volt)" if chg >= 0 else "var(--ember)"
             pct_clr = "var(--volt)" if chg >= 0 else "var(--ember)"
             sign = '+' if chg >= 0 else ''
-            anchor = re.sub(r'[^a-zA-Z0-9]', '-', s.name)
             bars.append(f'<div class="bar-item" onclick="showTag(\'{s.name}\')" title="{s.name}: {sign}{chg:.2f}%"><span class="bar-pct" style="color:{pct_clr}">{sign}{chg:.1f}%</span><div class="bar-fill" style="height:{height_pct:.0f}px;background:{bg}"></div><span class="bar-label">{s.name[:10]}</span></div>')
         parts.append(BAR_CHART_HTML.format(bars=''.join(bars)))
         parts.append(BAR_CHART_JS)
@@ -236,13 +237,13 @@ class ReportGenerator:
             if market.macro_drivers:
                 parts.append('<div class="detail-label" style="margin-top:6px">Drivers</div>')
                 for d in market.macro_drivers[:2]:
-                    if isinstance(d, dict): parts.append(f'<span class="driver">{d["text"]}</span>')
-                    else: parts.append(f'<span class="driver">{d}</span>')
+                    txt = d['text'] if isinstance(d, dict) else d
+                    parts.append(f'<span class="driver">{txt}</span>')
             if market.risks:
                 parts.append('<div class="detail-label" style="margin-top:6px">Risks</div>')
                 for r in market.risks[:1]:
-                    if isinstance(r, dict): parts.append(f'<span class="risk">{r["text"]}</span>')
-                    else: parts.append(f'<span class="risk">{r}</span>')
+                    txt = r['text'] if isinstance(r, dict) else r
+                    parts.append(f'<span class="risk">{txt}</span>')
             parts.append('</div>')
 
         # Positioning
@@ -256,7 +257,7 @@ class ReportGenerator:
 
         # Tag Details
         parts.append('<h2>Tag Details</h2>')
-        parts.append('<div id="tag-hint" style="color:var(--ash);font-size:12px;margin-bottom:12px">↑ Click a bar above to see tag details</div>')
+        parts.append('<div id="tag-hint" style="color:var(--ash);font-size:12px;margin-bottom:12px">Click a bar above to see tag details</div>')
         reason_map = {'Near Resistance': 'badge-neutral', 'Near Support': 'badge-neutral', 'Breakout': 'badge-up', 'Strong Momentum': 'badge-up', 'Good R/R': 'badge-up'}
         for s in sectors:
             chg = s.daily_change
@@ -293,7 +294,7 @@ class ReportGenerator:
                     risk_str = f"{getattr(h, 'risk_dollars', 0):,.0f}"
                     horizon_str = getattr(h, 'time_horizon', '--')
                     rows.append(HIGHLIGHT_ROW.format(
-                        symbol=h.symbol, name=h.name or h.symbol, price=h.price,
+                        symbol=h.symbol, tag_name=s.name, name=h.name or h.symbol, price=h.price,
                         reason=reason_display, reason_cls=reason_map.get(h.reason, 'badge-neutral'),
                         entry=h.entry, stop=h.stop, target=h.target, rr=rr_str,
                         size=size_str, cost=cost_str, risk_dollars=risk_str, horizon=horizon_str))
