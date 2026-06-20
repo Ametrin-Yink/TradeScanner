@@ -44,13 +44,13 @@ tr:hover{background:rgba(212,168,83,.03)}
 .driver{border-left-color:rgba(212,168,83,.4)}.risk{border-left-color:rgba(224,85,61,.4)}
 .stats-strip{display:flex;gap:16px;flex-wrap:wrap;font-size:12px;padding:8px 0;margin-bottom:16px;border-bottom:1px solid var(--divider)}
 .stats-item{color:var(--frost)}.stats-item b{color:var(--gold);font-weight:500}
-.bar-chart-wrap{margin-bottom:20px}
-.bar-chart{display:flex;align-items:flex-end;gap:4px;height:200px;padding:0 4px}
-.bar-item{flex:1;display:flex;flex-direction:column;align-items:center;cursor:pointer;transition:filter .15s;min-width:0}
+.bar-chart-wrap{margin-bottom:20px;max-width:600px}
+.bar-chart{display:flex;flex-direction:column;gap:3px;width:100%}
+.bar-item{display:flex;align-items:center;gap:6px;cursor:pointer;transition:filter .15s;padding:2px 0}
 .bar-item:hover{filter:brightness(1.3)}
-.bar-fill{border-radius:3px 3px 0 0;width:100%;min-height:3px}
-.bar-label{font-size:8px;color:var(--frost);margin-top:4px;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;width:100%}
-.bar-pct{font-size:9px;font-weight:600;margin-bottom:2px}
+.bar-label{font-size:10px;color:var(--frost);width:100px;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-shrink:0}
+.bar-fill{height:18px;border-radius:3px;min-width:3px;transition:width .3s ease}
+.bar-pct{font-size:9px;font-weight:600;width:50px;text-align:right;flex-shrink:0}
 .fold-toggle{cursor:pointer;user-select:none;transition:background .15s}.fold-toggle:hover{background:var(--gold-dim);border-radius:4px}.fold-toggle h3::before{content:'\\25BC\\00a0';font-size:9px;transition:transform .2s}.fold-toggle.collapsed h3::before{content:'\\25B6\\00a0'}.fold-body{overflow:hidden;transition:max-height .3s;max-height:5000px;opacity:1}.fold-body.hidden{max-height:0;opacity:0}
 .chart-inline{display:none;margin-top:8px;padding:8px;background:var(--bg-root);border-radius:var(--radius);border:1px solid var(--divider)}
 .chart-inline canvas{display:block;max-width:100%}
@@ -214,16 +214,16 @@ class ReportGenerator:
             parts.append(self._compute_diff(all_highlights, scan_date))
         parts.append('</div><div class="header-meta" style="text-align:right;font-size:10px">' + timestamp[:16] + '</div></div>')
 
-        # Bar Chart
+        # Bar Chart (horizontal)
         max_chg = max(abs(s.daily_change) for s in sectors if s.daily_change is not None) or 1
         bars = []
         for s in sectors:
             chg = s.daily_change or 0
-            height_pct = max(abs(chg) / max(max_chg, 0.01) * 100, 3)
+            width_pct = max(abs(chg) / max(max_chg, 0.01) * 100, 3)
             bg = "var(--volt)" if chg >= 0 else "var(--ember)"
             pct_clr = "var(--volt)" if chg >= 0 else "var(--ember)"
             sign = '+' if chg >= 0 else ''
-            bars.append(f'<div class="bar-item" onclick="showTag(\'{s.name}\')" title="{s.name}: {sign}{chg:.2f}%"><span class="bar-pct" style="color:{pct_clr}">{sign}{chg:.1f}%</span><div class="bar-fill" style="height:{height_pct:.0f}px;background:{bg}"></div><span class="bar-label">{s.name[:10]}</span></div>')
+            bars.append(f'<div class="bar-item" onclick="showTag(\'{s.name}\')" title="{s.name}: {sign}{chg:.2f}%"><span class="bar-label">{s.name}</span><div class="bar-fill" style="width:{width_pct:.0f}%;background:{bg}"></div><span class="bar-pct" style="color:{pct_clr}">{sign}{chg:.1f}%</span></div>')
         parts.append(BAR_CHART_HTML.format(bars=''.join(bars)))
         parts.append(BAR_CHART_JS)
 
