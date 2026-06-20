@@ -293,19 +293,6 @@ def serve_static(filename):
     return send_from_directory(str(web_dir), filename)
 
 
-@app.route('/debug/path')
-def debug_path():
-    from flask import send_from_directory
-    web_dir = Path(__file__).resolve().parent.parent / "web"
-    return {
-        '__file__': str(__file__),
-        'web_dir': str(web_dir),
-        'web_dir_abs': str(web_dir.resolve()),
-        'exists': web_dir.exists(),
-        'files': [str(p.relative_to(web_dir)) for p in sorted(web_dir.rglob('*')) if p.is_file()],
-    }
-
-
 @app.route('/dashboard')
 def dashboard():
     """Redirect to the dashboard SPA."""
