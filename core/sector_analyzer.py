@@ -527,31 +527,34 @@ class SectorAnalyzer:
         return FocusSummary(focus_sectors=focus, avoid_sectors=avoid, reasoning=reasoning)
 
     def _apply_feedback(self, scored):
-        """Adjust tag scores based on simulation outcomes."""
-        conn = self.db.get_connection()
-        outcomes = conn.execute("""
-            SELECT tag, outcome, COUNT(*) as cnt
-            FROM simulation_positions
-            WHERE outcome IN ('win', 'loss', 'expired')
-            GROUP BY tag, outcome
-        """).fetchall()
+        """Adjust tag scores based on simulation outcomes. No-op if no data."""
+        try:
+            conn = self.db.get_connection()
+            outcomes = conn.execute("""
+                SELECT tag, outcome, COUNT(*) as cnt
+                FROM simulation_positions
+                WHERE outcome IN ('win', 'loss', 'expired')
+                GROUP BY tag, outcome
+            """).fetchall()
 
-        tag_perf = {}
-        for tag, outcome, cnt in outcomes:
-            tag_perf.setdefault(tag, {'win': 0, 'total': 0})
-            tag_perf[tag]['total'] += cnt
-            if outcome == 'win':
-                tag_perf[tag]['win'] += cnt
+            tag_perf = {}
+            for tag, outcome, cnt in outcomes:
+                tag_perf.setdefault(tag, {'win': 0, 'total': 0})
+                tag_perf[tag]['total'] += cnt
+                if outcome == 'win':
+                    tag_perf[tag]['win'] += cnt
 
-        scored_out = list(scored)
-        for i, (score, name) in enumerate(scored_out):
-            perf = tag_perf.get(name)
-            if perf and perf['total'] >= 5:
-                win_rate = perf['win'] / perf['total']
-                bonus = (win_rate - 0.5) * 0.10
-                scored_out[i] = (score + bonus, name)
+            scored_out = list(scored)
+            for i, (score, name) in enumerate(scored_out):
+                perf = tag_perf.get(name)
+                if perf and perf['total'] >= 5:
+                    win_rate = perf['win'] / perf['total']
+                    bonus = (win_rate - 0.5) * 0.10
+                    scored_out[i] = (score + bonus, name)
 
-        return scored_out
+            return scored_out
+        except Exception:
+            return scored
 
     def _ai_focus_reasoning(self, market: MarketOverview, focus: List[str], avoid: List[str], top5) -> str:
         """Call AI (no search) for 2-3 sentence focus summary reasoning."""
