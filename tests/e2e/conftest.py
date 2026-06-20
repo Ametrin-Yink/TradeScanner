@@ -14,16 +14,13 @@ from api.server import app as create_app
 
 @pytest.fixture
 def in_memory_db(monkeypatch):
-    """Provide a Database that uses :memory: SQLite."""
+    """Provide a Database that uses a singleton :memory: SQLite connection."""
     db = Database()
+    conn = sqlite3.connect(':memory:', check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
 
-    def _mock_path(db_path):
-        conn = sqlite3.connect(':memory:')
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        return conn
-
-    monkeypatch.setattr(db, 'get_connection', lambda: _mock_path(None))
+    monkeypatch.setattr(db, 'get_connection', lambda: conn)
     return db
 
 
@@ -67,8 +64,9 @@ def seeded_db(in_memory_db):
     """)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS regime_cache (
-            regime TEXT, ai_confidence INTEGER, ai_reasoning TEXT,
-            cache_date TEXT
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            regime TEXT, allocation TEXT, ai_regime TEXT,
+            ai_confidence INTEGER, ai_reasoning TEXT, cache_date TEXT
         )
     """)
 
@@ -122,8 +120,21 @@ def seeded_db(in_memory_db):
 
     # Seed regime_cache
     conn.execute("""
-        INSERT INTO regime_cache (regime, ai_confidence, ai_reasoning, cache_date)
-        VALUES ('bull_moderate', 70, 'Market in steady uptrend with low volatility.', '2026-06-19')
+        INSERT INTO regime_cache (regime, allocation, ai_regime, ai_confidence, ai_reasoning, cache_date)
+        VALUES ('bull_moderate', '{}', 'bull_moderate', 70, 'Market in steady uptrend with low volatility.', '2026-06-19')
+    """)
+
+    # Create simulation_positions table (needed by _apply_feedback in pipeline)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS simulation_positions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            opened_date TEXT, symbol TEXT, tag TEXT, reason TEXT,
+            entry_price REAL, stop_price REAL, target_price REAL,
+            rr_ratio REAL, position_size_shares INTEGER, risk_dollars REAL,
+            time_horizon_days INTEGER, close_date TEXT, close_price REAL,
+            outcome TEXT DEFAULT 'open', pnl_dollars REAL, pnl_r REAL,
+            report_date TEXT
+        )
     """)
 
     conn.commit()
@@ -164,12 +175,13 @@ def mock_ai(monkeypatch):
 
 
 @pytest.fixture
-def app(seeded_db, mock_ai):
-    """Flask test client with seeded DB."""
+def app(seeded_db, mock_ai, monkeypatch):
+    """Flask test client with seeded DB and auth disabled."""
+    monkeypatch.setenv('API_KEY', '')
     create_app.config['TESTING'] = True
-    # Override the module-level db with our seeded one
     import api.server
     api.server.db = seeded_db
+    api.server.API_KEY = ''
     return create_app
 
 
