@@ -1,12 +1,11 @@
 // web/js/app.js
 import { api, isLoggedIn, setApiKey, verifyKey, showToast } from "./api.js";
 import { loadTags, initTags } from "./tags.js";
-import { loadStrategies } from "./strategies.js";
 import { loadReports } from "./reports.js";
-import { initScan, loadScanStatus } from "./scan.js";
 import { loadSimulation } from "./simulation.js";
+import { loadToday, initToday } from "./today.js";
+import { loadConfig, initConfig } from "./config.js";
 
-// --- Tab Routing ---
 export function switchTab(name) {
   document
     .querySelectorAll(".tab-pane")
@@ -14,27 +13,24 @@ export function switchTab(name) {
   document
     .querySelectorAll(".navbar-tab")
     .forEach((t) => t.classList.remove("active"));
-  document.getElementById("pane-" + name).classList.add("active");
-  document
-    .querySelector('.navbar-tab[data-tab="' + name + '"]')
-    .classList.add("active");
+  const pane = document.getElementById("pane-" + name);
+  if (pane) pane.classList.add("active");
+  const tab = document.querySelector('.navbar-tab[data-tab="' + name + '"]');
+  if (tab) tab.classList.add("active");
   window.location.hash = name;
-  if (name === "scan") loadScanStatus();
+  if (name === "today") loadToday();
   if (name === "simulation") loadSimulation();
+  if (name === "config") loadConfig();
 }
 
-// --- Scope Indicator ---
 export function updateScope(tagCount, stockCount) {
-  function plural(n, s) {
-    return n + " " + s + (n !== 1 ? "s" : "");
-  }
+  const p = (n, s) => n + " " + s + (n !== 1 ? "s" : "");
   document.getElementById("scopeText").textContent =
-    plural(tagCount, "tag") + " · " + plural(stockCount, "stock");
+    p(tagCount, "tag") + " · " + p(stockCount, "stock");
   document.getElementById("tagTotalCount").textContent =
-    plural(tagCount, "tag") + " · " + plural(stockCount, "stock");
+    p(tagCount, "tag") + " · " + p(stockCount, "stock");
 }
 
-// --- Login ---
 function showLogin() {
   document.getElementById("loginOverlay").style.display = "flex";
   document.getElementById("appMain").style.display = "none";
@@ -47,14 +43,11 @@ function hideLogin() {
 }
 
 async function handleLogin() {
-  const input = document.getElementById("apiKeyInput");
-  const key = input.value.trim();
+  const key = document.getElementById("apiKeyInput").value.trim();
   if (!key) return;
-
   const btn = document.getElementById("loginBtn");
   btn.disabled = true;
   btn.textContent = "Verifying...";
-
   try {
     const valid = await verifyKey(key);
     if (valid) {
@@ -72,41 +65,33 @@ async function handleLogin() {
   }
 }
 
-// --- Init ---
 async function initApp() {
   initTags();
-  initScan();
+  initToday();
+  initConfig();
   await loadTags();
-  loadStrategies();
   loadReports();
-  if (window.location.hash === "#scan") loadScanStatus();
+  await loadToday();
   if (window.location.hash === "#simulation") loadSimulation();
+  if (window.location.hash === "#config") loadConfig();
 }
 
 document.addEventListener("DOMContentLoaded", () => {
-  // Tab click handlers
   document.querySelectorAll(".navbar-tab").forEach((tab) => {
     tab.addEventListener("click", () => switchTab(tab.dataset.tab));
   });
 
-  // Hash routing
   function initHash() {
     const hash = window.location.hash.replace("#", "");
-    if (
-      ["tags", "strategies", "reports", "scan", "simulation"].includes(hash)
-    ) {
+    if (["today", "tags", "reports", "simulation", "config"].includes(hash))
       switchTab(hash);
-    }
   }
   window.addEventListener("hashchange", initHash);
 
-  // Login button
   document.getElementById("loginBtn").addEventListener("click", handleLogin);
   document.getElementById("apiKeyInput").addEventListener("keydown", (e) => {
     if (e.key === "Enter") handleLogin();
   });
-
-  // Logout
   document.getElementById("logoutBtn").addEventListener("click", () => {
     import("./api.js").then((m) => {
       m.clearApiKey();
@@ -114,11 +99,8 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   });
 
-  // Check login state
   if (isLoggedIn()) {
     hideLogin();
     initApp().then(() => initHash());
-  } else {
-    showLogin();
-  }
+  } else showLogin();
 });

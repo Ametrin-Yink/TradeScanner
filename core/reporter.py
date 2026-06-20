@@ -3,7 +3,6 @@ import logging
 import re
 from pathlib import Path
 from datetime import datetime, timedelta
-from typing import Optional
 
 from config.settings import settings, REPORTS_DIR
 
@@ -45,22 +44,25 @@ tr:hover{background:rgba(212,168,83,.03)}
 .driver{border-left-color:rgba(212,168,83,.4)}.risk{border-left-color:rgba(224,85,61,.4)}
 .stats-strip{display:flex;gap:16px;flex-wrap:wrap;font-size:12px;padding:8px 0;margin-bottom:16px;border-bottom:1px solid var(--divider)}
 .stats-item{color:var(--frost)}.stats-item b{color:var(--gold);font-weight:500}
-/* Heatmap bar */
-.heatmap-wrap{margin-bottom:20px}
-.heatmap-bar{display:flex;height:36px;border-radius:4px;overflow:hidden;gap:1px;background:var(--divider)}
-.heatmap-seg{display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:600;cursor:default;transition:filter .15s;min-width:0}
-.heatmap-seg:hover{filter:brightness(1.3)}
-.heatmap-labels{display:flex;font-size:10px;margin-top:4px;gap:1px;color:var(--ash)}
-.heatmap-labels span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:center}
-/* Fold */
-.fold-toggle{cursor:pointer;user-select:none;transition:background .15s}.fold-toggle:hover{background:var(--gold-dim);border-radius:4px}.fold-toggle h3::before{content:'\\25BC\\00a0';font-size:9px;transition:transform .2s}.fold-toggle.collapsed h3::before{content:'\\25B6\\00a0'}.fold-body{overflow:hidden;transition:max-height .3s ease,opacity .2s;max-height:5000px;opacity:1}.fold-body.hidden{max-height:0;opacity:0}
+.bar-chart-wrap{margin-bottom:20px}
+.bar-chart{display:flex;align-items:flex-end;gap:4px;height:200px;padding:0 4px}
+.bar-item{flex:1;display:flex;flex-direction:column;align-items:center;cursor:pointer;transition:filter .15s;min-width:0}
+.bar-item:hover{filter:brightness(1.3)}
+.bar-fill{border-radius:3px 3px 0 0;width:100%;min-height:3px}
+.bar-label{font-size:8px;color:var(--frost);margin-top:4px;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;width:100%}
+.bar-pct{font-size:9px;font-weight:600;margin-bottom:2px}
+.fold-toggle{cursor:pointer;user-select:none;transition:background .15s}.fold-toggle:hover{background:var(--gold-dim);border-radius:4px}.fold-toggle h3::before{content:'\25BC\00a0';font-size:9px;transition:transform .2s}.fold-toggle.collapsed h3::before{content:'\25B6\00a0'}.fold-body{overflow:hidden;transition:max-height .3s;max-height:5000px;opacity:1}.fold-body.hidden{max-height:0;opacity:0}
 """
 
-HEATMAP_BAR = """<div class="heatmap-wrap"><div class="heatmap-bar">{segments}</div><div class="heatmap-labels">{labels}</div></div>"""
+BAR_CHART_JS = """<script>
+function scrollToTag(n){var id='tag-'+n.replace(/[^a-zA-Z0-9]/g,'-');var el=document.getElementById(id);if(el){el.scrollIntoView({behavior:'smooth'});var card=el.closest('.card');if(card){var b=card.querySelector('.fold-body');if(b)b.classList.remove('hidden');var t=card.querySelector('.fold-toggle');if(t)t.classList.remove('collapsed')}}}
+</script>"""
+
+BAR_CHART_HTML = """<div class="bar-chart-wrap"><div class="bar-chart">{bars}</div></div>"""
 
 STATS_STRIP = """<div class="stats-strip"><span class="stats-item"><b>SPY</b> ${spy_price:.2f} <span class="{spy_cls}">{spy_5d:+.2f}% 5d</span></span><span class="stats-item"><b>VIX</b> {vix:.1f}</span><span class="stats-item">{regime}</span></div>"""
 
-SECTOR_CARD = """<div class="card">
+SECTOR_CARD = """<div class="card" id="tag-{anchor}">
 <div class="card-header fold-toggle" onclick="this.classList.toggle('collapsed');this.nextElementSibling.classList.toggle('hidden')"><h3>{name}</h3><span class="badge {chg_cls}">{daily_change}</span></div>
 <div class="fold-body"><div class="detail-row">{outlook}</div>
 <div class="detail-row" style="margin-top:4px"><span class="detail-label">Drivers</span></div>
@@ -79,30 +81,21 @@ class ReportGenerator:
         self.max_reports = settings.get('report', {}).get('max_reports', 15)
 
     def _compute_diff(self, highlights, scan_date):
-        """Compare today's picks to yesterday's report."""
         yesterday = (datetime.strptime(scan_date, '%Y-%m-%d') - timedelta(days=1)).strftime('%Y-%m-%d')
         yesterday_report = self.reports_dir / f"report_{yesterday}.html"
         if not yesterday_report.exists():
             return ""
-
         yesterday_text = yesterday_report.read_text(encoding='utf-8')
         yesterday_symbols = set(re.findall(r'class="sym">([A-Z]+)', yesterday_text))
         today_symbols = set(h.symbol for h in highlights)
-
+        parts = []
         new_picks = today_symbols - yesterday_symbols
         removed = yesterday_symbols - today_symbols
         unchanged = today_symbols & yesterday_symbols
-
-        parts = []
-        if new_picks:
-            parts.append(f'+{len(new_picks)} new')
-        if removed:
-            parts.append(f'-{len(removed)} removed')
-        if unchanged:
-            parts.append(f'={len(unchanged)} unchanged')
-        if parts:
-            return f'<div class="header-meta" style="margin-top:4px">{" &middot; ".join(parts)} vs yesterday</div>'
-        return ""
+        if new_picks: parts.append(f'+{len(new_picks)} new')
+        if removed: parts.append(f'-{len(removed)} removed')
+        if unchanged: parts.append(f'={len(unchanged)} unchanged')
+        return f'<div class="header-meta" style="margin-top:4px">{" &middot; ".join(parts)} vs yesterday</div>' if parts else ""
 
     def generate_report(self, analysis_result: dict) -> str:
         market = analysis_result['market']
@@ -110,7 +103,6 @@ class ReportGenerator:
         focus = analysis_result.get('focus_summary')
         timestamp = analysis_result.get('timestamp', datetime.now().isoformat())
         scan_date = datetime.now().strftime('%Y-%m-%d')
-
         html = self._build_html(market, sectors, focus, timestamp, scan_date)
         report_path = self.reports_dir / f"report_{scan_date}.html"
         report_path.write_text(html, encoding='utf-8')
@@ -119,9 +111,8 @@ class ReportGenerator:
         return str(report_path)
 
     def _build_html(self, market, sectors, focus, timestamp, scan_date=None) -> str:
-        parts = ['<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>TradeScanner · ', market.date, '</title><style>', STYLE, '</style></head><body>']
+        parts = ['<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>TradeScanner &middot; ', market.date, '</title><style>', STYLE, '</style></head><body>']
 
-        # Header
         total_stocks = len(set(h.symbol for s in sectors for h in s.highlights))
         all_highlights = [h for s in sectors for h in s.highlights]
         parts.append(f'<div class="header"><div><h1>TradeScanner</h1><div class="header-meta">{market.date} &middot; {len(sectors)} tags &middot; {total_stocks} picks</div>')
@@ -129,46 +120,40 @@ class ReportGenerator:
             parts.append(self._compute_diff(all_highlights, scan_date))
         parts.append('</div><div class="header-meta" style="text-align:right;font-size:10px">' + timestamp[:16] + '</div></div>')
 
-        # Heatmap Bar
+        # Bar Chart
         max_chg = max(abs(s.daily_change) for s in sectors if s.daily_change is not None) or 1
-        total_stocks_all = sum(s.stock_count for s in sectors) or 1
-        segments = []
-        labels = []
+        bars = []
         for s in sectors:
             chg = s.daily_change or 0
-            width_pct = max(s.stock_count / total_stocks_all * 100, 3)
-            intensity = min(abs(chg) / max(max_chg, 0.01), 1.0)
-            if chg >= 0:
-                bg = f"rgba(126,203,90,{intensity * 0.7:.2f})"
-                color = "#fff" if intensity > 0.5 else "var(--volt)"
-            else:
-                bg = f"rgba(224,85,61,{intensity * 0.7:.2f})"
-                color = "#fff" if intensity > 0.5 else "var(--ember)"
+            height_pct = max(abs(chg) / max(max_chg, 0.01) * 100, 3)
+            bg = "var(--volt)" if chg >= 0 else "var(--ember)"
+            pct_clr = "var(--volt)" if chg >= 0 else "var(--ember)"
             sign = '+' if chg >= 0 else ''
-            title = f"{s.name}: {sign}{chg:.2f}%"
-            seg = f'<div class="heatmap-seg" style="width:{width_pct:.1f}%;background:{bg};color:{color}" title="{title}">{sign}{chg:.1f}%</div>'
-            segments.append(seg)
-            labels.append(f'<span style="width:{width_pct:.1f}%">{s.name[:12]}</span>')
-        parts.append(HEATMAP_BAR.format(segments=''.join(segments), labels=''.join(labels)))
+            anchor = re.sub(r'[^a-zA-Z0-9]', '-', s.name)
+            bars.append(f'<div class="bar-item" onclick="scrollToTag(\'{s.name}\')" title="{s.name}: {sign}{chg:.2f}%"><span class="bar-pct" style="color:{pct_clr}">{sign}{chg:.1f}%</span><div class="bar-fill" style="height:{height_pct:.0f}px;background:{bg}"></div><span class="bar-label">{s.name[:10]}</span></div>')
+        parts.append(BAR_CHART_HTML.format(bars=''.join(bars)))
+        parts.append(BAR_CHART_JS)
 
         # Stats Strip
         spy_cls = 'up' if market.spy_change_5d >= 0 else 'down'
-        parts.append(STATS_STRIP.format(
-            spy_price=market.spy_price, spy_5d=market.spy_change_5d, spy_cls=spy_cls,
-            vix=market.vix, regime=market.regime))
+        parts.append(STATS_STRIP.format(spy_price=market.spy_price, spy_5d=market.spy_change_5d, spy_cls=spy_cls, vix=market.vix, regime=market.regime))
 
-        # Market Overview (tight — narrative only)
+        # Market Overview
         if market.reasoning:
             parts.append(f'<div class="card"><div class="detail-row">{market.reasoning}</div>')
             if market.macro_drivers:
                 parts.append('<div class="detail-label" style="margin-top:6px">Drivers</div>')
-                parts.extend(f'<span class="driver">{d}</span>' for d in market.macro_drivers[:2])
+                for d in market.macro_drivers[:2]:
+                    if isinstance(d, dict): parts.append(f'<span class="driver">{d["text"]}</span>')
+                    else: parts.append(f'<span class="driver">{d}</span>')
             if market.risks:
                 parts.append('<div class="detail-label" style="margin-top:6px">Risks</div>')
-                parts.extend(f'<span class="risk">{r}</span>' for r in market.risks[:1])
+                for r in market.risks[:1]:
+                    if isinstance(r, dict): parts.append(f'<span class="risk">{r["text"]}</span>')
+                    else: parts.append(f'<span class="risk">{r}</span>')
             parts.append('</div>')
 
-        # Positioning (merged Focus + Avoid)
+        # Positioning
         if focus and (focus.focus_sectors or focus.avoid_sectors):
             parts.append('<div class="positioning">')
             parts.append(f'<div class="pos-focus"><div class="pos-label">Focus</div><div class="pos-sectors">{", ".join(focus.focus_sectors or [])}</div></div>')
@@ -177,28 +162,34 @@ class ReportGenerator:
             if focus.reasoning:
                 parts.append(f'<div class="pos-reason" style="margin:-8px 0 16px 0;font-size:11px;color:var(--ash)">{focus.reasoning}</div>')
 
-        # Sector Details
+        # Tag Details
         parts.append('<h2>Tag Details</h2>')
+        reason_map = {'Near Resistance': 'badge-neutral', 'Near Support': 'badge-neutral', 'Breakout': 'badge-up', 'Strong Momentum': 'badge-up', 'Good R/R': 'badge-up'}
         for s in sectors:
             chg = s.daily_change
             chg_str = f"{chg:+.2f}%" if chg is not None else "--"
             chg_cls = 'badge-up' if (chg or 0) >= 0 else 'badge-down'
+            anchor = re.sub(r'[^a-zA-Z0-9]', '-', s.name)
 
-            drivers_html = ''.join(f'<span class="driver">{d}</span>' for d in (s.key_drivers or []))
-            risks_html = ''.join(f'<span class="risk">{r}</span>' for r in (s.risks or []))
+            drivers_html = ''
+            for d in (s.key_drivers or []):
+                txt = d['text'] if isinstance(d, dict) else d
+                drivers_html += f'<span class="driver">{txt}</span>'
+            risks_html = ''
+            for r in (s.risks or []):
+                txt = r['text'] if isinstance(r, dict) else r
+                risks_html += f'<span class="risk">{txt}</span>'
 
             highlights_html = ''
             if s.highlights:
-                reason_map = {'Near Resistance': 'badge-neutral', 'Near Support': 'badge-neutral',
-                              'Breakout': 'badge-up', 'Strong Momentum': 'badge-up', 'Good R/R': 'badge-up'}
                 rows = []
                 for h in s.highlights:
-                    # Reason badge with embedded RS metric for Strong Momentum
                     if h.reason == 'Strong Momentum':
                         rs_val = getattr(h, 'rs_percentile', None)
                         if rs_val is not None:
-                            rs_ord = f"{int(rs_val)}{'th' if 10<=int(rs_val)%100<=20 else {1:'st',2:'nd',3:'rd'}.get(int(rs_val)%10,'th')}"
-                            reason_display = f"Strong Momentum (RS {rs_ord})"
+                            n = int(rs_val)
+                            sfx = 'th' if 10 <= n % 100 <= 20 else {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')
+                            reason_display = f"Strong Momentum (RS {n}{sfx})"
                         else:
                             reason_display = h.reason
                     else:
@@ -215,12 +206,12 @@ class ReportGenerator:
                         size=size_str, cost=cost_str, risk_dollars=risk_str, horizon=horizon_str))
                 highlights_html = '<table style="margin-top:8px"><thead><tr><th>Symbol</th><th>Name</th><th>Price</th><th>Reason</th><th>Entry</th><th>Stop</th><th>Target</th><th>R/R</th><th>Size</th><th>Cost</th><th>Risk</th><th>Horizon</th></tr></thead><tbody>' + ''.join(rows) + '</tbody></table>'
 
+            outlook_html = s.outlook
             if not s.outlook or s.outlook == f"{s.name} sector: no AI analysis available.":
                 outlook_html = '<span style="color:var(--ash);font-style:italic">AI analysis unavailable -- using fallback data</span>'
-            else:
-                outlook_html = s.outlook
+
             parts.append(SECTOR_CARD.format(
-                name=s.name, chg_cls=chg_cls, daily_change=chg_str,
+                name=s.name, anchor=anchor, chg_cls=chg_cls, daily_change=chg_str,
                 outlook=outlook_html,
                 drivers=drivers_html or '<span class="dim">--</span>',
                 risks=risks_html or '<span class="dim">--</span>',

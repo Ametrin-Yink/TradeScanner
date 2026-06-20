@@ -75,11 +75,11 @@
           <span class="navbar-dot"></span>TradeScanner
         </div>
         <div class="navbar-tabs">
-          <button class="navbar-tab active" data-tab="tags">Tags</button>
-          <button class="navbar-tab" data-tab="strategies">Strategies</button>
+          <button class="navbar-tab active" data-tab="today">Today</button>
+          <button class="navbar-tab" data-tab="tags">Tags</button>
           <button class="navbar-tab" data-tab="reports">Reports</button>
-          <button class="navbar-tab" data-tab="scan">Scan</button>
           <button class="navbar-tab" data-tab="simulation">Simulation</button>
+          <button class="navbar-tab" data-tab="config">Config</button>
         </div>
         <div class="navbar-scope" id="scopeIndicator">
           <span id="scopeText">-- tags · -- stocks</span>
@@ -90,7 +90,53 @@
       </nav>
 
       <div class="tab-content">
-        <div class="tab-pane active" id="pane-tags">
+        <!-- TODAY TAB -->
+        <div class="tab-pane active" id="pane-today">
+          <div class="tab-pane-inner" style="max-width: 100%">
+            <div
+              style="
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                margin-bottom: 16px;
+                flex-wrap: wrap;
+                gap: 12px;
+              "
+            >
+              <h2 style="font-size: 18px; font-weight: 600; margin: 0">
+                Today's Report
+              </h2>
+              <div style="display: flex; gap: 8px; align-items: center">
+                <span
+                  id="todayDate"
+                  style="color: var(--text-secondary); font-size: 12px"
+                ></span>
+                <button class="btn btn-primary btn-sm" id="runScanBtn2">
+                  Run Scan
+                </button>
+              </div>
+            </div>
+            <div
+              id="scanProgress2"
+              style="
+                display: none;
+                margin-bottom: 12px;
+                color: var(--text-secondary);
+                font-size: 12px;
+              "
+            ></div>
+            <div id="todayContent">
+              <div class="empty-state">
+                <div class="empty-state-text">
+                  No report yet. Click "Run Scan" to generate today's report.
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- TAGS TAB -->
+        <div class="tab-pane" id="pane-tags">
           <div class="tab-pane-inner">
             <div class="sectors-layout">
               <div class="sectors-sidebar">
@@ -175,7 +221,7 @@
                       <input
                         type="text"
                         id="stockSearchInput"
-                        placeholder="Search stocks by symbol or name..."
+                        placeholder="Search stocks..."
                         autocomplete="off"
                       />
                       <div
@@ -207,27 +253,7 @@
           </div>
         </div>
 
-        <div class="tab-pane" id="pane-strategies">
-          <div class="tab-pane-inner">
-            <div class="strategies-header"><h2>Strategy Configuration</h2></div>
-            <div id="strategiesLoading" class="empty-state">
-              <div class="loading-pulse empty-state-text">
-                Loading strategies...
-              </div>
-            </div>
-            <div
-              class="strategy-accordion"
-              id="strategyAccordion"
-              style="display: none"
-            ></div>
-            <div class="save-bar" id="saveBar">
-              <button class="btn btn-primary" id="saveStrategiesBtn">
-                Save Changes
-              </button>
-            </div>
-          </div>
-        </div>
-
+        <!-- REPORTS TAB -->
         <div class="tab-pane" id="pane-reports">
           <div class="tab-pane-inner">
             <div class="reports-header">
@@ -253,86 +279,12 @@
               </table>
             </div>
             <div id="reportsEmpty" class="empty-state" style="display: none">
-              <div class="empty-state-text">
-                No reports yet. Run a scan to generate your first report.
-              </div>
-            </div>
-            <div
-              id="reportPreview"
-              style="
-                display: none;
-                margin-top: 16px;
-                border: 1px solid var(--border);
-                border-radius: var(--radius);
-                overflow: hidden;
-              "
-            >
-              <iframe
-                id="reportFrame"
-                style="
-                  width: 100%;
-                  height: 600px;
-                  border: none;
-                  background: var(--ink);
-                "
-              ></iframe>
+              <div class="empty-state-text">No reports yet.</div>
             </div>
           </div>
         </div>
 
-        <div class="tab-pane" id="pane-scan">
-          <div class="tab-pane-inner" style="max-width: 800px; margin: 0 auto">
-            <div
-              style="
-                display: flex;
-                gap: 16px;
-                margin-bottom: 24px;
-                flex-wrap: wrap;
-              "
-              id="scanStats"
-            >
-              <div class="scan-stat-card">
-                <div class="scan-stat-label">LAST RUN</div>
-                <div class="scan-stat-value" id="statLastRun">--</div>
-              </div>
-              <div class="scan-stat-card">
-                <div class="scan-stat-label">STATUS</div>
-                <div class="scan-stat-value" id="statStatus">--</div>
-              </div>
-              <div class="scan-stat-card">
-                <div class="scan-stat-label">STOCKS</div>
-                <div class="scan-stat-value" id="statStocks">--</div>
-              </div>
-              <div class="scan-stat-card">
-                <div class="scan-stat-label">CANDIDATES</div>
-                <div class="scan-stat-value" id="statCands">--</div>
-              </div>
-            </div>
-            <button class="btn btn-primary" id="runScanBtn">
-              Run Full Scan
-            </button>
-            <div
-              id="scanProgress"
-              style="
-                display: none;
-                margin-top: 12px;
-                color: var(--text-secondary);
-              "
-            ></div>
-            <div
-              id="scanResult"
-              style="
-                display: none;
-                margin-top: 16px;
-                padding: 16px;
-                background: var(--bg-surface);
-                border-radius: var(--radius);
-                border: 1px solid var(--border);
-              "
-            ></div>
-          </div>
-        </div>
-
+        <!-- SIMULATION TAB -->
         <div class="tab-pane" id="pane-simulation">
           <div class="tab-pane-inner">
             <div
@@ -352,7 +304,7 @@
                     <th>Symbol</th>
                     <th>Entry</th>
                     <th>Current</th>
-                    <th>P&amp;L</th>
+                    <th>P&L</th>
                     <th>Days</th>
                     <th>Progress</th>
                   </tr>
@@ -387,13 +339,88 @@
                     <th>Entry</th>
                     <th>Exit</th>
                     <th>Outcome</th>
-                    <th>P&amp;L</th>
+                    <th>P&L</th>
                     <th>R</th>
                   </tr>
                 </thead>
                 <tbody id="simClosedBody"></tbody>
               </table>
             </div>
+          </div>
+        </div>
+
+        <!-- CONFIG TAB -->
+        <div class="tab-pane" id="pane-config">
+          <div class="tab-pane-inner" style="max-width: 600px">
+            <h2 style="font-size: 18px; font-weight: 600; margin-bottom: 16px">
+              Configuration
+            </h2>
+            <div class="card" style="margin-bottom: 16px">
+              <h3 style="margin-bottom: 8px">Scan Schedule</h3>
+              <div class="strategy-field" style="margin-bottom: 8px">
+                <label>Scan Time (EST, 24h format)</label>
+                <input
+                  type="text"
+                  id="configScanTime"
+                  value="06:00"
+                  placeholder="06:00"
+                />
+                <div class="unit-hint">
+                  Auto-scan runs weekdays at this time (NYSE trading days only)
+                </div>
+              </div>
+            </div>
+            <div class="card" style="margin-bottom: 16px">
+              <h3 style="margin-bottom: 8px">Portfolio</h3>
+              <div class="strategy-field" style="margin-bottom: 8px">
+                <label>Account Value ($)</label>
+                <input
+                  type="number"
+                  id="configAccountValue"
+                  value="50000"
+                  step="1000"
+                />
+              </div>
+              <div class="strategy-field" style="margin-bottom: 8px">
+                <label>Risk Per Trade (%)</label>
+                <input
+                  type="number"
+                  id="configRiskPct"
+                  value="1.0"
+                  step="0.1"
+                  min="0.1"
+                  max="10"
+                />
+              </div>
+            </div>
+            <div class="card" style="margin-bottom: 16px">
+              <h3 style="margin-bottom: 8px">AI Settings</h3>
+              <div class="strategy-field" style="margin-bottom: 8px">
+                <label>AI API Key</label>
+                <input type="password" id="configAiKey" placeholder="sk-..." />
+              </div>
+              <div class="strategy-field" style="margin-bottom: 8px">
+                <label>AI Model</label>
+                <input
+                  type="text"
+                  id="configAiModel"
+                  placeholder="deepseek-chat"
+                />
+              </div>
+            </div>
+            <button class="btn btn-primary" id="saveConfigBtn">
+              Save Config
+            </button>
+            <span
+              id="configSaved"
+              style="
+                display: none;
+                color: var(--accent);
+                margin-left: 12px;
+                font-size: 12px;
+              "
+              >Saved</span
+            >
           </div>
         </div>
       </div>

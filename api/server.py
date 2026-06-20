@@ -340,6 +340,47 @@ def list_reports():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
+# --- Config endpoints ---
+import json
+from pathlib import Path as _Path
+
+CONFIG_FILE = _Path(__file__).parent.parent / "config" / "app_config.json"
+
+def _load_app_config():
+    if CONFIG_FILE.exists():
+        with open(CONFIG_FILE) as f:
+            return json.load(f)
+    return {}
+
+def _save_app_config(data):
+    CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(CONFIG_FILE, 'w') as f:
+        json.dump(data, f, indent=2)
+
+@app.route('/api/config/settings', methods=['GET'])
+@require_auth
+def get_settings():
+    cfg = _load_app_config()
+    return jsonify({'settings': {
+        'scan_time': cfg.get('scan_time', '06:00'),
+        'account_value': cfg.get('account_value', 50000),
+        'risk_per_trade_pct': cfg.get('risk_per_trade_pct', 1.0),
+        'ai_api_key': cfg.get('ai_api_key', ''),
+        'ai_model': cfg.get('ai_model', 'deepseek-chat'),
+    }})
+
+@app.route('/api/config/settings', methods=['PUT'])
+@require_auth
+def update_settings():
+    data = request.get_json()
+    if not data:
+        return jsonify({'status': 'error', 'message': 'No data'}), 400
+    cfg = _load_app_config()
+    cfg.update({k: v for k, v in data.items() if v is not None})
+    _save_app_config(cfg)
+    return jsonify({'status': 'ok'})
+
+
 @app.route('/api/simulation/summary')
 @require_auth
 def sim_summary():
