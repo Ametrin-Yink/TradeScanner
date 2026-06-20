@@ -56,6 +56,16 @@ class Database:
             conn.close()
         self._add_performance_indexes()
         self._ensure_simulation_table()
+        self._cleanup_legacy_tables()
+
+    def _cleanup_legacy_tables(self):
+        """Drop legacy tables that are no longer used."""
+        conn = self.get_connection()
+        legacy = ['scan_results', 'tier3_cache', 'universe_sync']
+        for table in legacy:
+            conn.execute(f"DROP TABLE IF EXISTS {table}")
+        conn.commit()
+        logger.info("Cleaned up legacy tables: %s", legacy)
 
     def _add_performance_indexes(self):
         conn = sqlite3.connect(self.db_path)

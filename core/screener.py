@@ -43,8 +43,8 @@ __all__ = ['StrategyScreener', 'StrategyType', 'StrategyMatch']
 class StrategyScreener:
     """Screen stocks using 6 trading strategies via plugin architecture."""
 
-    # Dynamic allocation: total 30 candidates distributed by market regime
-    TOTAL_CANDIDATES_TARGET = 30
+    # Dynamic allocation: total 25 candidates distributed by market regime
+    TOTAL_CANDIDATES_TARGET = 25
 
     # Phase 0 pre-calculation thresholds (universal for all strategies)
     MIN_PRICE = 2.0
@@ -65,7 +65,7 @@ class StrategyScreener:
     }
 
     # Phase 0: Data requirements
-    MIN_HISTORY_DAYS = 200  # Maximum needed by any strategy (Momentum for EMA200)
+    MIN_HISTORY_DAYS = 50  # Relaxed for curated universe
     TARGET_HISTORY_DAYS = 280  # Target for RS calculation (52 weeks)
 
     def __init__(
@@ -90,7 +90,9 @@ class StrategyScreener:
         tier3_symbols = ['SPY', 'QQQ', 'IWM', '^VIX', 'VIXY', 'UVXY',
                          'XLK', 'XLF', 'XLE', 'XLI', 'XLP', 'XLY',
                          'XLB', 'XLU', 'XLV', 'XBI', 'SMH', 'IGV',
-                         'IYT', 'KRE', 'XRT']
+                         'IYT', 'KRE', 'XRT',
+                         'NASA', 'JEDI', 'IBOT', 'WQTM', 'EUV', 'DRAM',
+                         'URA', 'REMX', 'BITQ', 'FINX']
         for sym in tier3_symbols:
             try:
                 df = self.db.get_tier3_cache(sym)
@@ -160,22 +162,13 @@ class StrategyScreener:
             # First try cached Tier 1 data
             if symbol in cached_tier1:
                 cache_entry = cached_tier1[symbol]
+                # Quick data check — skip if no market_data available
+                if symbol not in market_data:
+                    continue
+                if len(market_data.get(symbol, [])) < 50:
+                    continue
                 try:
-                    # Get DataFrame from market_data or fetch temporarily
-                    df = market_data.get(symbol)
-                    if df is None:
-                        df = self._get_data(symbol)
-                    if df is None or len(df) < 50:
-                        continue
-
-                    # Strip today's incomplete intraday bar
-                    df = strip_intraday_data(df)
-
-                    # Calculate indicators (temporarily, don't store)
-                    ind = TechnicalIndicators(df, symbol=symbol)
-                    ind.calculate_all()
-
-                    # Store ONLY scalar values - NO DataFrames or Indicator objects
+                    # Use cached Tier 1 values directly — no recalculation needed
                     phase0_data[symbol] = {
                         # Scalar metrics only - memory efficient
                         'current_price': cache_entry.get('current_price', 0),
@@ -461,7 +454,7 @@ class StrategyScreener:
 
         try:
             spy_df = self._get_data('SPY')
-            if spy_df is None or len(spy_df) < 200:
+            if spy_df is None or len(spy_df) < 50:
                 self._market_regime = 'neutral'
                 return 'neutral'
 
@@ -493,14 +486,14 @@ class StrategyScreener:
         strategy_slots: Dict[str, int]
     ) -> List[StrategyMatch]:
         """
-        Allocate 30 candidates from global pool based on per-strategy slots.
+        Allocate N candidates from global pool based on per-strategy slots.
 
         Args:
             all_candidates: All candidates from all strategies (global pool)
             strategy_slots: Target slots per strategy (e.g., {'MomentumBreakout': 4, ...})
 
         Returns:
-            List of 30 selected StrategyMatch objects
+            List of N selected StrategyMatch objects
         """
         from collections import defaultdict
 
@@ -580,8 +573,8 @@ class StrategyScreener:
         If stock appears in multiple strategies, keep highest technical score.
         Apply soft sector cap of max 4 candidates per sector.
 
-        Fallback: if < 30 after normal allocation, round-robin fill from
-        remaining candidates of all strategies until 30.
+        Fallback: if < 25 after normal allocation, round-robin fill from
+        remaining candidates of all strategies until 25.
         """
         from collections import defaultdict
 
@@ -604,8 +597,8 @@ class StrategyScreener:
         total_selected = sum(len(v) for v in selected_by_letter.values())
         logger.info(f"Initial allocation: {total_selected} candidates from strategy slots")
 
-        # Step 2: round-robin fill if < 30
-        if total_selected < 30:
+        # Step 2: round-robin fill if < TARGET
+        if total_selected < self.TOTAL_CANDIDATES_TARGET:
             selected_symbols = set()
             for letter, cands in selected_by_letter.items():
                 for c in cands:
@@ -620,10 +613,10 @@ class StrategyScreener:
 
             # Round-robin across strategies, one from each per pass
             added = 0
-            while added < 30 - total_selected and remaining:
+            while added < self.TOTAL_CANDIDATES_TARGET - total_selected and remaining:
                 any_added = False
                 for letter in list(remaining.keys()):
-                    if added >= 30 - total_selected:
+                    if added >= self.TOTAL_CANDIDATES_TARGET - total_selected:
                         break
                     pool = remaining[letter]
                     candidate = pool.pop(0)
@@ -671,10 +664,10 @@ class StrategyScreener:
 
         final = list(best_by_symbol.values())
         final.sort(key=lambda x: x.technical_snapshot.get('score', 0), reverse=True)
-        final = final[:30]
+        final = final[:self.TOTAL_CANDIDATES_TARGET]
 
-        # Backfill if dedup reduced us below 30
-        if len(final) < 30:
+        # Backfill if dedup reduced us below TARGET
+        if len(final) < self.TOTAL_CANDIDATES_TARGET:
             selected_symbols = set(c.symbol for c in final)
             sector_counts_final = defaultdict(int)
             for c in final:
@@ -691,7 +684,7 @@ class StrategyScreener:
             remaining_pool.sort(key=lambda x: x.technical_snapshot.get('score', 0), reverse=True)
 
             for c in remaining_pool:
-                if len(final) >= 30:
+                if len(final) >= self.TOTAL_CANDIDATES_TARGET:
                     break
                 if c.symbol in selected_symbols:
                     continue
@@ -704,7 +697,7 @@ class StrategyScreener:
                     sector_counts_final[sector] += 1
 
         final.sort(key=lambda x: x.technical_snapshot.get('score', 0), reverse=True)
-        final = final[:30]
+        final = final[:self.TOTAL_CANDIDATES_TARGET]
 
         # Recompute sector counts for logging
         sector_final = defaultdict(int)
@@ -868,7 +861,7 @@ class StrategyScreener:
             batch_size: Number of symbols to process per batch (default 100)
 
         Returns:
-            List of StrategyMatch (max 30 total, distributed per table)
+            List of StrategyMatch (max TOTAL_CANDIDATES_TARGET total, distributed per table)
         """
         self.market_data = market_data or {}
 
@@ -904,7 +897,7 @@ class StrategyScreener:
             strategy._current_regime = regime
 
         # Phase 1: Screen with each active strategy
-        # Screen extra to ensure round-robin/backfill has enough candidates to reach 30
+        # Screen extra to ensure round-robin/backfill has enough candidates to reach TARGET
         EXTRA_SCREEN = 10
         all_candidates = []
         for stype, strategy in active_strategies.items():

@@ -20,7 +20,7 @@ from core.logging_config import setup_logging
 from core.services import ServiceRegistry
 from core.services.providers import register_defaults
 from core.engine import PipelineOrchestrator, PipelineContext, PhaseResult
-from core.sector_manager import SectorManager
+from core.tag_manager import TagManager
 from core.simulation_engine import SimulationEngine
 
 setup_logging()
@@ -107,7 +107,7 @@ class CompleteScanner:
 
         # Load active sectors from database
         try:
-            self.active_sectors = [s['name'] for s in SectorManager().get_sectors(self.db)]
+            self.active_sectors = [s['name'] for s in TagManager().get_tags(self.db)]
             logger.info(f"Loaded {len(self.active_sectors)} active sectors: {self.active_sectors}")
         except Exception as e:
             logger.warning(f"Could not load sectors: {e}")
