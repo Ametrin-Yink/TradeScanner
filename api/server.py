@@ -396,11 +396,19 @@ def get_ohlc(symbol):
     cache = db.get_tier1_cache(symbol.upper())
     supports, resistances = [], []
     if cache:
-        try:
-            supports = json.loads(cache.get('supports', '[]') or '[]')
-            resistances = json.loads(cache.get('resistances', '[]') or '[]')
-        except (json.JSONDecodeError, TypeError):
-            pass
+        for key, target in [('supports', supports), ('resistances', resistances)]:
+            val = cache.get(key)
+            if val is None or val == '':
+                continue
+            if isinstance(val, (list, tuple)):
+                target.extend(float(v) for v in val)
+            elif isinstance(val, str):
+                try:
+                    parsed = json.loads(val)
+                    if isinstance(parsed, list):
+                        target.extend(float(v) for v in parsed)
+                except (json.JSONDecodeError, TypeError):
+                    pass
     return jsonify({'symbol': symbol.upper(), 'data': data, 'supports': supports, 'resistances': resistances})
 
 

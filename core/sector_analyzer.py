@@ -112,6 +112,7 @@ class SectorAnalyzer:
         """
         market = self._analyze_market()
         sectors = self._analyze_all_sectors(market)
+        self._refresh_sr_levels()
         self._find_stock_highlights(sectors)
         focus = self._generate_focus_summary(market, sectors)
         return {
@@ -335,6 +336,25 @@ class SectorAnalyzer:
         if bullish_flags == 0 and daily_change is not None and daily_change < -0.5:
             return 'downtrend'
         return 'neutral'
+
+    # ------------------------------------------------------------------
+    # Step 2b: Refresh S/R levels for all stocks
+    # ------------------------------------------------------------------
+
+    def _refresh_sr_levels(self):
+        """Compute fresh support/resistance levels for all pipeline stocks."""
+        from core.swing_detector import compute_sr_for_symbol
+        symbols = self.tag_manager.get_pipeline_stocks(None, self.db)
+        logger.info(f"Computing S/R levels for {len(symbols)} stocks...")
+        updated = 0
+        for sym in symbols:
+            try:
+                s, r = compute_sr_for_symbol(self.db, sym)
+                if s or r:
+                    updated += 1
+            except Exception:
+                pass
+        logger.info(f"S/R levels updated for {updated}/{len(symbols)} stocks")
 
     # ------------------------------------------------------------------
     # Step 3: Stock Highlights

@@ -154,3 +154,45 @@ def compute_stop_target(
 
     method = f"{stop_method}+{target_method}"
     return round(stop, 2), round(target, 2), method
+
+
+def compute_sr_for_symbol(db, symbol: str) -> tuple:
+    """Compute support/resistance levels for a symbol from market_data.
+    Returns (supports: List[float], resistances: List[float]).
+    Updates tier1_cache with the results.
+    """
+    try:
+        import pandas as pd
+        conn = db.get_connection()
+        rows = conn.execute(
+            "SELECT date, open, high, low, close FROM market_data "
+            "WHERE symbol = ? ORDER BY date ASC",
+            (symbol,)
+        ).fetchall()
+        if len(rows) < 30:
+            return [], []
+        df = pd.DataFrame(rows, columns=['date', 'open', 'high', 'low', 'close'])
+        df.columns = ['date', 'Open', 'High', 'Low', 'Close']
+
+        swing_highs, swing_lows = detect_swings(df, order=5)
+        high_zones = cluster_levels(swing_highs, tolerance=0.005)
+        low_zones = cluster_levels(swing_lows, tolerance=0.005)
+
+        current_price = float(df['Close'].iloc[-1])
+        supports = sorted([z['level'] for z in low_zones if z['level'] < current_price], reverse=True)[:5]
+        resistances = sorted([z['level'] for z in high_zones if z['level'] > current_price])[:5]
+
+        # Cache in tier1_cache
+        import json
+        cache = db.get_tier1_cache(symbol)
+        if cache:
+            conn.execute(
+                "UPDATE tier1_cache SET supports = ?, resistances = ? WHERE symbol = ?",
+                (json.dumps(supports), json.dumps(resistances), symbol)
+            )
+            conn.commit()
+
+        return supports, resistances
+    except Exception as e:
+        logger.warning(f"S/R computation failed for {symbol}: {e}")
+        return [], []
