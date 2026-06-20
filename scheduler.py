@@ -2,9 +2,6 @@
 import argparse
 import logging
 import sys
-import gc
-import subprocess
-import json
 from datetime import datetime
 from typing import Optional, List, Dict
 
@@ -23,6 +20,8 @@ from core.logging_config import setup_logging
 from core.services import ServiceRegistry
 from core.services.providers import register_defaults
 from core.engine import PipelineOrchestrator, PipelineContext, PhaseResult
+from core.sector_manager import SectorManager
+from core.simulation_engine import SimulationEngine
 
 setup_logging()
 register_defaults()
@@ -106,6 +105,14 @@ class CompleteScanner:
             wechat_webhook=settings.get_secret('wechat.webhook_url')
         )
 
+        # Load active sectors from database
+        try:
+            self.active_sectors = [s['name'] for s in SectorManager().get_sectors(self.db)]
+            logger.info(f"Loaded {len(self.active_sectors)} active sectors: {self.active_sectors}")
+        except Exception as e:
+            logger.warning(f"Could not load sectors: {e}")
+            self.active_sectors = []
+
         # Phase timing tracking
         self._phase_times: Dict[str, int] = {}
         self._sentiment_result: Optional[Dict] = None
@@ -162,10 +169,9 @@ class CompleteScanner:
         logger.info("STARTING COMPLETE 6-PHASE WORKFLOW")
         logger.info("=" * 60)
 
-        check_memory()
-
         ctx = PipelineContext(
             symbols=symbols or [],
+            sectors=self.active_sectors,
             run_date=run_date,
         )
         self._last_ctx = ctx  # For debug inspector
@@ -177,23 +183,17 @@ class CompleteScanner:
         })
 
         try:
-            # For test mode (symbols provided), run phases directly
-            if symbols is not None:
-                result = self._run_pipeline(ctx)
-            else:
-                # Production mode: Phase 0 subprocess, then pipeline for phases 1-6
-                phase0_result = self._phase0_data_prep(symbols)
-                if not phase0_result['success']:
-                    logger.error("Phase 0 failed, aborting workflow")
-                    self._update_workflow_status(run_date, status='failed', error_message='Phase 0 failed')
-                    return None
+            # Phase 0: Data preparation (always in-process)
+            phase0_result = self._phase0_data_prep(symbols)
+            if not phase0_result['success']:
+                logger.error("Phase 0 failed, aborting workflow")
+                self._update_workflow_status(run_date, status='failed', error_message='Phase 0 failed')
+                return None
 
-                ctx.symbols = phase0_result['symbols']
-                self._last_ctx = ctx
-                gc.collect()
-                logger.info("Memory cleaned after Phase 0")
+            ctx.symbols = phase0_result['symbols']
+            self._last_ctx = ctx
 
-                result = self._run_pipeline(ctx)
+            result = self._run_pipeline(ctx)
 
             # Copy pipeline phase times to scanner tracking
             for k, v in ctx.phase_times.items():
@@ -207,6 +207,35 @@ class CompleteScanner:
                     report_path=ctx.report_path,
                     candidates_count=len(ctx.top_10),
                 )
+
+                # Run simulation engine: auto-select top picks and check open positions
+                try:
+                    from types import SimpleNamespace
+                    engine = SimulationEngine(self.db)
+                    all_highlights = []
+                    for o in ctx.top_10:
+                        rr = 0.0
+                        denom = o.entry_price - o.stop_loss
+                        if denom > 0:
+                            rr = (o.take_profit - o.entry_price) / denom
+                        h = SimpleNamespace(
+                            symbol=o.symbol,
+                            primary_tag=o.strategy,
+                            reason=getattr(o, 'ai_reasoning', o.strategy),
+                            entry=o.entry_price,
+                            stop=o.stop_loss,
+                            target=o.take_profit,
+                            rr=rr,
+                            time_horizon=getattr(o, 'time_frame', 'swing'),
+                            position_size=0,
+                            risk_dollars=0,
+                        )
+                        all_highlights.append(h)
+                    engine.auto_select(all_highlights, run_date)
+                    engine.daily_check()
+                except Exception as e:
+                    logger.warning(f"Simulation engine step failed: {e}", exc_info=True)
+
                 logger.info("=" * 60)
                 logger.info(f"WORKFLOW COMPLETE in {total_duration:.0f}s")
                 logger.info("=" * 60)
@@ -248,8 +277,7 @@ class CompleteScanner:
     def _phase0_data_prep(self, symbols: Optional[List[str]]) -> Dict:
         """Phase 0: Data Preparation.
 
-        For full workflow (symbols=None): runs as separate process for memory isolation.
-        For test mode (symbols provided): runs in-process for simplicity.
+        Runs in-process (no subprocess) for both test and production modes.
 
         Args:
             symbols: Optional pre-defined symbols list
@@ -263,15 +291,15 @@ class CompleteScanner:
 
         phase_start = datetime.now()
 
-        # If symbols provided (test mode), run in-process
+        # If symbols provided (test mode), use existing cached data
         if symbols is not None:
-            logger.info(f"Using provided symbols: {len(symbols)} (test mode, in-process)")
-            # Still fetch Tier 3 data
+            logger.info(f"Using provided symbols: {len(symbols)} (cached mode)")
             tier3_data = self.prep._fetch_tier3_data()
             logger.info(f"Tier 3 data fetched: {len(tier3_data)} symbols")
-            # Calculate Tier 1 for provided symbols
-            tier1_count = self.prep._calculate_tier1_cache(symbols)
-            logger.info(f"Tier 1 cache calculated: {tier1_count} symbols")
+
+            # Use existing Tier 1 cache — don't recalculate
+            tier1_count = len(self.db.get_all_tier1_cache())
+            logger.info(f"Tier 1 cache: {tier1_count} entries (from DB)")
 
             duration = (datetime.now() - phase_start).total_seconds()
             self._phase_times['phase0'] = int(duration)
@@ -279,119 +307,43 @@ class CompleteScanner:
             return {
                 'success': True,
                 'symbols': symbols,
+                'symbols_count': len(symbols),
+                'tier1_count': tier1_count,
                 'duration': int(duration)
             }
 
-        # FIX 7: Full Phase 0 runs as separate process for memory isolation
-        # This is critical for 2GB RAM servers - process boundary ensures
-        # all Phase 0 memory is reclaimed before Phase 1-6 begin
-        logger.info("Running Phase 0 as separate process (memory isolation)")
+        # Full production run: call run_phase0() in-process
+        logger.info("Running Phase 0 in-process")
 
         try:
-            # Run Phase 0 runner as subprocess with real-time output streaming
-            proc = subprocess.Popen(
-                [sys.executable, 'scripts/run_phase0.py'],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1
-            )
-
-            # Stream output to main log in real-time using iter with timeout
-            output_lines = []
-            logger.info("[Phase0] Subprocess started, streaming output...")
-
-            import threading
-            timeout_event = threading.Event()
-
-            def read_output():
-                for line in iter(proc.stdout.readline, ''):
-                    if timeout_event.is_set():
-                        break
-                    logger.info(f"[Phase0] {line.strip()}")
-                    output_lines.append(line)
-
-            # Start reading in a thread
-            reader_thread = threading.Thread(target=read_output)
-            reader_thread.daemon = True
-            reader_thread.start()
-
-            # Wait for process with timeout (60 minutes)
-            proc.wait(timeout=3600)
-
-            # Wait for reader thread to finish
-            reader_thread.join(timeout=5)
-
-            # Signal timeout if still running
-            timeout_event.set()
-
-            # Build output string for result parsing
-            output = ''.join(output_lines)
-            result = type('CompletedProcess', (), {'returncode': proc.returncode, 'stdout': output, 'stderr': ''})()
-
-            # Parse JSON result from stdout
-            output = result.stdout
-            json_start = output.find('=== PHASE0_RESULT_START ===')
-            json_end = output.find('=== PHASE0_RESULT_END ===')
-
-            if json_start != -1 and json_end != -1:
-                json_str = output[json_start + 28:json_end].strip()
-                phase0_result = json.loads(json_str)
-            else:
-                # Fallback: try to parse any JSON in output
-                logger.warning("Could not find result markers, parsing output directly")
-                for line in output.split('\n'):
-                    if line.strip().startswith('{'):
-                        phase0_result = json.loads(line)
-                        break
+            result = self.prep.run_phase0()
 
             duration = (datetime.now() - phase_start).total_seconds()
             self._phase_times['phase0'] = int(duration)
 
-            if result.returncode == 0 and phase0_result.get('success'):
-                logger.info(f"Phase 0 subprocess completed successfully in {duration:.1f}s")
-                logger.info(f"  Symbols for screening: {phase0_result['symbols_count']}")
-                logger.info(f"  Tier 1 cache entries: {phase0_result['tier1_count']}")
-
-                # Load symbols list from result for Phase 2
-                # Note: We need the actual symbol list, not just count
-                # The subprocess should have saved this info or we query from DB
-                symbols_list = phase0_result.get('symbols', [])
-
-                # If symbols not in result, query from DB using existing method
-                if not symbols_list:
-                    logger.info("Loading symbols from database (market cap >= $2B)...")
-                    symbols_list = self.db.get_active_stocks_min_market_cap(min_market_cap=2e9)
-                    logger.info(f"Loaded {len(symbols_list)} symbols from DB")
+            if result.get('success'):
+                logger.info(f"Phase 0 completed successfully in {duration:.1f}s")
+                logger.info(f"  Symbols for screening: {len(result['symbols'])}")
+                logger.info(f"  Tier 1 cache entries: {result.get('tier1_cache_count', 0)}")
 
                 return {
                     'success': True,
-                    'symbols': symbols_list,
-                    'symbols_count': phase0_result['symbols_count'],
-                    'tier1_count': phase0_result['tier1_count'],
+                    'symbols': result['symbols'],
+                    'symbols_count': len(result['symbols']),
+                    'tier1_count': result.get('tier1_cache_count', 0),
                     'duration': int(duration)
                 }
             else:
-                error_msg = phase0_result.get('error', 'Unknown error') or f"Subprocess exit code: {result.returncode}"
-                logger.error(f"Phase 0 subprocess failed: {error_msg}")
-                if result.stderr:
-                    logger.error(f"Phase 0 stderr: {result.stderr[-500:]}")  # Last 500 chars
+                error_msg = result.get('errors', ['Unknown error'])[0] if result.get('errors') else 'Unknown error'
+                logger.error(f"Phase 0 failed: {error_msg}")
                 return {
                     'success': False,
                     'symbols': [],
                     'error': error_msg
                 }
 
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            logger.error("Phase 0 subprocess timed out after 60 minutes")
-            return {
-                'success': False,
-                'symbols': [],
-                'error': 'Phase 0 timeout after 60 minutes'
-            }
         except Exception as e:
-            logger.exception(f"Phase 0 subprocess failed: {e}")
+            logger.exception(f"Phase 0 failed: {e}")
             return {
                 'success': False,
                 'symbols': [],

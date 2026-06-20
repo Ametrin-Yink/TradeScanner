@@ -17,6 +17,7 @@ from core.market_analyzer import MarketAnalyzer
 from core.selector import CandidateSelector
 from core.analyzer import OpportunityAnalyzer
 from core.reporter import ReportGenerator
+from core.simulation_engine import SimulationEngine
 from api.config_api import config_api
 
 logging.basicConfig(level=logging.INFO)
@@ -410,6 +411,37 @@ def list_reports():
     except Exception as e:
         logger.error(f"List reports failed: {e}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app.route('/api/simulation/summary')
+@require_auth
+def sim_summary():
+    engine = SimulationEngine(db)
+    return jsonify(engine.get_summary())
+
+
+@app.route('/api/simulation/active')
+@require_auth
+def sim_active():
+    engine = SimulationEngine(db)
+    return jsonify({'positions': engine.get_active_positions()})
+
+
+@app.route('/api/simulation/closed')
+@require_auth
+def sim_closed():
+    outcome = request.args.get('outcome', 'all')
+    engine = SimulationEngine(db)
+    return jsonify({'positions': engine.get_closed_positions(outcome)})
+
+
+@app.route('/api/simulation/check', methods=['POST'])
+@require_auth
+def sim_check():
+    """Trigger a daily check of open positions."""
+    engine = SimulationEngine(db)
+    engine.daily_check()
+    return jsonify({'status': 'ok'})
 
 
 def run_server(host='0.0.0.0', port=None):
