@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TradeScanner — Dashboard</title>
+    <link rel="stylesheet" href="/static/css/dashboard.css" />
+  </head>
+  <body>
+    <div class="app">
+      <nav class="navbar">
+        <div class="navbar-brand">
+          <span class="navbar-dot"></span>TradeScanner
+        </div>
+        <div class="navbar-tabs">
+          <button class="navbar-tab active" data-tab="tags">Tags</button>
+          <button class="navbar-tab" data-tab="strategies">Strategies</button>
+          <button class="navbar-tab" data-tab="reports">Reports</button>
+          <button class="navbar-tab" data-tab="scan">Scan</button>
+          <button class="navbar-tab" data-tab="simulation">Simulation</button>
+        </div>
+        <div class="navbar-scope" id="scopeIndicator">
+          <span id="scopeText">-- tags · -- stocks</span>
+        </div>
+      </nav>
+
+      <div class="tab-content">
+        <div class="tab-pane active" id="pane-tags">
+          <div class="tab-pane-inner">
+            <div class="sectors-layout">
+              <div class="sectors-sidebar">
+                <div class="sectors-sidebar-header">
+                  <h3>Tags</h3>
+                  <span class="count" id="tagTotalCount"></span>
+                </div>
+                <div class="sectors-list" id="tagsList"></div>
+                <div class="sectors-sidebar-actions" id="tagActions">
+                  <div
+                    class="tag-add-form"
+                    id="tagAddForm"
+                    style="display: none"
+                  >
+                    <input
+                      type="text"
+                      id="newTagName"
+                      placeholder="Tag name"
+                      style="width: 100%; margin-bottom: 4px"
+                    />
+                    <input
+                      type="text"
+                      id="newTagEtf"
+                      placeholder="ETF symbol (optional)"
+                      style="width: 100%; margin-bottom: 4px"
+                    />
+                    <div style="display: flex; gap: 4px">
+                      <button class="btn btn-primary btn-sm" id="saveTagBtn">
+                        Save
+                      </button>
+                      <button class="btn btn-sm" id="cancelTagBtn">
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                  <div
+                    id="tagActionButtons"
+                    style="display: flex; gap: 6px; width: 100%"
+                  >
+                    <button class="btn btn-primary btn-sm" id="addTagBtn">
+                      + Add Tag
+                    </button>
+                    <button class="btn btn-sm" id="seedCsvBtn">
+                      Seed from CSV
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div class="sectors-panel" id="tagPanel">
+                <div class="empty-state" id="tagEmptyState">
+                  <div class="empty-state-icon">&#9783;</div>
+                  <div class="empty-state-text">
+                    Select a tag to manage its stocks
+                  </div>
+                </div>
+                <div
+                  id="tagDetail"
+                  style="
+                    display: none;
+                    flex-direction: column;
+                    gap: 16px;
+                    height: 100%;
+                  "
+                >
+                  <div class="sectors-panel-header">
+                    <h2 id="detailTagName"></h2>
+                    <span class="badge" id="detailStockCount"></span>
+                    <span
+                      class="etf-tag"
+                      id="detailEtfTag"
+                      style="display: none"
+                    ></span>
+                    <button
+                      class="btn btn-danger btn-sm delete-sector-btn"
+                      id="deleteTagBtn"
+                    >
+                      Delete Tag
+                    </button>
+                  </div>
+                  <div class="stock-add-bar">
+                    <div class="search-dropdown">
+                      <input
+                        type="text"
+                        id="stockSearchInput"
+                        placeholder="Search stocks by symbol or name..."
+                        autocomplete="off"
+                      />
+                      <div
+                        class="search-results"
+                        id="searchResults"
+                        style="display: none"
+                      ></div>
+                    </div>
+                    <button class="btn btn-primary btn-sm" id="addStockBtn">
+                      Add
+                    </button>
+                  </div>
+                  <div class="stock-table-wrap">
+                    <table class="stock-table">
+                      <thead>
+                        <tr>
+                          <th>Symbol</th>
+                          <th>Name</th>
+                          <th>Market Cap</th>
+                          <th class="actions">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody id="stocksTableBody"></tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="tab-pane" id="pane-strategies">
+          <div class="tab-pane-inner">
+            <div class="strategies-header"><h2>Strategy Configuration</h2></div>
+            <div id="strategiesLoading" class="empty-state">
+              <div class="loading-pulse empty-state-text">
+                Loading strategies...
+              </div>
+            </div>
+            <div
+              class="strategy-accordion"
+              id="strategyAccordion"
+              style="display: none"
+            ></div>
+            <div class="save-bar" id="saveBar">
+              <button class="btn btn-primary" id="saveStrategiesBtn">
+                Save Changes
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="tab-pane" id="pane-reports">
+          <div class="tab-pane-inner">
+            <div class="reports-header">
+              <h2>Reports</h2>
+              <input
+                type="search"
+                id="reportsSearch"
+                placeholder="Filter reports..."
+                autocomplete="off"
+              />
+            </div>
+            <div class="reports-table-wrap">
+              <table class="reports-table">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Report</th>
+                    <th>Size</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="reportsTableBody"></tbody>
+              </table>
+            </div>
+            <div id="reportsEmpty" class="empty-state" style="display: none">
+              <div class="empty-state-text">
+                No reports yet. Run a scan to generate your first report.
+              </div>
+            </div>
+            <div
+              id="reportPreview"
+              style="
+                display: none;
+                margin-top: 16px;
+                border: 1px solid var(--border);
+                border-radius: var(--radius);
+                overflow: hidden;
+              "
+            >
+              <iframe
+                id="reportFrame"
+                style="
+                  width: 100%;
+                  height: 600px;
+                  border: none;
+                  background: var(--ink);
+                "
+              ></iframe>
+            </div>
+          </div>
+        </div>
+
+        <div class="tab-pane" id="pane-scan">
+          <div class="tab-pane-inner" style="max-width: 800px; margin: 0 auto">
+            <div
+              style="
+                display: flex;
+                gap: 16px;
+                margin-bottom: 24px;
+                flex-wrap: wrap;
+              "
+              id="scanStats"
+            >
+              <div class="scan-stat-card">
+                <div class="scan-stat-label">LAST RUN</div>
+                <div class="scan-stat-value" id="statLastRun">--</div>
+              </div>
+              <div class="scan-stat-card">
+                <div class="scan-stat-label">STATUS</div>
+                <div class="scan-stat-value" id="statStatus">--</div>
+              </div>
+              <div class="scan-stat-card">
+                <div class="scan-stat-label">STOCKS</div>
+                <div class="scan-stat-value" id="statStocks">--</div>
+              </div>
+              <div class="scan-stat-card">
+                <div class="scan-stat-label">CANDIDATES</div>
+                <div class="scan-stat-value" id="statCands">--</div>
+              </div>
+            </div>
+            <button class="btn btn-primary" id="runScanBtn">
+              Run Full Scan
+            </button>
+            <div
+              id="scanProgress"
+              style="
+                display: none;
+                margin-top: 12px;
+                color: var(--text-secondary);
+              "
+            ></div>
+            <div
+              id="scanResult"
+              style="
+                display: none;
+                margin-top: 16px;
+                padding: 16px;
+                background: var(--bg-surface);
+                border-radius: var(--radius);
+                border: 1px solid var(--border);
+              "
+            ></div>
+          </div>
+        </div>
+
+        <div class="tab-pane" id="pane-simulation">
+          <div class="tab-pane-inner">
+            <div
+              id="simSummary"
+              style="
+                display: flex;
+                gap: 16px;
+                margin-bottom: 24px;
+                flex-wrap: wrap;
+              "
+            ></div>
+            <h2 style="margin-bottom: 12px">Active Positions</h2>
+            <div class="stock-table-wrap" style="margin-bottom: 24px">
+              <table class="stock-table">
+                <thead>
+                  <tr>
+                    <th>Symbol</th>
+                    <th>Entry</th>
+                    <th>Current</th>
+                    <th>P&amp;L</th>
+                    <th>Days</th>
+                    <th>Progress</th>
+                  </tr>
+                </thead>
+                <tbody id="simActiveBody"></tbody>
+              </table>
+            </div>
+            <h2 style="margin-bottom: 12px">Closed Positions</h2>
+            <div style="margin-bottom: 12px">
+              <select
+                id="simFilter"
+                style="
+                  background: var(--bg-surface);
+                  border: 1px solid var(--border);
+                  color: var(--text-primary);
+                  padding: 4px 8px;
+                  border-radius: var(--radius-sm);
+                "
+              >
+                <option value="all">All</option>
+                <option value="win">Wins</option>
+                <option value="loss">Losses</option>
+                <option value="expired">Expired</option>
+              </select>
+            </div>
+            <div class="stock-table-wrap">
+              <table class="stock-table">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Symbol</th>
+                    <th>Entry</th>
+                    <th>Exit</th>
+                    <th>Outcome</th>
+                    <th>P&amp;L</th>
+                    <th>R</th>
+                  </tr>
+                </thead>
+                <tbody id="simClosedBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script type="module" src="/static/js/app.js"></script>
+  </body>
+</html>
