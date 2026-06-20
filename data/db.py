@@ -116,19 +116,7 @@ class Database:
             )
         """)
 
-        # Create sector_assignments table if not exists
-        cursor = conn.execute("PRAGMA table_info(sector_assignments)")
-        if not cursor.fetchall():
-            logger.info("Creating sector_assignments table")
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS sector_assignments (
-                    symbol TEXT NOT NULL,
-                    sector TEXT NOT NULL,
-                    added_date TEXT,
-                    PRIMARY KEY (symbol, sector),
-                    FOREIGN KEY (symbol) REFERENCES stocks(symbol)
-                )
-            """)
+        # sector_assignments is created via SCHEMA in _init_db
 
     def _migrate_tier1_cache(self, conn: sqlite3.Connection):
         """Add v5.0/v7.0/v7.1 columns to tier1_cache table."""
@@ -1114,46 +1102,6 @@ class Database:
                 [(days, sym) for sym, days in rs_consecutive_days.items()]
             )
 
-    # ========== Sector Assignment Methods ==========
-
-    def add_sector_assignment(self, symbol: str, sector: str) -> None:
-        """Insert or replace a sector assignment for a symbol."""
-        with self.get_connection() as conn:
-            conn.execute(
-                "INSERT OR REPLACE INTO sector_assignments (symbol, sector, added_date) VALUES (?, ?, ?)",
-                (symbol, sector, datetime.now().date().isoformat())
-            )
-
-    def remove_sector_assignment(self, symbol: str, sector: str) -> None:
-        """Remove a sector assignment for a symbol."""
-        with self.get_connection() as conn:
-            conn.execute(
-                "DELETE FROM sector_assignments WHERE symbol = ? AND sector = ?",
-                (symbol, sector)
-            )
-
-    def get_sector_assignments(self, sectors: List[str] = None) -> List[Dict]:
-        """Get all sector assignments, optionally filtered by sector list.
-
-        Args:
-            sectors: Optional list of sector names to filter by
-
-        Returns:
-            List of {symbol, sector, added_date} dicts
-        """
-        with self.get_connection() as conn:
-            conn.row_factory = sqlite3.Row
-            if sectors:
-                placeholders = ",".join(["?" for _ in sectors])
-                cursor = conn.execute(
-                    f"SELECT symbol, sector, added_date FROM sector_assignments WHERE sector IN ({placeholders})",
-                    sectors
-                )
-            else:
-                cursor = conn.execute(
-                    "SELECT symbol, sector, added_date FROM sector_assignments"
-                )
-            return [dict(row) for row in cursor.fetchall()]
 
     def _migrate_to_tags(self):
         """One-time: migrate sector_assignments to tags + stock_tags."""
@@ -1207,96 +1155,11 @@ class Database:
                 (symbol, tag_id_map[sector], added_date)
             )
 
-        # NOTE: sector_assignments NOT dropped yet -- SectorManager (task 1.3)
-        # still references it. Drop after consumers are updated to use tags/stock_tags.
+        conn.execute("DROP TABLE IF EXISTS sector_assignments")
         conn.commit()
         logger.info("Migration to tag model complete: %d tags, %d assignments",
                     len(tag_id_map), len(rows))
 
-    def get_stocks_by_sectors(self, sectors: List[str]) -> List[str]:
-        """Return distinct symbols in any of the given sectors.
-
-        If sectors is empty/None, returns ALL symbols with any sector assignment.
-        """
-        with self.get_connection() as conn:
-            if sectors:
-                placeholders = ",".join(["?" for _ in sectors])
-                cursor = conn.execute(
-                    f"SELECT DISTINCT symbol FROM sector_assignments WHERE sector IN ({placeholders})",
-                    sectors
-                )
-            else:
-                cursor = conn.execute(
-                    "SELECT DISTINCT symbol FROM sector_assignments"
-                )
-            return [row[0] for row in cursor.fetchall()]
-
-    def get_sectors_with_counts(self) -> List[Dict]:
-        """Return sectors with stock counts for sectors that have at least one stock."""
-        with self.get_connection() as conn:
-            conn.row_factory = sqlite3.Row
-            cursor = conn.execute(
-                """SELECT sector AS name, COUNT(DISTINCT symbol) AS stock_count
-                   FROM sector_assignments
-                   GROUP BY sector
-                   HAVING stock_count > 0
-                   ORDER BY stock_count DESC"""
-            )
-            return [dict(row) for row in cursor.fetchall()]
-
-    def get_stock_sectors(self, symbol: str) -> List[str]:
-        """Return list of sector names for a given symbol."""
-        with self.get_connection() as conn:
-            cursor = conn.execute(
-                "SELECT sector FROM sector_assignments WHERE symbol = ?",
-                (symbol,)
-            )
-            return [row[0] for row in cursor.fetchall()]
-
-    def seed_sector_assignments_from_csv(self) -> Dict:
-        """Read nasdaq_stocklist_screener.csv and populate sector_assignments.
-
-        Maps CSV sector names to canonical names:
-            Finance -> Financials
-            Basic Materials -> Materials
-
-        Returns:
-            Dict with 'added' count and 'sectors' count
-        """
-        import csv
-
-        csv_path = Path(__file__).parent.parent / "nasdaq_stocklist_screener.csv"
-        if not csv_path.exists():
-            logger.warning(f"CSV file not found: {csv_path}")
-            return {"added": 0, "sectors": 0}
-
-        sector_map = {
-            "Finance": "Financials",
-            "Basic Materials": "Materials",
-        }
-
-        added = 0
-        sectors_seen = set()
-        today = datetime.now().date().isoformat()
-
-        with self.get_connection() as conn:
-            with open(csv_path, newline="") as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    symbol = row.get("Symbol", "").strip()
-                    sector_raw = row.get("Sector", "").strip()
-                    if not symbol or not sector_raw:
-                        continue
-                    sector = sector_map.get(sector_raw, sector_raw)
-                    sectors_seen.add(sector)
-                    conn.execute(
-                        "INSERT OR REPLACE INTO sector_assignments (symbol, sector, added_date) VALUES (?, ?, ?)",
-                        (symbol, sector, today)
-                    )
-                    added += 1
-
-        logger.info(f"Seeded {added} sector assignments across {len(sectors_seen)} sectors")
-        return {"added": added, "sectors": len(sectors_seen)}
 
 
 SCHEMA = """
