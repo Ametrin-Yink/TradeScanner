@@ -449,9 +449,15 @@ class SectorAnalyzer:
                     continue
 
                 # Compute technical stop and target
+                ohlc_df = self.db.get_market_data_df(symbol)
+                if ohlc_df is not None and len(ohlc_df) > 0:
+                    ohlc_df = ohlc_df.rename(columns={
+                        'open': 'Open', 'high': 'High', 'low': 'Low',
+                        'close': 'Close', 'volume': 'Volume'
+                    })
                 stop, target, method = compute_stop_target(
                     price, atr, support_zones, resistance_zones,
-                    df=None,
+                    df=ohlc_df,
                     time_horizon=time_horizon,
                 )
 
@@ -465,8 +471,9 @@ class SectorAnalyzer:
                     entry=price, stop=stop, target=target, rr=rr,
                 )
 
-                # Store RS percentile for report badge
+                # Store RS percentile and volume for sorting and report badge
                 highlight.rs_percentile = rs_percentile
+                highlight.volume_ratio = volume_ratio
 
                 # Per-trade position sizing
                 pconfig = _load_portfolio_config()
@@ -497,7 +504,10 @@ class SectorAnalyzer:
                 used_symbols.add(symbol)
 
             # Sort by R/R descending, select up to 3 with diverse reasons
-            all_candidates.sort(key=lambda c: c.rr, reverse=True)
+            all_candidates.sort(
+                key=lambda c: (c.rr, c.rs_percentile, c.volume_ratio),
+                reverse=True,
+            )
             selected = []
             used_reasons = set()
             # Pass 1: diverse reasons
