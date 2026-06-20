@@ -123,7 +123,7 @@ def compute_stop_target(
                     target_method = 'fib_extension'
 
     # Tier 2: Measured move from consolidation range
-    if target is None and len(df) >= 20:
+    if target is None and df is not None and len(df) >= 20:
         recent = df.tail(20)
         range_high = recent['High'].max()
         range_low = recent['Low'].min()
@@ -136,7 +136,7 @@ def compute_stop_target(
                 target_method = 'measured_move'
 
     # Tier 3: Pivot point R1 (weekly projection from last 5 bars)
-    if target is None and len(df) >= 5:
+    if target is None and df is not None and len(df) >= 5:
         last_5 = df.tail(5)
         h, l, c = last_5['High'].max(), last_5['Low'].min(), last_5['Close'].iloc[-1]
         pp = (h + l + c) / 3.0

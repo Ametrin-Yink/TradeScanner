@@ -5,6 +5,8 @@ Analyzes sectors daily and produces a sector-first report with AI-powered insigh
 """
 import json
 import logging
+import yaml
+from pathlib import Path
 from dataclasses import dataclass, field
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -12,6 +14,7 @@ from typing import List, Optional, Dict
 
 from core.ai_client import chat
 from core.constants import SECTOR_ETFS
+from core.swing_detector import compute_stop_target, cluster_levels
 from core.tag_manager import TagManager
 from data.db import Database
 
@@ -31,6 +34,10 @@ class StockHighlight:
     stop: float = 0.0
     target: float = 0.0
     rr: float = 0.0
+    position_size: int = 0
+    position_cost: float = 0.0
+    risk_dollars: float = 0.0
+    time_horizon: str = ''
 
 
 @dataclass
@@ -73,6 +80,20 @@ class FocusSummary:
     focus_sectors: List[str]
     avoid_sectors: List[str]
     reasoning: str
+
+
+_portfolio_config = None
+def _load_portfolio_config():
+    """Load portfolio config from YAML, with fallback defaults."""
+    global _portfolio_config
+    if _portfolio_config is None:
+        config_path = Path(__file__).parent.parent / "config" / "portfolio_config.yaml"
+        if config_path.exists():
+            with open(config_path) as f:
+                _portfolio_config = yaml.safe_load(f)
+        else:
+            _portfolio_config = {'account_value': 50000, 'risk_per_trade_pct': 0.01, 'max_position_pct': 0.20}
+    return _portfolio_config
 
 
 class SectorAnalyzer:
@@ -159,7 +180,7 @@ class SectorAnalyzer:
                 messages=[{"role": "user", "content": "Summarize the key macro drivers and risks for the US stock market today."}],
                 system=system_prompt,
                 enable_search=True,
-                search_query="US stock market today macro news June 2026",
+                search_query=f"US stock market today macro news {datetime.now().strftime('%B %Y')}",
                 temperature=0.3,
             )
             if result:
@@ -245,23 +266,30 @@ class SectorAnalyzer:
         """Call AI with web search for sector outlook. Returns (outlook, drivers, risks)."""
         system_prompt = (
             f"You are a sector analyst. Analyze search results about the {sector_name} sector. "
-            "Return a JSON object with: 'outlook' (2-3 sentence outlook), "
-            "'drivers' (list of 2 key drivers, each 1 sentence), "
-            "'risks' (list of 1-2 risks, each 1 sentence). No other text."
+            "Return a JSON object with: "
+            "'outlook' (2-3 sentence outlook), "
+            "'drivers' (list of objects with 'text' and optional 'catalyst_date', each 1 sentence, "
+            "  prefer specific events with dates over generic trends), "
+            "'risks' (list of objects with 'text' and optional 'catalyst_date', each 1 sentence). "
+            "If no specific catalysts exist, use the best available information. "
+            "No other text."
         )
         try:
             result = chat(
                 messages=[{"role": "user", "content": f"What is the outlook for the {sector_name} sector today?"}],
                 system=system_prompt,
                 enable_search=True,
-                search_query=f"{sector_name} sector stocks news June 2026",
+                search_query=f"{sector_name} sector stocks news {datetime.now().strftime('%B %Y')}",
                 temperature=0.3,
             )
             if result:
                 parsed = json.loads(result)
                 outlook = parsed.get('outlook', '')
-                drivers = parsed.get('drivers', [])
-                risks = parsed.get('risks', [])
+                drivers_raw = parsed.get('drivers', [])
+                risks_raw = parsed.get('risks', [])
+                # Handle both string lists and object lists (with 'text' key)
+                drivers = [d['text'] if isinstance(d, dict) else d for d in drivers_raw]
+                risks = [r['text'] if isinstance(r, dict) else r for r in risks_raw]
                 if outlook:
                     return outlook, drivers, risks
         except json.JSONDecodeError:
@@ -314,10 +342,15 @@ class SectorAnalyzer:
 
     def _find_stock_highlights(self, sector_analyses: List[SectorAnalysis]) -> None:
         """Apply technical rules to find stock highlights for each sector. Modifies in-place."""
+        def _ord(n):
+            if 10 <= n % 100 <= 20: return f"{n}th"
+            suffix = {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')
+            return f"{n}{suffix}"
+
         for sector in sector_analyses:
             stocks = self.tag_manager.get_tag_stocks(sector.name, self.db)
             all_candidates = []
-            used_symbols = set()  # prevent same stock appearing multiple times
+            used_symbols = set()
 
             for stock in stocks:
                 symbol = stock['symbol']
@@ -328,105 +361,123 @@ class SectorAnalyzer:
                     continue
 
                 price = cache['current_price']
-                market_cap = stock.get('market_cap', 0) or 0
-                name = stock.get('name', symbol) or symbol
-                high_60d = cache.get('high_60d')
-                low_60d = cache.get('low_60d')
-                volume_ratio = cache.get('volume_ratio', 1.0)
+                atr_pct = cache.get('atr_pct', 0.03) or 0.03
+                atr = price * atr_pct
                 rs_percentile = cache.get('rs_percentile', 0) or 0
                 ema21 = cache.get('ema21')
                 ema50 = cache.get('ema50')
-                atr_pct = (cache.get('atr_pct') or 0.03)  # decimal e.g. 0.03 = 3%
+                market_cap = stock.get('market_cap', 0) or 0
+                name = stock.get('name', symbol) or symbol
 
-                def _ord(n):
-                    if 10 <= n % 100 <= 20: return f"{n}th"
-                    suffix = {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')
-                    return f"{n}{suffix}"
+                # Parse supports/resistances from cache
+                try:
+                    support_levels = json.loads(cache.get('supports', '[]') or '[]')
+                    resistance_levels = json.loads(cache.get('resistances', '[]') or '[]')
+                except (json.JSONDecodeError, TypeError):
+                    support_levels = []
+                    resistance_levels = []
 
-                stock_candidates = []
+                # Cluster raw levels into zones
+                support_zones = cluster_levels(support_levels, tolerance=0.005)
+                resistance_zones = cluster_levels(resistance_levels, tolerance=0.005)
 
-                # Near Resistance: price within 2% of 60d high — breakout watch
-                if high_60d and price > 0 and price < high_60d:
-                    dist_from_high = (high_60d - price) / price * 100
-                    if 0 < dist_from_high <= 2.0:
-                        stop_level = low_60d or (price * 0.95)
-                        target_level = high_60d * 1.05
-                        stock_candidates.append(StockHighlight(
-                            symbol=symbol, name=name, price=price, market_cap=market_cap,
-                            reason="Near Resistance",
-                            detail=f"{dist_from_high:.1f}% below 60d high ${high_60d:.2f}",
-                            entry=price, stop=stop_level, target=target_level,
-                            rr=round((target_level - price) / max(price - stop_level, 0.01), 1),
-                        ))
+                # Determine setup type
+                high_60d = cache.get('high_60d')
+                low_60d = cache.get('low_60d')
+                volume_ratio = cache.get('volume_ratio', 1.0) or 1.0
 
-                # Near Support: price within 2% of 60d low — bounce setup
-                if low_60d and price > 0 and price > low_60d:
-                    dist_from_low = (price - low_60d) / low_60d * 100
-                    if 0 < dist_from_low <= 2.0:
-                        stop_level = low_60d * 0.98
-                        target_level = (high_60d + low_60d) / 2 if high_60d else price * 1.05
-                        stock_candidates.append(StockHighlight(
-                            symbol=symbol, name=name, price=price, market_cap=market_cap,
-                            reason="Near Support",
-                            detail=f"{dist_from_low:.1f}% above 60d low ${low_60d:.2f}",
-                            entry=price, stop=stop_level, target=target_level,
-                            rr=round((target_level - price) / max(price - stop_level, 0.01), 1),
-                        ))
+                reason = None
+                detail = None
+                time_horizon = 'swing'
 
-                # Breakout: price > 60d high AND volume_ratio > 1.5
                 if high_60d and price > high_60d and volume_ratio > 1.5:
-                    measured_move = high_60d - (low_60d or high_60d * 0.9)
-                    stock_candidates.append(StockHighlight(
-                        symbol=symbol, name=name, price=price, market_cap=market_cap,
-                        reason="Breakout",
-                        detail=f"Broke 60d high ${high_60d:.2f}, {volume_ratio:.1f}x vol",
-                        entry=price, stop=high_60d * 0.98, target=price + measured_move,
-                        rr=round(measured_move / max(price - high_60d * 0.98, 0.01), 1),
-                    ))
-
-                # Strong Momentum: rs_percentile >= 80 AND price > ema21 AND price > ema50
-                if rs_percentile >= 80:
-                    above_emas = True
-                    if ema21 and price <= ema21: above_emas = False
-                    if ema50 and price <= ema50: above_emas = False
-                    if above_emas:
-                        trail_stop = ema21 or price * 0.95
-                        mom_target = price + 2 * (price - trail_stop)
-                        stock_candidates.append(StockHighlight(
-                            symbol=symbol, name=name, price=price, market_cap=market_cap,
-                            reason="Strong Momentum",
-                            detail=f"RS {_ord(int(rs_percentile))} percentile, above EMAs",
-                            entry=price, stop=trail_stop, target=mom_target,
-                            rr=round((mom_target - price) / max(price - trail_stop, 0.01), 1),
-                        ))
-
-                # Good R/R: using 60d range — reward > 2x risk (computed from displayed levels)
-                if low_60d and high_60d and price > 0:
+                    reason = 'Breakout'
+                    detail = f"Broke 60d high ${high_60d:.2f}, {volume_ratio:.1f}x vol"
+                    time_horizon = 'swing'
+                elif high_60d and price < high_60d and (high_60d - price) / price <= 0.02:
+                    reason = 'Near Resistance'
+                    dist = (high_60d - price) / price * 100
+                    detail = f"{dist:.1f}% below 60d high ${high_60d:.2f}"
+                    time_horizon = 'swing'
+                elif low_60d and price > low_60d and (price - low_60d) / low_60d <= 0.02:
+                    reason = 'Near Support'
+                    dist = (price - low_60d) / low_60d * 100
+                    detail = f"{dist:.1f}% above 60d low ${low_60d:.2f}"
+                    time_horizon = 'swing'
+                elif rs_percentile >= 80:
+                    above = True
+                    if ema21 and price <= ema21:
+                        above = False
+                    if ema50 and price <= ema50:
+                        above = False
+                    if above:
+                        reason = 'Strong Momentum'
+                        detail = f"RS {_ord(int(rs_percentile))} percentile, above EMAs"
+                        time_horizon = 'position'
+                elif low_60d and high_60d:
+                    # Good R/R check — only if no other reason matched
                     stop_level = low_60d * 0.99
                     target_level = high_60d
-                    disp_risk = price - stop_level
-                    disp_reward = target_level - price
-                    if disp_risk > 0 and disp_reward / disp_risk >= 2.0:
-                        stock_candidates.append(StockHighlight(
-                            symbol=symbol, name=name, price=price, market_cap=market_cap,
-                            reason="Good R/R",
-                            detail=f"Stop at ${stop_level:.0f}, target ${target_level:.0f}",
-                            entry=price, stop=stop_level, target=target_level,
-                            rr=round(disp_reward / disp_risk, 1),
-                        ))
+                    if price > stop_level and target_level > price:
+                        rr = (target_level - price) / (price - stop_level)
+                        if rr >= 2.0:
+                            reason = 'Good R/R'
+                            detail = f"Stop at ${stop_level:.0f}, target ${target_level:.0f}"
+                            time_horizon = 'swing'
 
-                if stock_candidates:
-                    # Filter out candidates with terrible R/R
-                    viable = [c for c in stock_candidates if c.rr >= 0.5]
-                    if not viable:
-                        continue
-                    used_symbols.add(symbol)
-                    # Pick best candidate per stock by R/R, capped at 10x to avoid outliers
-                    best = max(viable, key=lambda c: min(c.rr, 10.0))
-                    best.rr = min(best.rr, 20.0)  # Cap display at 20x
-                    all_candidates.append(best)
+                if reason is None:
+                    continue
 
-            # Select up to 3 highlights with unique symbols AND diverse reasons
+                # Compute technical stop and target
+                stop, target, method = compute_stop_target(
+                    price, atr, support_zones, resistance_zones,
+                    df=None,
+                    time_horizon=time_horizon,
+                )
+
+                rr = round((target - price) / max(price - stop, 0.01), 1)
+                rr = min(rr, 20.0)
+
+                highlight = StockHighlight(
+                    symbol=symbol, name=name, price=price,
+                    market_cap=market_cap,
+                    reason=reason, detail=detail,
+                    entry=price, stop=stop, target=target, rr=rr,
+                )
+
+                # Store RS percentile for report badge
+                highlight.rs_percentile = rs_percentile
+
+                # Per-trade position sizing
+                pconfig = _load_portfolio_config()
+                risk_per_share = highlight.entry - highlight.stop
+                max_risk_dollars = pconfig['account_value'] * pconfig['risk_per_trade_pct']
+                position_size = int(max_risk_dollars / risk_per_share) if risk_per_share > 0 else 0
+                position_cost = position_size * highlight.entry
+                max_cost = pconfig['account_value'] * pconfig['max_position_pct']
+                if position_cost > max_cost:
+                    position_size = int(max_cost / highlight.entry)
+                    position_cost = position_size * highlight.entry
+
+                highlight.position_size = position_size
+                highlight.position_cost = position_cost
+                highlight.risk_dollars = position_size * risk_per_share
+
+                # Set time horizon display
+                horizon_map = {
+                    'Breakout': 'Swing (5-20d)',
+                    'Near Resistance': 'Swing (5-20d)',
+                    'Near Support': 'Swing (5-20d)',
+                    'Strong Momentum': 'Position (10-40d)',
+                    'Good R/R': 'Swing (5-20d)',
+                }
+                highlight.time_horizon = horizon_map.get(reason, 'Swing (5-20d)')
+
+                all_candidates.append(highlight)
+                used_symbols.add(symbol)
+
+            # Sort by R/R descending, select up to 3 with diverse reasons
+            all_candidates.sort(key=lambda c: c.rr, reverse=True)
             selected = []
             used_reasons = set()
             # Pass 1: diverse reasons
@@ -434,7 +485,7 @@ class SectorAnalyzer:
                 if c.reason not in used_reasons and len(selected) < 3:
                     selected.append(c)
                     used_reasons.add(c.reason)
-            # Pass 2: fill remaining with best RR
+            # Pass 2: fill remaining by R/R
             for c in all_candidates:
                 if c not in selected and len(selected) < 3:
                     selected.append(c)
