@@ -141,18 +141,18 @@ function drawCandles(canvasId,data,supports,resistances,sym){
     ctx.strokeStyle='rgba(126,203,90,0.8)';ctx.lineWidth=1.5;
     ctx.beginPath();ctx.moveTo(margin.left,sy);ctx.lineTo(W-margin.right,sy);ctx.stroke();
     ctx.fillStyle='#7ecb5a';ctx.font='bold 11px monospace';
-    ctx.fillText('S'+i+': $+nearSupports[i].toFixed(2),margin.left+2,sy-3);
+    ctx.fillText('S'+i+': $'+nearSupports[i].toFixed(2),margin.left+2,sy-3);
   }
   for(var i=0;i<nearResistances.length;i++){
     var ry=margin.top+(maxP-nearResistances[i])/range*ph;
     ctx.strokeStyle='rgba(224,85,61,0.8)';ctx.lineWidth=1.5;
     ctx.beginPath();ctx.moveTo(margin.left,ry);ctx.lineTo(W-margin.right,ry);ctx.stroke();
     ctx.fillStyle='#e0553d';ctx.font='bold 11px monospace';
-    ctx.fillText('R'+i+': $+nearResistances[i].toFixed(2),margin.left+2,ry-3);
+    ctx.fillText('R'+i+': $'+nearResistances[i].toFixed(2),margin.left+2,ry-3);
   }
 
   var title=document.getElementById(canvasId).parentNode.querySelector('div');
-  if(title)title.innerHTML='<span style="color:var(--gold);font-weight:600;font-size:13px">'+sym+'</span><span style="color:var(--ash);font-size:10px">S:'+nearSupports.length+' | R:+nearResistances.length+'</span>';
+  if(title)title.innerHTML='<span style="color:var(--gold);font-weight:600;font-size:13px">'+sym+'</span><span style="color:var(--ash);font-size:10px">S:'+nearSupports.length+' | R:'+nearResistances.length+'</span>';
 }
 </script>"""
 
