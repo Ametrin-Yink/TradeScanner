@@ -96,7 +96,7 @@ function drawCandles(canvasId,data,supports,resistances,sym){
   ctx.fillStyle='#0b1019';ctx.fillRect(0,0,W,H);
 
   var curPrice=data[data.length-1].close;
-  var cutoff=curPrice*0.15;
+  var cutoff=curPrice*0.50;
   var nearSupports=supports.filter(function(s){return curPrice-s<=cutoff;});
   var nearResistances=resistances.filter(function(r){return r-curPrice<=cutoff;});
 
