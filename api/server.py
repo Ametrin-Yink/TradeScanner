@@ -381,6 +381,29 @@ def update_settings():
     return jsonify({'status': 'ok'})
 
 
+@app.route('/api/data/ohlc/<symbol>')
+@require_auth
+def get_ohlc(symbol):
+    import json
+    conn = db.get_connection()
+    rows = conn.execute(
+        "SELECT date, open, high, low, close, volume FROM market_data "
+        "WHERE symbol = ? ORDER BY date DESC LIMIT 60",
+        (symbol.upper(),)
+    ).fetchall()
+    data = [{'date': r[0], 'open': r[1], 'high': r[2], 'low': r[3], 'close': r[4], 'volume': r[5]} for r in rows]
+    data.reverse()
+    cache = db.get_tier1_cache(symbol.upper())
+    supports, resistances = [], []
+    if cache:
+        try:
+            supports = json.loads(cache.get('supports', '[]') or '[]')
+            resistances = json.loads(cache.get('resistances', '[]') or '[]')
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return jsonify({'symbol': symbol.upper(), 'data': data, 'supports': supports, 'resistances': resistances})
+
+
 @app.route('/api/simulation/summary')
 @require_auth
 def sim_summary():
