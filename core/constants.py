@@ -15,4 +15,15 @@ SECTOR_ETFS = {
     'Semiconductors': 'SMH',
     'Software': 'IGV',
     'Transportation': 'IYT',
+    # User-defined sectors
+    'Space': 'NASA',
+    'Drone': 'JEDI',
+    'Robot': 'IBOT',
+    'Quantum Computing': 'WQTM',
+    'Photonics': 'EUV',
+    'Memory': 'DRAM',
+    'Nuclear Energy': 'URA',
+    'Rare Earth': 'REMX',
+    'Crypto': 'BITQ',
+    'Fintech': 'FINX',
 }

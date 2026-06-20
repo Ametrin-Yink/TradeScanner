@@ -1,7 +1,11 @@
-"""Market environment analyzer using DashScope enable_search and AI."""
+"""Market environment analyzer using DeepSeek AI with web search."""
 import logging
 import json
+import re
 from typing import Dict
+
+from config.settings import settings
+from core.ai_client import chat
 
 import requests
 
@@ -23,9 +27,7 @@ class MarketAnalyzer:
 
     def __init__(self):
         """Initialize with API keys from settings."""
-        self.dashscope_api_key = settings.get_secret('dashscope.api_key')
-        self.dashscope_base = settings.get_secret('dashscope.api_base') or settings.get('ai', {}).get('api_base', 'https://coding.dashscope.aliyuncs.com/v1')
-        self.model = settings.get_secret('dashscope.model') or settings.get('ai', {}).get('model', 'qwen-max')
+        self.model = settings.get_secret('dashscope.model') or 'deepseek-v4-pro'
 
     def analyze_for_regime(self, spy_df, vix_df) -> Dict:
         """
@@ -114,8 +116,9 @@ class MarketAnalyzer:
     ) -> Dict:
         """Call DashScope AI with enable_search to classify regime."""
 
-        if not self.dashscope_api_key:
-            logger.warning("DashScope API key not configured")
+        api_key = settings.get_secret('dashscope.api_key')
+        if not api_key:
+            logger.warning("API key not configured")
             return {'regime': 'neutral', 'confidence': 50, 'reasoning': 'API not configured'}
 
         vix_label = 'Extreme fear' if vix > 30 else 'Elevated' if vix > 20 else 'Normal'
@@ -180,36 +183,27 @@ Then, at the very end, output a JSON code block with the regime classification:
 {{"regime": "one_of_six_above", "confidence": 0-100, "reasoning": "2-3 sentences explaining the market narrative and technical synthesis — do NOT list indicator values, explain what they mean"}}
 ```"""
 
-        payload = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": "You are a market regime classifier. You MUST use web search. Provide brief analysis first, then end with a JSON code block containing regime, confidence, and reasoning."},
-                {"role": "user", "content": prompt}
-            ],
-            "temperature": 0.2,
-            "enable_search": True,
-            "max_tokens": 4000
-        }
+        system = "You are a market regime classifier. Search the web for current market conditions, then classify the regime. Provide analysis first, then end with a JSON code block containing regime, confidence, and reasoning."
 
-        url = f"{self.dashscope_base}/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {self.dashscope_api_key}",
-            "Content-Type": "application/json"
-        }
-
-        import re
         attempt = 0
         while True:
             attempt += 1
             try:
-                logger.info(f"Calling DashScope with enable_search (model: {self.model}, attempt {attempt})...")
-                response = requests.post(url, headers=headers, json=payload, timeout=300)
-                response.raise_for_status()
+                logger.info(f"Calling DeepSeek for regime classification (attempt {attempt})...")
+                content = chat(
+                    messages=[{"role": "user", "content": prompt}],
+                    system=system,
+                    temperature=0.2,
+                    max_tokens=4000,
+                    enable_search=False,
+                    timeout=300,
+                )
 
-                data = response.json()
-                content = data['choices'][0]['message']['content']
+                if not content:
+                    logger.warning(f"Empty response on attempt {attempt}, retrying...")
+                    continue
 
-                logger.info(f"DashScope response (first 400 chars):\n{content[:400]}")
+                logger.info(f"AI response (first 400 chars):\n{content[:400]}")
 
                 # Extract JSON — look for code block first
                 result = None
@@ -242,7 +236,7 @@ Then, at the very end, output a JSON code block with the regime classification:
                     logger.warning(f"JSON parse failed on attempt {attempt}, retrying...")
                     continue
 
-                # Validate regime — retry if invalid
+                # Validate regime
                 valid = ['bull_strong', 'bull_moderate', 'neutral',
                         'bear_moderate', 'bear_strong', 'extreme_vix']
                 if result.get('regime') not in valid:

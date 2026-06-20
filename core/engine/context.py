@@ -10,6 +10,7 @@ class PipelineContext:
     Each phase reads from and writes to this context.
     """
     symbols: List[str] = field(default_factory=list)
+    sectors: List[str] = field(default_factory=list)
     regime: Optional[str] = None
     regime_analysis: Dict[str, Any] = field(default_factory=dict)
     candidates: List = field(default_factory=list)

@@ -21,8 +21,9 @@ class Phase0PrepHandler(PhaseHandler):
         logger.info("=" * 60)
 
         symbols = ctx.symbols if ctx.symbols else None
+        sectors = ctx.sectors or self.config.get('sectors', [])
         db = Database()
-        prep = PreMarketPrep(db=db)
+        prep = PreMarketPrep(db=db, sectors=sectors if sectors else None)
 
         if symbols is not None:
             logger.info(f"Using provided symbols: {len(symbols)} (test mode, in-process)")

@@ -34,8 +34,12 @@ export async function api(method, url, body) {
   if (key) {
     opts.headers["Authorization"] = "Bearer " + key;
   }
-  if (body) {
+  if (method === "GET" || method === "HEAD") {
+    // Content-Type not needed for GET/HEAD
+  } else {
     opts.headers["Content-Type"] = "application/json";
+  }
+  if (body !== undefined && body !== null) {
     opts.body = JSON.stringify(body);
   }
   const res = await fetch(url, opts);

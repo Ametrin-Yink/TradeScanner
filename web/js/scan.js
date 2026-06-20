@@ -5,8 +5,10 @@ export async function loadScanStatus() {
   try {
     const data = await api("GET", "/status");
     if (data.last_scan) {
-      document.getElementById("statLastRun").textContent = data.last_scan.date;
-      document.getElementById("statStatus").textContent = data.last_scan.status;
+      document.getElementById("statLastRun").textContent =
+        data.last_scan.date || "--";
+      document.getElementById("statStatus").textContent =
+        data.last_scan.status || (data.last_scan.date ? "completed" : "--");
       document.getElementById("statStocks").textContent =
         data.last_scan.stocks || "--";
       document.getElementById("statCands").textContent =

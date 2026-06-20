@@ -14,6 +14,7 @@ import pandas as pd
 
 from config.settings import settings
 from data.db import Database
+from core.swing_detector import detect_swings, cluster_levels
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +25,8 @@ class DataFetcher:
     def __init__(
         self,
         db: Optional[Database] = None,
-        max_workers: int = 4,  # Increased for better throughput
-        request_delay: float = 0.5,  # Increased to 0.5s for rate limiting
+        max_workers: int = 8,  # 24GB server
+        request_delay: float = 0.25,  # yfinance free tier tolerates ~4 req/s
         max_retries: int = 3,
         max_history_days: int = 252
     ):
@@ -371,8 +372,6 @@ class DataFetcher:
 
             if i + batch_size < len(symbols):
                 time.sleep(self.request_delay)
-
-            gc.collect()
 
         logger.info(f"Successfully fetched {len(results)} symbols, {len(failed_symbols)} failed")
         if failed_symbols:

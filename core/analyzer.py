@@ -11,6 +11,7 @@ import pandas as pd
 from core.screener import StrategyMatch
 from core.fetcher import DataFetcher
 from config.settings import settings
+from core.ai_client import chat
 
 logger = logging.getLogger(__name__)
 
@@ -42,9 +43,7 @@ class OpportunityAnalyzer:
     def __init__(self, fetcher: Optional[DataFetcher] = None):
         """Initialize analyzer."""
         self.fetcher = fetcher or DataFetcher()
-        self.dashscope_api_key = settings.get_secret('dashscope.api_key')
-        self.dashscope_base = settings.get_secret('dashscope.api_base') or settings.get('ai', {}).get('api_base', 'https://coding.dashscope.aliyuncs.com/v1')
-        self.model = 'qwen3.6-plus'
+        self.model = settings.get_secret('dashscope.model') or 'deepseek-v4-pro'
 
     def analyze_opportunity(
         self,
@@ -137,70 +136,28 @@ class OpportunityAnalyzer:
         return analyzed
 
     def _search_symbol_news(self, symbol: str) -> list:
-        """Search for symbol-specific news using DashScope enable_search."""
-        if not self.dashscope_api_key:
-            return []
-
+        """Search for symbol-specific news using DeepSeek web search."""
         try:
-            url = f"{self.dashscope_base}/chat/completions"
-            headers = {
-                "Authorization": f"Bearer {self.dashscope_api_key}",
-                "Content-Type": "application/json"
-            }
-            payload = {
-                "model": self.model,
-                "messages": [
-                    {"role": "system", "content": f"Search for the latest news about {symbol} stock. Summarize the top 3 most relevant news items with headlines and brief summaries. Return as a JSON array: [{{\"title\": \"...\", \"content\": \"...\"}}]"},
-                    {"role": "user", "content": f"Find and summarize the latest news for {symbol} stock"}
-                ],
-                "temperature": 0.2,
-                "enable_search": True
-            }
-
-            response = requests.post(url, headers=headers, json=payload, timeout=90)
-            response.raise_for_status()
-
-            data = response.json()
-            content = data['choices'][0]['message']['content']
+            content = chat(
+                messages=[{"role": "user", "content": f"Find and summarize the latest news for {symbol} stock"}],
+                system=f"Search for the latest news about {symbol} stock. Summarize the top 3 most relevant news items. Return as a JSON array: [{{\"title\": \"...\", \"content\": \"...\"}}]",
+                temperature=0.2,
+                max_tokens=1000,
+                enable_search=True,
+                timeout=90,
+            )
+            if not content:
+                return []
 
             import re
             json_match = re.search(r'\[.*\]', content, re.DOTALL)
             if json_match:
                 return json.loads(json_match.group())[:3]
-
             return [{'title': 'AI search result', 'content': content[:300]}]
 
         except Exception as e:
             logger.warning(f"AI news search failed for {symbol}: {e}")
             return []
-
-    def _call_ai_with_retry(
-        self,
-        url: str,
-        headers: dict,
-        payload: dict,
-        max_retries: int = 2
-    ) -> Optional[dict]:
-        """Call AI API with retry logic."""
-        for attempt in range(max_retries + 1):
-            try:
-                timeout = 120 + (attempt * 60)  # Increase timeout on retry
-                response = requests.post(url, headers=headers, json=payload, timeout=timeout)
-                response.raise_for_status()
-                return response.json()
-            except requests.Timeout:
-                if attempt < max_retries:
-                    logger.warning(f"AI call timeout, retrying ({attempt + 1}/{max_retries})...")
-                    time.sleep(2 ** attempt)  # Exponential backoff
-                else:
-                    raise
-            except Exception:
-                if attempt < max_retries:
-                    logger.warning(f"AI call failed, retrying ({attempt + 1}/{max_retries})...")
-                    time.sleep(2 ** attempt)
-                else:
-                    raise
-        return None
 
     def _call_ai_analysis(
         self,
@@ -210,9 +167,6 @@ class OpportunityAnalyzer:
         market_sentiment: str
     ) -> dict:
         """Call AI for deep analysis."""
-        if not self.dashscope_api_key:
-            return self._fallback_analysis(match)
-
         try:
             # Prepare price data summary
             price_summary = ""
@@ -227,12 +181,6 @@ Recent Price Data (20 days):
 """
 
             news_text = "\n".join([f"- {n[:200]}" for n in news]) if news else "No recent news available"
-
-            url = f"{self.dashscope_base}/chat/completions"
-            headers = {
-                "Authorization": f"Bearer {self.dashscope_api_key}",
-                "Content-Type": "application/json"
-            }
 
             prompt = f"""Analyze this trading opportunity:
 
@@ -264,21 +212,17 @@ Provide analysis in JSON format:
     "alternative_scenario": "what could invalidate this trade"
 }}"""
 
-            payload = {
-                "model": self.model,
-                "messages": [
-                    {"role": "system", "content": "You are an expert technical analyst. Provide concise, actionable trading analysis. Return valid JSON only, no markdown."},
-                    {"role": "user", "content": prompt}
-                ],
-                "temperature": 0.4
-            }
+            content = chat(
+                messages=[{"role": "user", "content": prompt}],
+                system="You are an expert technical analyst. Provide concise, actionable trading analysis. Return valid JSON only, no markdown.",
+                temperature=0.4,
+                max_tokens=2000,
+                enable_search=False,
+                timeout=180,
+            )
 
-            # Call AI with retry logic
-            data = self._call_ai_with_retry(url, headers, payload, max_retries=2)
-            if data is None:
-                raise Exception("AI call failed after retries")
-
-            content = data['choices'][0]['message']['content']
+            if not content:
+                raise Exception("AI call returned empty")
 
             # Extract JSON from response
             import re
@@ -373,34 +317,23 @@ Provide analysis in JSON format:
             return candidate
 
     def _search_stock_news(self, symbol: str) -> list:
-        """Search for stock-specific news using DashScope enable_search."""
+        """Search for stock-specific news using DeepSeek web search."""
         try:
-            url = f"{self.dashscope_base}/chat/completions"
-            headers = {
-                "Authorization": f"Bearer {self.dashscope_api_key}",
-                "Content-Type": "application/json"
-            }
-            payload = {
-                "model": self.model,
-                "messages": [
-                    {"role": "system", "content": f"Search for the latest news about {symbol}. Return a JSON array of up to 3 items: [{{\"title\": \"...\", \"content\": \"...\"}}]"},
-                    {"role": "user", "content": f"Find the latest news and analysis for {symbol} stock"}
-                ],
-                "temperature": 0.2,
-                "enable_search": True
-            }
-
-            response = requests.post(url, headers=headers, json=payload, timeout=90)
-            response.raise_for_status()
-
-            data = response.json()
-            content = data['choices'][0]['message']['content']
+            content = chat(
+                messages=[{"role": "user", "content": f"Find the latest news and analysis for {symbol} stock"}],
+                system=f"Search for the latest news about {symbol}. Return a JSON array of up to 3 items: [{{\"title\": \"...\", \"content\": \"...\"}}]",
+                temperature=0.2,
+                max_tokens=1000,
+                enable_search=True,
+                timeout=90,
+            )
+            if not content:
+                return []
 
             import re
             json_match = re.search(r'\[.*\]', content, re.DOTALL)
             if json_match:
                 return json.loads(json_match.group())[:3]
-
             return [{'title': 'AI search result', 'content': content[:300]}]
 
         except Exception as e:
@@ -415,21 +348,7 @@ Provide analysis in JSON format:
             for r in news_results[:5]
         ])
 
-        if not self.dashscope_api_key:
-            return {
-                'technical_outlook': f"Entry: {candidate.entry_price}, Stop: {candidate.stop_loss}",
-                'news_sentiment': 'Neutral',
-                'key_catalysts': news_results[:2],
-                'risk_level': 'Medium'
-            }
-
         try:
-            url = f"{self.dashscope_base}/chat/completions"
-            headers = {
-                "Authorization": f"Bearer {self.dashscope_api_key}",
-                "Content-Type": "application/json"
-            }
-
             prompt = f"""Deep analysis for {candidate.symbol} ({candidate.strategy}):
 
 Entry: ${candidate.entry_price:.2f}, Stop: ${candidate.stop_loss:.2f}, Target: ${candidate.take_profit:.2f}
@@ -454,19 +373,15 @@ Risk factors must describe TRADING risks (market events, earnings, sector weakne
     "risk_factors": ["2 specific risks that could trigger stop loss or invalidate the setup"]
 }}"""
 
-            payload = {
-                "model": self.model,
-                "messages": [
-                    {"role": "system", "content": "Expert technical analyst. Provide specific, data-driven analysis. Return valid JSON only, no markdown."},
-                    {"role": "user", "content": prompt}
-                ],
-                "temperature": 0,
-                "seed": 42
-            }
-
-            data = self._call_ai_with_retry(url, headers, payload, max_retries=2)
-            if data:
-                content = data['choices'][0]['message']['content']
+            content = chat(
+                messages=[{"role": "user", "content": prompt}],
+                system="Expert technical analyst. Provide specific, data-driven analysis. Return valid JSON only, no markdown.",
+                temperature=0,
+                max_tokens=2000,
+                enable_search=False,
+                timeout=180,
+            )
+            if content:
                 import re as _re
                 # Try to find JSON object — handle nested braces
                 match = _re.search(r'\{(?:[^{}]|\{[^{}]*\})*\}', content, _re.DOTALL)

@@ -8,7 +8,7 @@ MomentumBreakout:
   min_atr_pct: 0.015
   min_listing_days: 60
   platform_lookback: [15, 60]
-  rs_bonus_threshold: 0.85
+  rs_bonus_threshold: 0.65
   platform_max_range: 0.12
   concentration_threshold: 0.50
   volume_contraction_vs_platform: 0.70
@@ -18,8 +18,8 @@ MomentumBreakout:
   max_distance_from_50ema: 0.20
   max_distance_from_52w_high: 0.10
   energy_ratio_cap: 3.0
-  rs_percentile_min: 80
-  min_rs_percentile: 50
+  rs_percentile_min: 60
+  min_rs_percentile: 40
   max_raw_score: 20.0
   bonus_max: 1.5
 
@@ -29,7 +29,7 @@ PreBreakoutCompression:
   min_atr_pct: 0.015
   min_listing_days: 60
   platform_lookback: [15, 60]
-  rs_bonus_threshold: 0.85
+  rs_bonus_threshold: 0.65
   platform_max_range: 0.12
   concentration_threshold: 0.50
   volume_contraction_vs_platform: 0.70
@@ -39,8 +39,8 @@ PreBreakoutCompression:
   max_distance_from_50ema: 0.20
   max_distance_from_52w_high: 0.10
   energy_ratio_cap: 3.0
-  rs_percentile_min: 80
-  min_rs_percentile: 50
+  rs_percentile_min: 60
+  min_rs_percentile: 40
   max_raw_score: 20.0
   bonus_max: 1.5
 
@@ -142,4 +142,4 @@ EarningsGap:
 
 # --- Strategy H: RelativeStrengthLong ---
 RelativeStrengthLong:
-  min_rs_percentile: 80
+  min_rs_percentile: 60

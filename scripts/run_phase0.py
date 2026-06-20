@@ -6,6 +6,7 @@ writes all results to database, and exits cleanly to release memory.
 
 Usage:
     python3 scripts/run_phase0.py
+    python3 scripts/run_phase0.py --sectors Technology,Healthcare,Financials
 
 The main scanner process should run this as a subprocess, then
 read results from the database with fresh memory.
@@ -14,6 +15,7 @@ import sys
 import os
 import logging
 import json
+import argparse
 from datetime import datetime
 from typing import Dict
 
@@ -29,7 +31,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def run_phase0_standalone() -> Dict:
+def run_phase0_standalone(sectors: list = None) -> Dict:
     start_time = datetime.now()
     db = Database()
 
@@ -38,7 +40,7 @@ def run_phase0_standalone() -> Dict:
     logger.info("=" * 60)
 
     try:
-        prep = PreMarketPrep(db=db)
+        prep = PreMarketPrep(db=db, sectors=sectors)
         result = prep.run_phase0()
 
         duration = (datetime.now() - start_time).total_seconds()
@@ -80,7 +82,13 @@ def run_phase0_standalone() -> Dict:
 
 
 def main():
-    result = run_phase0_standalone()
+    parser = argparse.ArgumentParser(description='Phase 0: Data Preparation')
+    parser.add_argument('--sectors', type=str, default=None,
+                        help='Comma-separated list of sectors to process')
+    args = parser.parse_args()
+
+    sectors = args.sectors.split(',') if args.sectors else None
+    result = run_phase0_standalone(sectors=sectors)
 
     print("\n=== PHASE0_RESULT_START ===")
     print(json.dumps(result))

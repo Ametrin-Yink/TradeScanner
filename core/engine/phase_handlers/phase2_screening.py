@@ -27,7 +27,8 @@ class Phase2ScreeningHandler(PhaseHandler):
         logger.info(f"Screening {len(symbols)} symbols with regime: {regime}")
 
         db = getattr(ctx, 'db', None) or Database()
-        screener = StrategyScreener(db=db)
+        sectors = ctx.sectors or self.config.get('sectors', [])
+        screener = StrategyScreener(db=db, sectors=sectors if sectors else None)
 
         tier3_symbols = get_all_market_etfs()
         tier3_data = {}

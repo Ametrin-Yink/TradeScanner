@@ -12,6 +12,7 @@ import numpy as np
 from core.screener import StrategyMatch
 from config.settings import settings
 from data.db import Database
+from core.ai_client import chat
 
 logger = logging.getLogger(__name__)
 
@@ -89,9 +90,7 @@ class AIConfidenceScorer:
     def __init__(self, db: Database = None):
         """Initialize with API configuration and database."""
         self.db = db or Database()
-        self.dashscope_api_key = settings.get_secret('dashscope.api_key')
-        self.dashscope_base = settings.get_secret('dashscope.api_base') or settings.get('ai', {}).get('api_base', 'https://coding.dashscope.aliyuncs.com/v1')
-        self.model = 'qwen3.6-plus'
+        self.model = settings.get_secret('dashscope.model') or 'deepseek-v4-pro'
 
     def score_candidates(
         self,
@@ -436,41 +435,14 @@ IMPORTANT:
 
     def _call_ai_api(self, prompt: str) -> str:
         """Call the AI API with the prompt."""
-        headers = {
-            'Authorization': f'Bearer {self.dashscope_api_key}',
-            'Content-Type': 'application/json'
-        }
-
-        data = {
-            'model': self.model,
-            'messages': [
-                {'role': 'system', 'content': 'You are an expert quantitative swing trade analyst. Provide objective, data-driven confidence scores.'},
-                {'role': 'user', 'content': prompt}
-            ],
-            'temperature': 0,
-            'seed': 42,
-            'max_tokens': 4000
-        }
-
-        response = requests.post(
-            f'{self.dashscope_base}/chat/completions',
-            headers=headers,
-            json=data,
-            timeout=180
+        return chat(
+            messages=[{"role": "user", "content": prompt}],
+            system="You are an expert quantitative swing trade analyst. Provide objective, data-driven confidence scores.",
+            temperature=0,
+            max_tokens=4000,
+            enable_search=False,
+            timeout=180,
         )
-
-        response.raise_for_status()
-        result = response.json()
-
-        try:
-            content = result.get('choices', [{}])[0].get('message', {}).get('content', '')
-            if not content:
-                logger.warning("Empty content in AI response")
-                return None
-            return content
-        except (AttributeError, IndexError) as e:
-            logger.error(f"Unexpected API response structure: {e}")
-            return None
 
     def _parse_ai_response(self, content: str) -> List[Dict]:
         """Parse AI response to extract scored data."""

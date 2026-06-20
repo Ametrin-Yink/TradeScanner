@@ -5,26 +5,25 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-# Phase 1 Allocation Table (30 total slots) - minimum 2 per strategy
 REGIME_ALLOCATION_TABLE: Dict[str, Dict[str, int]] = {
     'bull_strong': {
-        'A1': 4, 'A2': 4, 'B': 4, 'C': 4, 'D': 2, 'E': 2, 'F': 2, 'G': 6, 'H': 2,
+        'A1': 3, 'A2': 3, 'B': 3, 'C': 3, 'D': 2, 'E': 2, 'F': 2, 'G': 4, 'H': 2,
     },
     'bull_moderate': {
-        'A1': 4, 'A2': 4, 'B': 4, 'C': 4, 'D': 2, 'E': 2, 'F': 2, 'G': 6, 'H': 2,
+        'A1': 3, 'A2': 3, 'B': 3, 'C': 3, 'D': 2, 'E': 2, 'F': 2, 'G': 4, 'H': 2,
     },
     'neutral': {
-        'A1': 3, 'A2': 3, 'B': 4, 'C': 4, 'D': 4, 'E': 4, 'F': 2, 'G': 3, 'H': 3,
+        'A1': 2, 'A2': 2, 'B': 3, 'C': 3, 'D': 3, 'E': 3, 'F': 2, 'G': 3, 'H': 2,
     },
     'bear_moderate': {
-        'A1': 2, 'A2': 2, 'B': 4, 'C': 4, 'D': 4, 'E': 4, 'F': 2, 'G': 2, 'H': 6,
+        'A1': 2, 'A2': 2, 'B': 3, 'C': 3, 'D': 3, 'E': 3, 'F': 2, 'G': 2, 'H': 4,
     },
     'bear_strong': {
-        'A1': 2, 'A2': 2, 'B': 2, 'C': 3, 'D': 5, 'E': 5, 'F': 6, 'G': 2, 'H': 3,
+        'A1': 2, 'A2': 2, 'B': 2, 'C': 2, 'D': 4, 'E': 4, 'F': 4, 'G': 2, 'H': 3,
     },
     'extreme_vix': {
-        'A1': 2, 'A2': 2, 'B': 2, 'C': 2, 'D': 2, 'E': 2, 'F': 8, 'G': 2, 'H': 8,
-    }
+        'A1': 2, 'A2': 2, 'B': 2, 'C': 2, 'D': 2, 'E': 2, 'F': 6, 'G': 2, 'H': 5,
+    },
 }
 
 # Regime-adaptive position sizing scalars
