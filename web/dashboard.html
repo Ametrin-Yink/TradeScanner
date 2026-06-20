@@ -7,7 +7,69 @@
     <link rel="stylesheet" href="/static/css/dashboard.css" />
   </head>
   <body>
-    <div class="app">
+    <!-- Login Overlay -->
+    <div
+      id="loginOverlay"
+      style="
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: var(--bg-root);
+        z-index: 1000;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 16px;
+      "
+    >
+      <div style="text-align: center">
+        <div
+          style="
+            font-size: 24px;
+            font-weight: 600;
+            color: var(--accent);
+            margin-bottom: 4px;
+          "
+        >
+          TradeScanner
+        </div>
+        <div style="font-size: 13px; color: var(--text-secondary)">
+          Enter API key to continue
+        </div>
+      </div>
+      <input
+        type="password"
+        id="apiKeyInput"
+        placeholder="API Key"
+        autofocus
+        style="
+          width: 280px;
+          padding: 10px 14px;
+          font-size: 14px;
+          text-align: center;
+          background: var(--bg-surface);
+          border: 1px solid var(--border);
+          border-radius: var(--radius);
+          color: var(--text-primary);
+        "
+      />
+      <button
+        id="loginBtn"
+        class="btn btn-primary"
+        style="width: 280px; padding: 10px"
+      >
+        Login
+      </button>
+      <div
+        id="loginError"
+        style="display: none; color: var(--danger); font-size: 12px"
+      >
+        Invalid API key
+      </div>
+    </div>
+
+    <!-- Main App -->
+    <div class="app" id="appMain" style="display: none">
       <nav class="navbar">
         <div class="navbar-brand">
           <span class="navbar-dot"></span>TradeScanner
@@ -21,6 +83,9 @@
         </div>
         <div class="navbar-scope" id="scopeIndicator">
           <span id="scopeText">-- tags · -- stocks</span>
+          <button id="logoutBtn" class="btn btn-sm" style="margin-left: 8px">
+            Logout
+          </button>
         </div>
       </nav>
 

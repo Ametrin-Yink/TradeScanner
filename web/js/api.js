@@ -1,22 +1,38 @@
 // web/js/api.js
-let _apiKey = null;
+const KEY_STORAGE = "tradescanner_api_key";
 
-export async function fetchApiKey() {
-  try {
-    const res = await fetch("/api/config/auth-key");
-    if (res.ok) {
-      const data = await res.json();
-      _apiKey = data.key;
-    }
-  } catch (e) {
-    console.warn("Could not fetch API key:", e);
-  }
+export function getApiKey() {
+  return sessionStorage.getItem(KEY_STORAGE);
+}
+
+export function setApiKey(key) {
+  sessionStorage.setItem(KEY_STORAGE, key);
+}
+
+export function clearApiKey() {
+  sessionStorage.removeItem(KEY_STORAGE);
+}
+
+export function isLoggedIn() {
+  return !!getApiKey();
+}
+
+export async function verifyKey(key) {
+  const res = await fetch("/api/config/auth-key", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key: key }),
+  });
+  if (!res.ok) return false;
+  const data = await res.json();
+  return data.valid === true;
 }
 
 export async function api(method, url, body) {
   const opts = { method, headers: {} };
-  if (_apiKey) {
-    opts.headers["Authorization"] = "Bearer " + _apiKey;
+  const key = getApiKey();
+  if (key) {
+    opts.headers["Authorization"] = "Bearer " + key;
   }
   if (body) {
     opts.headers["Content-Type"] = "application/json";
@@ -31,9 +47,13 @@ export async function api(method, url, body) {
     data = text;
   }
   if (!res.ok) {
+    if (res.status === 401) {
+      clearApiKey();
+      window.location.reload();
+    }
     throw new Error(
-      data && typeof data === "object" && data.error
-        ? data.error
+      data && typeof data === "object" && data.message
+        ? data.message
         : "Request failed (" + res.status + ")",
     );
   }

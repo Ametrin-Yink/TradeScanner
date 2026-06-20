@@ -72,12 +72,18 @@ def index():
     })
 
 
-@app.route('/api/config/auth-key')
-def auth_key():
-    """Return API key to dashboard JS (localhost only)."""
-    if request.remote_addr not in ('127.0.0.1', '::1', 'localhost'):
-        return jsonify({'status': 'error', 'message': 'Forbidden'}), 403
-    return jsonify({'key': API_KEY})
+@app.route('/api/config/auth-key', methods=['POST'])
+def verify_auth_key():
+    """Verify an API key. Returns {'valid': true} if correct."""
+    try:
+        data = request.get_json()
+        if not data or 'key' not in data:
+            return jsonify({'valid': False}), 400
+        if data['key'] == API_KEY:
+            return jsonify({'valid': True})
+        return jsonify({'valid': False})
+    except Exception:
+        return jsonify({'valid': False}), 400
 
 
 @app.route('/scan', methods=['POST'])

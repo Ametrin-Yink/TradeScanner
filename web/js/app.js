@@ -1,5 +1,5 @@
 // web/js/app.js
-import { api } from "./api.js";
+import { api, isLoggedIn, setApiKey, verifyKey, showToast } from "./api.js";
 import { loadTags, initTags } from "./tags.js";
 import { loadStrategies } from "./strategies.js";
 import { loadReports } from "./reports.js";
@@ -23,9 +23,6 @@ export function switchTab(name) {
   if (name === "simulation") loadSimulation();
 }
 
-// --- Toast ---
-export { showToast } from "./api.js";
-
 // --- Scope Indicator ---
 export function updateScope(tagCount, stockCount) {
   function plural(n, s) {
@@ -37,8 +34,56 @@ export function updateScope(tagCount, stockCount) {
     plural(tagCount, "tag") + " · " + plural(stockCount, "stock");
 }
 
+// --- Login ---
+function showLogin() {
+  document.getElementById("loginOverlay").style.display = "flex";
+  document.getElementById("appMain").style.display = "none";
+  document.getElementById("loginError").style.display = "none";
+}
+
+function hideLogin() {
+  document.getElementById("loginOverlay").style.display = "none";
+  document.getElementById("appMain").style.display = "flex";
+}
+
+async function handleLogin() {
+  const input = document.getElementById("apiKeyInput");
+  const key = input.value.trim();
+  if (!key) return;
+
+  const btn = document.getElementById("loginBtn");
+  btn.disabled = true;
+  btn.textContent = "Verifying...";
+
+  try {
+    const valid = await verifyKey(key);
+    if (valid) {
+      setApiKey(key);
+      hideLogin();
+      await initApp();
+    } else {
+      document.getElementById("loginError").style.display = "block";
+    }
+  } catch (e) {
+    document.getElementById("loginError").style.display = "block";
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Login";
+  }
+}
+
 // --- Init ---
-document.addEventListener("DOMContentLoaded", async () => {
+async function initApp() {
+  initTags();
+  initScan();
+  await loadTags();
+  loadStrategies();
+  loadReports();
+  if (window.location.hash === "#scan") loadScanStatus();
+  if (window.location.hash === "#simulation") loadSimulation();
+}
+
+document.addEventListener("DOMContentLoaded", () => {
   // Tab click handlers
   document.querySelectorAll(".navbar-tab").forEach((tab) => {
     tab.addEventListener("click", () => switchTab(tab.dataset.tab));
@@ -54,20 +99,26 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   }
   window.addEventListener("hashchange", initHash);
-  initHash();
 
-  // Auth key (if API_KEY is set)
-  const { fetchApiKey } = await import("./api.js");
-  await fetchApiKey();
+  // Login button
+  document.getElementById("loginBtn").addEventListener("click", handleLogin);
+  document.getElementById("apiKeyInput").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") handleLogin();
+  });
 
-  // Init modules (set up event listeners)
-  initTags();
-  initScan();
+  // Logout
+  document.getElementById("logoutBtn").addEventListener("click", () => {
+    import("./api.js").then((m) => {
+      m.clearApiKey();
+      window.location.reload();
+    });
+  });
 
-  // Load data
-  await loadTags();
-  loadStrategies();
-  loadReports();
-  if (window.location.hash === "#scan") loadScanStatus();
-  if (window.location.hash === "#simulation") loadSimulation();
+  // Check login state
+  if (isLoggedIn()) {
+    hideLogin();
+    initApp().then(() => initHash());
+  } else {
+    showLogin();
+  }
 });
