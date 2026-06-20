@@ -43,7 +43,7 @@ def test_cluster_levels_merges_nearby():
 
 
 def test_compute_stop_target_uses_swing_low():
-    """If a swing low exists below entry, use it as stop."""
+    """Nearest support below entry becomes stop. Target from nearest resistance or fallback."""
     df = make_test_data()
     entry_price = 115.0
     atr = 2.5
@@ -53,13 +53,9 @@ def test_compute_stop_target_uses_swing_low():
     stop, target, method = compute_stop_target(
         entry_price, atr, low_zones, high_zones, df, time_horizon='swing'
     )
-    # Stop should be below entry
     assert stop < entry_price, f"Stop {stop} should be below entry {entry_price}"
-    # Target should be above entry
     assert target > entry_price, f"Target {target} should be above entry {entry_price}"
-    # R/R should be >= 1.5
-    rr = (target - entry_price) / (entry_price - stop)
-    assert rr >= 1.5, f"R/R {rr:.1f} should be >= 1.5"
+    assert method.startswith('support'), f"Should use support, got {method}"
 
 
 def test_compute_stop_target_fallback_atr():
@@ -70,7 +66,7 @@ def test_compute_stop_target_fallback_atr():
     stop, target, method = compute_stop_target(
         entry_price, atr, [], [], pd.DataFrame(), time_horizon='swing'
     )
-    expected_stop = entry_price - 2.0 * atr  # 109.0
+    expected_stop = entry_price - 1.5 * atr  # 109.0
     assert abs(stop - expected_stop) < 0.01
     assert target > entry_price
-    assert method == 'atr_fallback+risk_multiple'
+    assert method.startswith('atr+')

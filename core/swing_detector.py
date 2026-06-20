@@ -64,96 +64,86 @@ def cluster_levels(points: List[float], tolerance: float = 0.005) -> List[Dict]:
     return zones
 
 
+def _compute_fib_target(df, entry_price: float) -> Optional[float]:
+    """Compute Fibonacci extension target from the most recent completed swing.
+    Returns target price or None if no valid swing found.
+    """
+    try:
+        swings_h, swings_l = detect_swings(df, order=5)
+        if len(swings_l) < 1 or len(swings_h) < 1:
+            return None
+        # Find last swing low and the subsequent swing high
+        last_low = swings_l[-1]
+        later_highs = [h for h in swings_h if h > last_low]
+        if not later_highs:
+            return None
+        last_high = later_highs[-1]
+        swing_range = last_high - last_low
+        if swing_range <= 0:
+            return None
+        # 1.272 extension from the low through the high
+        target = last_low + swing_range * 1.272
+        if target > entry_price:
+            return round(target, 2)
+        return None
+    except Exception:
+        return None
+
+
 def compute_stop_target(
     entry_price: float,
     atr: float,
     support_zones: List[Dict],
     resistance_zones: List[Dict],
-    df,  # DataFrame with OHLC for pivot/measured-move calculations
+    df,  # DataFrame with OHLC
     time_horizon: str = 'swing',
 ) -> Tuple[float, float, str]:
-    """Compute stop-loss and target price using 3-tier cascade.
+    """Compute stop-loss and target using chart-aligned S/R levels.
 
-    Returns:
-        (stop_price, target_price, method_used)
+    Stop: nearest support below entry. Fallback: 1.5x ATR.
+    Target: nearest resistance above entry. Fallback: Fibonacci extension or 2x risk.
     """
-    # -- Stop Placement --
+    # -- Stop: nearest support below entry --
     stop = None
     stop_method = None
-
-    # Tier 1: Nearest swing low below entry (from support zones)
-    below_zones = [z for z in support_zones if z['level'] < entry_price]
-    if below_zones:
-        nearest = max(below_zones, key=lambda z: z['level'])
-        candidate = nearest['level']
-        if entry_price - candidate >= 0.5 * atr:
-            stop = candidate
-            stop_method = 'swing_low'
-
-    # Tier 2: 2x ATR below entry
+    below = [z for z in support_zones if z['level'] < entry_price]
+    if below:
+        nearest = max(below, key=lambda z: z['level'])
+        if entry_price - nearest['level'] <= entry_price * 0.15:
+            stop = nearest['level']
+            stop_method = 'support'
     if stop is None:
-        candidate = entry_price - 2.0 * atr
-        if candidate > 0:
-            stop = candidate
-            stop_method = 'atr_fallback'
+        stop = entry_price - 1.5 * atr
+        stop_method = 'atr'
 
-    # Tier 3: 10% below entry (hard cap)
-    if stop is None:
-        stop = entry_price * 0.90
-        stop_method = 'pct_cap'
-
-    # -- Target Placement --
+    # -- Target: nearest resistance above entry --
     target = None
     target_method = None
-
-    # Tier 1: Fibonacci extension from most recent swing
-    if resistance_zones:
-        nearest_resistance = min(
-            [z for z in resistance_zones if z['level'] > entry_price],
-            key=lambda z: z['level'],
-            default=None
-        )
-        if nearest_resistance:
-            # Use 127.2% extension as target
-            candidate = nearest_resistance['level']
-            if candidate > entry_price:
-                rr = (candidate - entry_price) / (entry_price - stop)
-                if rr >= 2.0:
-                    target = candidate
-                    target_method = 'fib_extension'
-
-    # Tier 2: Measured move from consolidation range
+    above = [z for z in resistance_zones if z['level'] > entry_price]
+    if above:
+        nearest = min(above, key=lambda z: z['level'])
+        if nearest['level'] - entry_price <= entry_price * 0.50:
+            target = nearest['level']
+            target_method = 'resistance'
+    # ATH / no resistance: try Fibonacci extension
+    if target is None and df is not None and len(df) >= 20:
+        fib = _compute_fib_target(df, entry_price)
+        if fib and fib > entry_price:
+            target = fib
+            target_method = 'fib_extension'
     if target is None and df is not None and len(df) >= 20:
         recent = df.tail(20)
-        range_high = recent['High'].max()
-        range_low = recent['Low'].min()
-        range_height = range_high - range_low
-        if range_height > 0:
-            candidate = entry_price + range_height * 0.93  # Bulkowski factor
-            rr = (candidate - entry_price) / (entry_price - stop)
-            if rr >= 2.0:
-                target = candidate
-                target_method = 'measured_move'
-
-    # Tier 3: Pivot point R1 (weekly projection from last 5 bars)
-    if target is None and df is not None and len(df) >= 5:
-        last_5 = df.tail(5)
-        h, l, c = last_5['High'].max(), last_5['Low'].min(), last_5['Close'].iloc[-1]
-        pp = (h + l + c) / 3.0
-        r1 = 2.0 * pp - l
-        if r1 > entry_price:
-            rr = (r1 - entry_price) / (entry_price - stop)
-            if rr >= 2.0:
-                target = r1
-                target_method = 'pivot_r1'
-
-    # Fallback: 2x risk
+        range_h = recent['High'].max()
+        range_l = recent['Low'].min()
+        if range_h > range_l:
+            target = entry_price + (range_h - range_l)
+            target_method = 'measured_move'
+    # Fallback
     if target is None:
         target = entry_price + 2.0 * (entry_price - stop)
         target_method = 'risk_multiple'
 
-    method = f"{stop_method}+{target_method}"
-    return round(stop, 2), round(target, 2), method
+    return round(stop, 2), round(target, 2), f"{stop_method}+{target_method}"
 
 
 def compute_sr_for_symbol(db, symbol: str) -> tuple:

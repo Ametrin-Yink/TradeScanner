@@ -448,34 +448,57 @@ class SectorAnalyzer:
                 if reason is None:
                     continue
 
-                # Compute technical stop and target
+                # Context-aware entry based on setup type
+                entry = price  # default
+                if reason == 'Near Support':
+                    below_sup = [z for z in support_zones if z['level'] < price]
+                    if below_sup:
+                        entry = max(below_sup, key=lambda z: z['level'])['level']
+                elif reason == 'Strong Momentum':
+                    if ema21 and ema21 < price:
+                        entry = ema21
+                    elif [z for z in support_zones if z['level'] < price]:
+                        below_sup = [z for z in support_zones if z['level'] < price]
+                        entry = max(below_sup, key=lambda z: z['level'])['level']
+                elif reason == 'Breakout':
+                    above_res = [z for z in resistance_zones if z['level'] > price]
+                    if above_res:
+                        entry = min(above_res, key=lambda z: z['level'])['level'] * 1.005
+
+                # Compute OHLC data for measured-move/fib target calculations
                 ohlc_df = self.db.get_market_data_df(symbol)
                 if ohlc_df is not None and len(ohlc_df) > 0:
                     ohlc_df = ohlc_df.rename(columns={
                         'open': 'Open', 'high': 'High', 'low': 'Low',
                         'close': 'Close', 'volume': 'Volume'
                     })
+
+                # Compute stop and target from chart S/R levels
                 stop, target, method = compute_stop_target(
-                    price, atr, support_zones, resistance_zones,
+                    entry, atr, support_zones, resistance_zones,
                     df=ohlc_df,
                     time_horizon=time_horizon,
                 )
 
-                rr = round((target - price) / max(price - stop, 0.01), 1)
+                rr = round((target - entry) / max(entry - stop, 0.01), 1)
                 rr = min(rr, 20.0)
 
                 highlight = StockHighlight(
                     symbol=symbol, name=name, price=price,
                     market_cap=market_cap,
                     reason=reason, detail=detail,
-                    entry=price, stop=stop, target=target, rr=rr,
+                    entry=round(entry, 2), stop=stop, target=target, rr=rr,
                 )
 
-                # Store RS percentile and volume for sorting and report badge
+                # Store metadata for composite scoring
                 highlight.rs_percentile = rs_percentile
                 highlight.volume_ratio = volume_ratio
+                highlight.ret_5d = cache.get('ret_5d', 0) or 0
+                highlight.ema_above = (ema50 and price > ema50) or False
+                highlight.ema21 = ema21 or 0
+                highlight.ema50 = ema50 or 0
 
-                # Per-trade position sizing
+                # Per-trade position sizing (based on actual entry, not current price)
                 pconfig = _load_portfolio_config()
                 risk_per_share = highlight.entry - highlight.stop
                 max_risk_dollars = pconfig['account_value'] * pconfig['risk_per_trade_pct']
@@ -503,22 +526,35 @@ class SectorAnalyzer:
                 all_candidates.append(highlight)
                 used_symbols.add(symbol)
 
-            # Sort by R/R descending, select up to 3 with diverse reasons
-            all_candidates.sort(
-                key=lambda c: (c.rr, c.rs_percentile, c.volume_ratio),
-                reverse=True,
-            )
+            # Multi-factor composite scoring
+            setup_bonus = {'Breakout': 1.0, 'Strong Momentum': 0.9, 'Near Support': 0.7,
+                           'Near Resistance': 0.5, 'Good R/R': 0.5}
+            def composite_score(c):
+                momentum = (c.rs_percentile or 0) * 0.30 + min((c.ret_5d or 0) * 1.5, 10)
+                quality = min(c.rr * 5, 15) + min((c.volume_ratio or 1) * 5, 10)
+                rs_cons = getattr(c, 'rs_consecutive_days_80', 0) or 0
+                quality += min(rs_cons / 2, 10)
+                tb = 1.0 if getattr(c, 'ema_above', False) else 0.4
+                structure = setup_bonus.get(c.reason, 0.5) * 15 + tb * 10
+                return momentum + quality + structure
+
+            all_candidates.sort(key=composite_score, reverse=True)
+
             selected = []
             used_reasons = set()
-            # Pass 1: diverse reasons
             for c in all_candidates:
-                if c.reason not in used_reasons and len(selected) < 3:
+                if len(selected) >= 3:
+                    break
+                if c.reason not in used_reasons:
                     selected.append(c)
                     used_reasons.add(c.reason)
-            # Pass 2: fill remaining by R/R
-            for c in all_candidates:
-                if c not in selected and len(selected) < 3:
-                    selected.append(c)
+                elif len(selected) == 2 and len(used_reasons) == 1:
+                    # Diversity rule: if top 2 are same type, force 3rd to be different
+                    continue
+                else:
+                    # Fill remaining slots by score
+                    if len(selected) < 3:
+                        selected.append(c)
 
             sector.highlights = selected
 
