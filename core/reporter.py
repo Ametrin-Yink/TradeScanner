@@ -55,14 +55,22 @@ tr:hover{background:rgba(212,168,83,.03)}
 """
 
 BAR_CHART_JS = """<script>
-function scrollToTag(n){var id='tag-'+n.replace(/[^a-zA-Z0-9]/g,'-');var el=document.getElementById(id);if(el){el.scrollIntoView({behavior:'smooth'});var card=el.closest('.card');if(card){var b=card.querySelector('.fold-body');if(b)b.classList.remove('hidden');var t=card.querySelector('.fold-toggle');if(t)t.classList.remove('collapsed')}}}
+function showTag(n){
+  var id='tag-'+n.replace(/[^a-zA-Z0-9]/g,'-');
+  var cards=document.querySelectorAll('.tag-card');
+  for(var i=0;i<cards.length;i++){cards[i].style.display='none';}
+  var el=document.getElementById(id);
+  if(el){el.style.display='block';el.scrollIntoView({behavior:'smooth'});}
+  var hint=document.getElementById('tag-hint');
+  if(hint)hint.style.display='none';
+}
 </script>"""
 
 BAR_CHART_HTML = """<div class="bar-chart-wrap"><div class="bar-chart">{bars}</div></div>"""
 
 STATS_STRIP = """<div class="stats-strip"><span class="stats-item"><b>SPY</b> ${spy_price:.2f} <span class="{spy_cls}">{spy_5d:+.2f}% 5d</span></span><span class="stats-item"><b>VIX</b> {vix:.1f}</span><span class="stats-item">{regime}</span></div>"""
 
-SECTOR_CARD = """<div class="card" id="tag-{anchor}">
+SECTOR_CARD = """<div class="card tag-card" id="tag-{anchor}" style="display:none">
 <div class="card-header fold-toggle" onclick="this.classList.toggle('collapsed');this.nextElementSibling.classList.toggle('hidden')"><h3>{name}</h3><span class="badge {chg_cls}">{daily_change}</span></div>
 <div class="fold-body"><div class="detail-row">{outlook}</div>
 <div class="detail-row" style="margin-top:4px"><span class="detail-label">Drivers</span></div>
@@ -130,7 +138,7 @@ class ReportGenerator:
             pct_clr = "var(--volt)" if chg >= 0 else "var(--ember)"
             sign = '+' if chg >= 0 else ''
             anchor = re.sub(r'[^a-zA-Z0-9]', '-', s.name)
-            bars.append(f'<div class="bar-item" onclick="scrollToTag(\'{s.name}\')" title="{s.name}: {sign}{chg:.2f}%"><span class="bar-pct" style="color:{pct_clr}">{sign}{chg:.1f}%</span><div class="bar-fill" style="height:{height_pct:.0f}px;background:{bg}"></div><span class="bar-label">{s.name[:10]}</span></div>')
+            bars.append(f'<div class="bar-item" onclick="showTag(\'{s.name}\')" title="{s.name}: {sign}{chg:.2f}%"><span class="bar-pct" style="color:{pct_clr}">{sign}{chg:.1f}%</span><div class="bar-fill" style="height:{height_pct:.0f}px;background:{bg}"></div><span class="bar-label">{s.name[:10]}</span></div>')
         parts.append(BAR_CHART_HTML.format(bars=''.join(bars)))
         parts.append(BAR_CHART_JS)
 
@@ -164,6 +172,7 @@ class ReportGenerator:
 
         # Tag Details
         parts.append('<h2>Tag Details</h2>')
+        parts.append('<div id="tag-hint" style="color:var(--ash);font-size:12px;margin-bottom:12px">↑ Click a bar above to see tag details</div>')
         reason_map = {'Near Resistance': 'badge-neutral', 'Near Support': 'badge-neutral', 'Breakout': 'badge-up', 'Strong Momentum': 'badge-up', 'Good R/R': 'badge-up'}
         for s in sectors:
             chg = s.daily_change
