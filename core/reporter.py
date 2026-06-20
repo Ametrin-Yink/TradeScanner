@@ -95,9 +95,14 @@ function drawCandles(canvasId,data,supports,resistances,sym){
   var pw=W-margin.left-margin.right,ph=H-margin.top-margin.bottom;
   ctx.fillStyle='#0b1019';ctx.fillRect(0,0,W,H);
 
+  var curPrice=data[data.length-1].close;
+  var cutoff=curPrice*0.15;
+  var nearSupports=supports.filter(function(s){return curPrice-s<=cutoff;});
+  var nearResistances=resistances.filter(function(r){return r-curPrice<=cutoff;});
+
   var prices=[];data.forEach(function(d){prices.push(d.high,d.low);});
-  supports.forEach(function(s){prices.push(s);});
-  resistances.forEach(function(r){prices.push(r);});
+  nearSupports.forEach(function(s){prices.push(s);});
+  nearResistances.forEach(function(r){prices.push(r);});
   var minP=Math.min.apply(null,prices),maxP=Math.max.apply(null,prices);
   var range=maxP-minP||1;
   var barW=Math.max(1.5,(pw/data.length)*0.7);barW=Math.min(barW,8);
@@ -131,23 +136,23 @@ function drawCandles(canvasId,data,supports,resistances,sym){
   }
 
   ctx.setLineDash([]);
-  for(var i=0;i<supports.length;i++){
-    var sy=margin.top+(maxP-supports[i])/range*ph;
+  for(var i=0;i<nearSupports.length;i++){
+    var sy=margin.top+(maxP-nearSupports[i])/range*ph;
     ctx.strokeStyle='rgba(126,203,90,0.8)';ctx.lineWidth=1.5;
     ctx.beginPath();ctx.moveTo(margin.left,sy);ctx.lineTo(W-margin.right,sy);ctx.stroke();
     ctx.fillStyle='#7ecb5a';ctx.font='bold 11px monospace';
-    ctx.fillText('S'+i+': $'+supports[i].toFixed(2),margin.left+2,sy-3);
+    ctx.fillText('S'+i+': $+nearSupports[i].toFixed(2),margin.left+2,sy-3);
   }
-  for(var i=0;i<resistances.length;i++){
-    var ry=margin.top+(maxP-resistances[i])/range*ph;
+  for(var i=0;i<nearResistances.length;i++){
+    var ry=margin.top+(maxP-nearResistances[i])/range*ph;
     ctx.strokeStyle='rgba(224,85,61,0.8)';ctx.lineWidth=1.5;
     ctx.beginPath();ctx.moveTo(margin.left,ry);ctx.lineTo(W-margin.right,ry);ctx.stroke();
     ctx.fillStyle='#e0553d';ctx.font='bold 11px monospace';
-    ctx.fillText('R'+i+': $'+resistances[i].toFixed(2),margin.left+2,ry-3);
+    ctx.fillText('R'+i+': $+nearResistances[i].toFixed(2),margin.left+2,ry-3);
   }
 
   var title=document.getElementById(canvasId).parentNode.querySelector('div');
-  if(title)title.innerHTML='<span style="color:var(--gold);font-weight:600;font-size:13px">'+sym+'</span><span style="color:var(--ash);font-size:10px">S:'+supports.length+' | R:'+resistances.length+'</span>';
+  if(title)title.innerHTML='<span style="color:var(--gold);font-weight:600;font-size:13px">'+sym+'</span><span style="color:var(--ash);font-size:10px">S:'+nearSupports.length+' | R:+nearResistances.length+'</span>';
 }
 </script>"""
 
