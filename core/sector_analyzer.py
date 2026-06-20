@@ -478,6 +478,8 @@ class SectorAnalyzer:
                     entry, atr, support_zones, resistance_zones,
                     df=ohlc_df,
                     time_horizon=time_horizon,
+                    ema21=ema21 or 0.0,
+                    ema50=ema50 or 0.0,
                 )
 
                 rr = round((target - entry) / max(entry - stop, 0.01), 1)

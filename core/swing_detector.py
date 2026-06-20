@@ -97,13 +97,15 @@ def compute_stop_target(
     resistance_zones: List[Dict],
     df,  # DataFrame with OHLC
     time_horizon: str = 'swing',
+    ema21: float = 0.0,
+    ema50: float = 0.0,
 ) -> Tuple[float, float, str]:
     """Compute stop-loss and target using chart-aligned S/R levels.
 
-    Stop: nearest support below entry. Fallback: 1.5x ATR.
+    Stop: nearest support below entry. Fallback chain: EMA21 → EMA50 → 1.5x ATR.
     Target: nearest resistance above entry. Fallback: Fibonacci extension or 2x risk.
     """
-    # -- Stop: nearest support below entry --
+    # -- Stop: nearest support below entry (within 15%) --
     stop = None
     stop_method = None
     below = [z for z in support_zones if z['level'] < entry_price]
@@ -112,6 +114,16 @@ def compute_stop_target(
         if entry_price - nearest['level'] <= entry_price * 0.15:
             stop = nearest['level']
             stop_method = 'support'
+    # Dynamic support: EMA21 if within 15%
+    if stop is None and ema21 > 0 and ema21 < entry_price:
+        if entry_price - ema21 <= entry_price * 0.15:
+            stop = ema21
+            stop_method = 'ema21'
+    # Dynamic support: EMA50 if within 15%
+    if stop is None and ema50 > 0 and ema50 < entry_price:
+        if entry_price - ema50 <= entry_price * 0.15:
+            stop = ema50
+            stop_method = 'ema50'
     if stop is None:
         stop = entry_price - 1.5 * atr
         stop_method = 'atr'
@@ -147,7 +159,7 @@ def compute_stop_target(
 
 
 def compute_sr_for_symbol(db, symbol: str) -> tuple:
-    """Compute support/resistance levels for a symbol from market_data.
+    """Compute support/resistance levels from recent (60-bar) and full-range OHLC.
     Returns (supports: List[float], resistances: List[float]).
     Updates tier1_cache with the results.
     """
@@ -164,7 +176,9 @@ def compute_sr_for_symbol(db, symbol: str) -> tuple:
         df = pd.DataFrame(rows, columns=['date', 'open', 'high', 'low', 'close'])
         df.columns = ['date', 'Open', 'High', 'Low', 'Close']
 
-        swing_highs, swing_lows = detect_swings(df, order=5)
+        # Use recent 60 bars for active trading levels
+        recent = df.tail(60)
+        swing_highs, swing_lows = detect_swings(recent, order=5)
         high_zones = cluster_levels(swing_highs, tolerance=0.005)
         low_zones = cluster_levels(swing_lows, tolerance=0.005)
 
