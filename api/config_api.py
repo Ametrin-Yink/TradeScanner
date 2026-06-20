@@ -1,5 +1,6 @@
 """Configuration API Blueprint for TradeScanner."""
 import logging
+import os
 import yaml
 from pathlib import Path
 from flask import Blueprint, jsonify, request
@@ -13,6 +14,16 @@ config_api = Blueprint('config_api', __name__)
 db = Database()
 CONFIG_DIR = Path(__file__).parent.parent / "config"
 STRATEGY_CONFIG_PATH = CONFIG_DIR / "strategy_config.yaml"
+
+
+@config_api.before_request
+def check_auth():
+    api_key = os.getenv('API_KEY', 'Ametrin+1')
+    if not api_key:
+        return
+    auth = request.headers.get('Authorization', '')
+    if auth != f'Bearer {api_key}':
+        return jsonify({'status': 'error', 'message': 'Unauthorized'}), 401
 
 
 @config_api.route('/api/config/sectors', methods=['GET'])

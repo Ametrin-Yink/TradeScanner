@@ -11,6 +11,13 @@ function formatSize(bytes) {
   return n + " B";
 }
 
+function previewReport(url) {
+  const preview = document.getElementById("reportPreview");
+  const frame = document.getElementById("reportFrame");
+  preview.style.display = "block";
+  frame.src = url;
+}
+
 export async function loadReports() {
   const tbody = document.getElementById("reportsTableBody");
   const empty = document.getElementById("reportsEmpty");
@@ -60,12 +67,23 @@ function renderReports(reports) {
       '<td class="size">' +
       formatSize(r.size) +
       "</td>" +
-      '<td><a href="' +
+      '<td><button class="btn btn-sm preview-btn" data-url="' +
+      escapeHtml(url) +
+      '">Preview</button> ' +
+      '<a href="' +
       escapeHtml(url) +
       '" target="_blank" class="btn btn-sm">Open</a></td>';
     tbody.appendChild(tr);
   });
 }
+
+// --- Preview Button Delegation ---
+document.getElementById("reportsTableBody").addEventListener("click", (e) => {
+  const btn = e.target.closest(".preview-btn");
+  if (btn) {
+    previewReport(btn.dataset.url);
+  }
+});
 
 // --- Search Filter ---
 document.getElementById("reportsSearch").addEventListener("input", () => {

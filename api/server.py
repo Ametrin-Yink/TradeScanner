@@ -8,6 +8,7 @@ from typing import Optional
 from flask import Flask, jsonify, request
 
 import os
+from functools import wraps
 from config.settings import settings, REPORTS_DIR, CHARTS_DIR
 from data.db import Database
 from core.fetcher import DataFetcher
@@ -30,6 +31,20 @@ _reporter = None
 _last_scan_result = None
 _last_scan_time = None
 _SCAN_CACHE_SECONDS = 3600  # 1 hour
+
+API_KEY = os.getenv('API_KEY', 'Ametrin+1')
+
+
+def require_auth(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not API_KEY:
+            return f(*args, **kwargs)
+        auth = request.headers.get('Authorization', '')
+        if auth != f'Bearer {API_KEY}':
+            return jsonify({'status': 'error', 'message': 'Unauthorized'}), 401
+        return f(*args, **kwargs)
+    return decorated
 
 
 def validate_symbol(symbol: str) -> bool:
@@ -56,7 +71,16 @@ def index():
     })
 
 
+@app.route('/api/config/auth-key')
+def auth_key():
+    """Return API key to dashboard JS (localhost only)."""
+    if request.remote_addr not in ('127.0.0.1', '::1', 'localhost'):
+        return jsonify({'status': 'error', 'message': 'Forbidden'}), 403
+    return jsonify({'key': API_KEY})
+
+
 @app.route('/scan', methods=['POST'])
+@require_auth
 def trigger_scan():
     """Trigger a manual scan."""
     global _last_scan_result, _last_scan_time
@@ -168,6 +192,7 @@ def trigger_scan():
 
 
 @app.route('/status', methods=['GET'])
+@require_auth
 def get_status():
     """Get system status."""
     try:
@@ -198,6 +223,7 @@ def get_status():
 
 
 @app.route('/stocks', methods=['GET'])
+@require_auth
 def list_stocks():
     """List all active stocks."""
     try:
@@ -212,6 +238,7 @@ def list_stocks():
 
 
 @app.route('/stocks/add', methods=['POST'])
+@require_auth
 def add_stock():
     """Add a stock to the universe."""
     try:
@@ -245,6 +272,7 @@ def add_stock():
 
 
 @app.route('/stocks/remove', methods=['POST'])
+@require_auth
 def remove_stock():
     """Remove a stock from the universe."""
     try:
@@ -280,6 +308,7 @@ def remove_stock():
 
 
 @app.route('/history', methods=['GET'])
+@require_auth
 def get_history():
     """Get recent scan history."""
     try:
@@ -358,6 +387,7 @@ def serve_chart(filename):
 
 
 @app.route('/reports', methods=['GET'])
+@require_auth
 def list_reports():
     """List available reports."""
     try:

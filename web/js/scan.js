@@ -3,7 +3,7 @@ import { api, showToast } from "./api.js";
 
 export async function loadScanStatus() {
   try {
-    const data = await api("GET", "/api/scan/status");
+    const data = await api("GET", "/status");
     if (data.last_scan) {
       document.getElementById("statLastRun").textContent = data.last_scan.date;
       document.getElementById("statStatus").textContent = data.last_scan.status;
@@ -13,43 +13,65 @@ export async function loadScanStatus() {
         data.last_scan.candidates || "--";
     }
   } catch (e) {
-    // silently ignore
+    /* silent */
   }
 }
 
 export function initScan() {
-  // Module-level listeners below handle setup
-}
+  document.getElementById("runScanBtn").addEventListener("click", async () => {
+    const btn = document.getElementById("runScanBtn");
+    const result = document.getElementById("scanResult");
+    const progress = document.getElementById("scanProgress");
+    btn.disabled = true;
+    btn.textContent = "Scanning...";
+    progress.style.display = "block";
+    result.style.display = "none";
 
-// --- Run Scan ---
-document.getElementById("runScanBtn").addEventListener("click", async () => {
-  const btn = document.getElementById("runScanBtn");
-  const result = document.getElementById("scanResult");
-  btn.disabled = true;
-  btn.textContent = "Scanning...";
-  result.style.display = "block";
-  result.innerHTML =
-    '<div class="loading-pulse">Running scan pipeline -- this takes several minutes...</div>';
-  try {
-    const data = await api("POST", "/scan");
-    result.innerHTML =
-      '<div style="color:var(--accent);font-weight:600">Scan complete!</div>' +
-      '<div style="margin-top:8px;color:var(--text-secondary)">Candidates found: ' +
-      data.candidates_found +
-      "</div>" +
-      '<div style="color:var(--text-secondary)">Report: <a href="' +
-      data.report_path +
-      '" target="_blank" style="color:var(--accent)">' +
-      data.report_path +
-      "</a></div>";
-    showToast("Scan complete: " + data.candidates_found + " candidates");
-    loadScanStatus();
-  } catch (e) {
-    result.innerHTML =
-      '<div style="color:var(--danger)">Scan failed: ' + e.message + "</div>";
-    showToast("Scan failed: " + e.message, true);
-  } finally {
-    btn.disabled = false;
-    btn.textContent = "Run Full Scan";
-  }
-});
+    let pollInterval;
+    try {
+      // Start scan
+      const scanPromise = api("POST", "/scan");
+
+      // Poll progress
+      pollInterval = setInterval(async () => {
+        try {
+          const status = await api("GET", "/status");
+          if (status.last_scan && status.last_scan.status === "running") {
+            progress.textContent =
+              "Scan in progress... " +
+              (status.last_scan.duration
+                ? Math.round(status.last_scan.duration) + "s elapsed"
+                : "");
+          }
+        } catch (e) {
+          /* polling errors are non-fatal */
+        }
+      }, 5000);
+
+      const data = await scanPromise;
+      clearInterval(pollInterval);
+      progress.style.display = "none";
+
+      result.style.display = "block";
+      result.innerHTML =
+        '<div style="color:var(--accent);font-weight:600">Scan complete!</div>' +
+        '<div style="margin-top:8px;color:var(--text-secondary)">Report: <a href="' +
+        data.report_path +
+        '" target="_blank" style="color:var(--accent)">' +
+        data.report_path +
+        "</a></div>";
+      showToast("Scan complete");
+      loadScanStatus();
+    } catch (e) {
+      clearInterval(pollInterval);
+      progress.style.display = "none";
+      result.style.display = "block";
+      result.innerHTML =
+        '<div style="color:var(--danger)">Scan failed: ' + e.message + "</div>";
+      showToast("Scan failed: " + e.message, true);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Run Full Scan";
+    }
+  });
+}
