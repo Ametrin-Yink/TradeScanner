@@ -44,8 +44,8 @@ def test_fetcher_default_values():
     """Test DataFetcher default values."""
     fetcher = DataFetcher()
 
-    assert fetcher.max_workers == 2
-    assert fetcher.request_delay == 0.5
+    assert fetcher.max_workers == 8
+    assert fetcher.request_delay == 0.25
     assert fetcher.max_retries == 3
 
 

@@ -6,7 +6,10 @@ from dataclasses import dataclass
 import logging
 import threading
 
-from core.scoring_utils import calculate_clv as _calc_clv
+def _calc_clv(close: float, high: float, low: float) -> float:
+    """Close Location Value: (close-low)/(high-low). 0=at low, 1=at high."""
+    denom = high - low
+    return (close - low) / denom if denom > 0 else 0.5
 
 logger = logging.getLogger(__name__)
 

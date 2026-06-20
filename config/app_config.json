@@ -1,0 +1,7 @@
+{
+  "scan_time": "06:00",
+  "account_value": 50000,
+  "risk_per_trade_pct": 1,
+  "ai_api_key": "",
+  "ai_model": " deepseek-v4-pro"
+}
