@@ -1,4 +1,11 @@
 """Flask API server for trade scanner."""
+import sys
+from pathlib import Path as _Path
+# Ensure project root is on sys.path when run directly
+_PROJECT_ROOT = _Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
 import logging
 import re
 from datetime import datetime
@@ -11,21 +18,14 @@ import os
 from config.settings import settings, REPORTS_DIR, CHARTS_DIR
 from data.db import Database
 from core.fetcher import DataFetcher
-from core.screener import StrategyScreener
-from core.market_analyzer import MarketAnalyzer
-from core.selector import CandidateSelector
-from core.analyzer import OpportunityAnalyzer
+from core.sector_analyzer import SectorAnalyzer
 from core.reporter import ReportGenerator
+from api.config_api import config_api
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Module-level singletons - created once, reused across requests
-_screener = None
-_market_analyzer = None
-_selector = None
-_opportunity_analyzer = None
-_reporter = None
+# Module-level singletons
 _last_scan_result = None
 _last_scan_time = None
 _SCAN_CACHE_SECONDS = 3600  # 1 hour
@@ -39,7 +39,9 @@ def validate_symbol(symbol: str) -> bool:
 
 
 app = Flask(__name__)
+app.register_blueprint(config_api)
 db = Database()
+db._migrate_to_tags()
 fetcher = DataFetcher(db=db)
 
 
@@ -53,110 +55,46 @@ def index():
     })
 
 
+@app.route('/dashboard')
+def dashboard():
+    """Serve the config dashboard HTML."""
+    from flask import send_from_directory
+    web_dir = Path(__file__).parent.parent / "web"
+    return send_from_directory(str(web_dir), "dashboard.html")
+
+
 @app.route('/scan', methods=['POST'])
 def trigger_scan():
     """Trigger a manual scan."""
     global _last_scan_result, _last_scan_time
     try:
-        data = request.get_json() or {}
-        mode = data.get('mode', 'full')  # quick, full
-        symbols = data.get('symbols')
-
-        if symbols:
-            # Validate all symbols
-            invalid_symbols = [s for s in symbols if not validate_symbol(s)]
-            if invalid_symbols:
-                return jsonify({
-                    'status': 'error',
-                    'message': f'Invalid stock symbols: {invalid_symbols}'
-                }), 400
-        else:
-            symbols = db.get_active_stocks()
-
-        # Check cache first
         if _last_scan_result and _last_scan_time:
             age = (datetime.now() - _last_scan_time).total_seconds()
             if age < _SCAN_CACHE_SECONDS:
                 return jsonify({**_last_scan_result, 'cached': True})
 
-        # Run scan pipeline - use module-level singletons
-        screener = StrategyScreener(fetcher=fetcher, db=db)
-        market_analyzer = MarketAnalyzer()
-        selector = CandidateSelector()
-        opportunity_analyzer = OpportunityAnalyzer(fetcher=fetcher)
-        reporter = ReportGenerator(fetcher=fetcher)
+        logger.info("Starting sector analysis scan...")
+        analyzer = SectorAnalyzer(db=Database())
+        result = analyzer.analyze()
+        report_path = ReportGenerator().generate_report(result)
 
-        # Step 1: Market sentiment
-        logger.info("Analyzing market sentiment...")
-        sentiment_result = market_analyzer.analyze_sentiment()
-        market_sentiment = sentiment_result.get('sentiment', 'neutral')
-
-        # Step 2: Screen all symbols
-        logger.info(f"Screening {len(symbols)} symbols...")
-        candidates = screener.screen_all(symbols)
-
-        # Step 3: Select top 30
-        logger.info("Selecting top 30...")
-        top_30 = selector.select_top_30(candidates, market_sentiment)
-
-        # Step 4: Deep analysis
-        logger.info("Analyzing opportunities...")
-        analyzed = opportunity_analyzer.analyze_all(top_30, market_sentiment)
-
-        # Step 5: Generate report
-        logger.info("Generating report...")
-        fail_symbols = []  # Track failed symbols during fetch
-        report_path = reporter.generate_report(
-            opportunities=analyzed,
-            market_sentiment=market_sentiment,
-            total_stocks=len(symbols),
-            success_count=len(symbols),  # Simplified
-            fail_count=len(fail_symbols),
-            fail_symbols=fail_symbols
-        )
-
-        # Save scan result to DB
-        from data.db import Database
-        db_save = Database()
-        scan_result = {
-            'scan_date': datetime.now().strftime('%Y-%m-%d'),
-            'scan_time': datetime.now().strftime('%H:%M:%S'),
-            'market_sentiment': market_sentiment,
-            'top_opportunities': [{
-                'symbol': o.symbol,
-                'strategy': o.strategy,
-                'entry_price': o.entry_price,
-                'stop_loss': o.stop_loss,
-                'take_profit': o.take_profit,
-                'confidence': o.confidence
-            } for o in analyzed[:10]],
-            'all_candidates': [{
-                'symbol': o.symbol,
-                'strategy': o.strategy,
-                'confidence': o.confidence
-            } for o in analyzed],
-            'total_stocks': len(symbols),
-            'success_count': len(symbols),
-            'fail_count': 0,
-            'fail_symbols': [],
-            'report_path': report_path
-        }
-        db_save.save_scan_result(scan_result)
+        sectors_count = len(result['sectors'])
+        total_stocks = sum(s.stock_count for s in result['sectors'])
+        highlights = sum(len(s.highlights) for s in result['sectors'])
 
         response_data = {
             'status': 'success',
-            'scan_date': scan_result['scan_date'],
-            'scan_time': scan_result['scan_time'],
-            'market_sentiment': market_sentiment,
-            'candidates_found': len(candidates),
-            'top_10_count': len(analyzed),
+            'scan_date': datetime.now().strftime('%Y-%m-%d'),
+            'scan_time': datetime.now().strftime('%H:%M:%S'),
+            'regime': result['market'].regime,
+            'sectors': sectors_count,
+            'stocks': total_stocks,
+            'highlights': highlights,
             'report_path': report_path
         }
 
-        # Cache the result
         _last_scan_result = response_data
         _last_scan_time = datetime.now()
-
         return jsonify(response_data)
 
     except Exception as e:
@@ -348,6 +286,26 @@ def list_reports():
     except Exception as e:
         logger.error(f"List reports failed: {e}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/scan/status', methods=['GET'])
+def scan_status():
+    """Return last scan status."""
+    try:
+        conn = db.get_connection()
+        cursor = conn.execute(
+            "SELECT run_date, status, total_duration, symbols_count, candidates_count "
+            "FROM workflow_status ORDER BY run_date DESC LIMIT 1"
+        )
+        row = cursor.fetchone()
+        if not row:
+            return jsonify({'last_scan': None})
+        return jsonify({'last_scan': {
+            'date': row[0], 'status': row[1], 'duration': row[2],
+            'stocks': row[3], 'candidates': row[4]
+        }})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 
 def run_server(host='0.0.0.0', port=None):
     """Run the Flask server."""
