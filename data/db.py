@@ -55,6 +55,7 @@ class Database:
         finally:
             conn.close()
         self._add_performance_indexes()
+        self._ensure_simulation_table()
 
     def _add_performance_indexes(self):
         conn = sqlite3.connect(self.db_path)
@@ -64,6 +65,33 @@ class Database:
             conn.commit()
         finally:
             conn.close()
+
+    def _ensure_simulation_table(self):
+        """Create simulation_positions table for trade tracking."""
+        conn = self.get_connection()
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS simulation_positions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                opened_date TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                tag TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                entry_price REAL NOT NULL,
+                stop_price REAL NOT NULL,
+                target_price REAL NOT NULL,
+                rr_ratio REAL NOT NULL,
+                position_size_shares INTEGER NOT NULL,
+                risk_dollars REAL NOT NULL,
+                time_horizon_days INTEGER NOT NULL,
+                close_date TEXT,
+                close_price REAL,
+                outcome TEXT DEFAULT 'open',
+                pnl_dollars REAL,
+                pnl_r REAL,
+                report_date TEXT NOT NULL
+            )
+        """)
+        conn.commit()
 
     def _migrate_db(self, conn: sqlite3.Connection):
         """Migrate database schema if needed."""
