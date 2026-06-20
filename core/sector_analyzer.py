@@ -517,12 +517,41 @@ class SectorAnalyzer:
             score = daily * 0.25 + ret_norm * 0.35 + rs * 0.30 + uptrend_bonus * 0.10
             scored.append((score, s.name))
 
+        scored = self._apply_feedback(scored)
+
         scored.sort(key=lambda x: x[0], reverse=True)
         focus = [s[1] for s in scored[:3]]
         avoid = [s[1] for s in scored[-3:]]
 
         reasoning = self._ai_focus_reasoning(market, focus, avoid, scored[:5])
         return FocusSummary(focus_sectors=focus, avoid_sectors=avoid, reasoning=reasoning)
+
+    def _apply_feedback(self, scored):
+        """Adjust tag scores based on simulation outcomes."""
+        conn = self.db.get_connection()
+        outcomes = conn.execute("""
+            SELECT tag, outcome, COUNT(*) as cnt
+            FROM simulation_positions
+            WHERE outcome IN ('win', 'loss', 'expired')
+            GROUP BY tag, outcome
+        """).fetchall()
+
+        tag_perf = {}
+        for tag, outcome, cnt in outcomes:
+            tag_perf.setdefault(tag, {'win': 0, 'total': 0})
+            tag_perf[tag]['total'] += cnt
+            if outcome == 'win':
+                tag_perf[tag]['win'] += cnt
+
+        scored_out = list(scored)
+        for i, (score, name) in enumerate(scored_out):
+            perf = tag_perf.get(name)
+            if perf and perf['total'] >= 5:
+                win_rate = perf['win'] / perf['total']
+                bonus = (win_rate - 0.5) * 0.10
+                scored_out[i] = (score + bonus, name)
+
+        return scored_out
 
     def _ai_focus_reasoning(self, market: MarketOverview, focus: List[str], avoid: List[str], top5) -> str:
         """Call AI (no search) for 2-3 sentence focus summary reasoning."""
