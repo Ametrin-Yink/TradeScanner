@@ -1,675 +1,190 @@
-"""Report generator - create HTML reports with charts."""
+"""Report generator - sector-first HTML reports with amber palette."""
 import logging
-import json
 from pathlib import Path
 from datetime import datetime, timedelta
-from typing import List, Optional, Dict
+from typing import Optional
 
-import pandas as pd
-
-from core.analyzer import AnalyzedOpportunity
-from core.fetcher import DataFetcher
-from core.plotly_charts import generate_static_plotly_chart
-from config.settings import settings, REPORTS_DIR, CHARTS_DIR
+from config.settings import settings, REPORTS_DIR
 
 logger = logging.getLogger(__name__)
 
+STYLE = """
+:root{--ink:#0b1019;--paper:#141c26;--divider:#1c2738;--gold:#d4a853;--gold-dim:rgba(212,168,83,.12);--frost:#a8b9d1;--ash:#5d6d80;--ember:#e0553d;--volt:#7ecb5a;--radius:6px}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--ink);color:var(--frost);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:24px;max-width:1100px;margin:0 auto;line-height:1.5}
+h1{font-size:20px;font-weight:600;letter-spacing:-.01em;margin-bottom:2px}
+h2{font-size:15px;font-weight:600;margin:28px 0 10px;color:var(--gold)}
+h3{font-size:13px;font-weight:600;margin:0}
+.header{display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px;margin-bottom:20px;padding-bottom:12px;border-bottom:1px solid var(--divider)}
+.header-meta{font-size:11px;color:var(--ash)}
+.badge{display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.03em}
+.badge-up{background:rgba(126,203,90,.12);color:var(--volt)}
+.badge-down{background:rgba(224,85,61,.12);color:var(--ember)}
+.badge-neutral{background:rgba(93,109,128,.12);color:var(--ash)}
+.card{background:var(--paper);border-radius:var(--radius);padding:14px 16px;margin-bottom:10px}
+.card-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.positioning{display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap}
+.pos-focus{flex:1;min-width:200px;padding:12px 16px;background:var(--paper);border-radius:var(--radius);border-left:3px solid var(--volt)}
+.pos-avoid{flex:1;min-width:200px;padding:12px 16px;background:var(--paper);border-radius:var(--radius);border-left:3px solid var(--ember)}
+.pos-label{font-size:10px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px}
+.pos-focus .pos-label{color:var(--volt)}.pos-avoid .pos-label{color:var(--ember)}
+.pos-sectors{font-size:14px;font-weight:600}
+.pos-reason{font-size:11px;color:var(--ash);margin-top:4px;line-height:1.4}
+table{width:100%;border-collapse:collapse;font-size:11px;margin-top:6px}
+th{text-align:left;color:var(--ash);font-weight:500;padding:4px 8px;border-bottom:1px solid var(--divider);font-size:10px;text-transform:uppercase;letter-spacing:.05em}
+td{padding:4px 8px;border-bottom:1px solid rgba(28,39,56,.5);font-family:'JetBrains Mono','Cascadia Code','Consolas',monospace;font-size:10px}
+td.num{text-align:right}
+td.name{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
+tr:hover{background:rgba(212,168,83,.03)}
+.up{color:var(--volt)}.down{color:var(--ember)}.dim{color:var(--ash)}
+.footer{text-align:center;font-size:10px;color:var(--ash);margin-top:32px;padding:16px 0;border-top:1px solid var(--divider)}
+.detail-row{margin:3px 0;font-size:11px;line-height:1.5}
+.detail-label{color:var(--ash);font-size:9px;text-transform:uppercase;letter-spacing:.06em;margin-right:6px}
+.driver,.risk{display:block;font-size:11px;line-height:1.5;padding:3px 0 3px 10px;margin:1px 0;border-left:2px solid}
+.driver{border-left-color:rgba(212,168,83,.4)}.risk{border-left-color:rgba(224,85,61,.4)}
+.stats-strip{display:flex;gap:16px;flex-wrap:wrap;font-size:12px;padding:8px 0;margin-bottom:16px;border-bottom:1px solid var(--divider)}
+.stats-item{color:var(--frost)}.stats-item b{color:var(--gold);font-weight:500}
+/* Heatmap bar */
+.heatmap-wrap{margin-bottom:20px}
+.heatmap-bar{display:flex;height:36px;border-radius:4px;overflow:hidden;gap:1px;background:var(--divider)}
+.heatmap-seg{display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:600;cursor:default;transition:filter .15s;min-width:0}
+.heatmap-seg:hover{filter:brightness(1.3)}
+.heatmap-labels{display:flex;font-size:10px;margin-top:4px;gap:1px;color:var(--ash)}
+.heatmap-labels span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:center}
+/* Fold */
+.fold-toggle{cursor:pointer;user-select:none;transition:background .15s}.fold-toggle:hover{background:var(--gold-dim);border-radius:4px}.fold-toggle h3::before{content:'\\25BC\\00a0';font-size:9px;transition:transform .2s}.fold-toggle.collapsed h3::before{content:'\\25B6\\00a0'}.fold-body{overflow:hidden;transition:max-height .3s ease,opacity .2s;max-height:5000px;opacity:1}.fold-body.hidden{max-height:0;opacity:0}
+"""
+
+HEATMAP_BAR = """<div class="heatmap-wrap"><div class="heatmap-bar">{segments}</div><div class="heatmap-labels">{labels}</div></div>"""
+
+STATS_STRIP = """<div class="stats-strip"><span class="stats-item"><b>SPY</b> ${spy_price:.2f} <span class="{spy_cls}">{spy_5d:+.2f}% 5d</span></span><span class="stats-item"><b>VIX</b> {vix:.1f}</span><span class="stats-item">{regime}</span></div>"""
+
+SECTOR_CARD = """<div class="card">
+<div class="card-header fold-toggle" onclick="this.classList.toggle('collapsed');this.nextElementSibling.classList.toggle('hidden')"><h3>{name}</h3><span class="badge {chg_cls}">{daily_change}</span></div>
+<div class="fold-body"><div class="detail-row">{outlook}</div>
+<div class="detail-row" style="margin-top:4px"><span class="detail-label">Drivers</span></div>
+{drivers}
+<div class="detail-row" style="margin-top:4px"><span class="detail-label">Risks</span></div>
+{risks}
+{highlights_html}
+</div></div>"""
+
+HIGHLIGHT_ROW = """<tr><td class="sym">{symbol}</td><td class="name">{name}</td><td class="num">${price:.2f}</td><td><span class="badge {reason_cls}">{reason}</span></td><td class="num">${entry:.2f}</td><td class="num">${stop:.2f}</td><td class="num">${target:.2f}</td><td class="num">{rr}</td></tr>"""
+
 
 class ReportGenerator:
-    """Generate HTML reports with K-line charts."""
-
-    def __init__(self, fetcher: Optional[DataFetcher] = None):
-        """Initialize report generator."""
-        self.fetcher = fetcher or DataFetcher()
+    def __init__(self):
         self.reports_dir = REPORTS_DIR
-        self.charts_dir = CHARTS_DIR
         self.max_reports = settings.get('report', {}).get('max_reports', 15)
-        self.retention_days = settings.get('report', {}).get('retention_days', 15)
 
-    def generate_report(
-        self,
-        opportunities: List[AnalyzedOpportunity],
-        market_sentiment: str,
-        total_stocks: int,
-        success_count: int,
-        fail_count: int,
-        fail_symbols: List[str],
-        all_candidates: List = None,
-        sentiment_result: Dict = None,
-        symbol_data_cache: Dict = None
-    ) -> str:
-        """
-        Generate full HTML report.
-
-        Args:
-            opportunities: List of analyzed opportunities
-            market_sentiment: Market sentiment string
-            total_stocks: Total stocks scanned
-            success_count: Successfully fetched stocks
-            fail_count: Failed stocks
-            fail_symbols: List of failed symbols
-            all_candidates: List of all candidates
-            sentiment_result: Full sentiment analysis result with reasoning
-            symbol_data_cache: Optional dict of cached symbol DataFrames
-
-        Returns:
-            Path to generated report
-        """
+    def generate_report(self, analysis_result: dict) -> str:
+        market = analysis_result['market']
+        sectors = analysis_result['sectors']
+        focus = analysis_result.get('focus_summary')
+        timestamp = analysis_result.get('timestamp', datetime.now().isoformat())
         scan_date = datetime.now().strftime('%Y-%m-%d')
-        scan_time = datetime.now().strftime('%H:%M:%S')
 
-        try:
-            # Generate charts using cached data if available
-            chart_paths = self._generate_charts(opportunities, symbol_data_cache)
-
-            # Build HTML
-            html = self._build_html(
-                opportunities=opportunities,
-                all_candidates=all_candidates or [],
-                market_sentiment=market_sentiment,
-                sentiment_result=sentiment_result or {},
-                scan_date=scan_date,
-                scan_time=scan_time,
-                total_stocks=total_stocks,
-                success_count=success_count,
-                fail_count=fail_count,
-                fail_symbols=fail_symbols,
-                chart_paths=chart_paths
-            )
-        except Exception as e:
-            logger.error(f"HTML generation failed: {e}, using fallback template")
-            html = self._build_fallback_html(
-                scan_date=scan_date,
-                scan_time=scan_time,
-                error_message=str(e)
-            )
-
-        # Save report
-        report_filename = f"report_{scan_date}.html"
-        report_path = self.reports_dir / report_filename
-
-        with open(report_path, 'w', encoding='utf-8') as f:
-            f.write(html)
-
+        html = self._build_html(market, sectors, focus, timestamp)
+        report_path = self.reports_dir / f"report_{scan_date}.html"
+        report_path.write_text(html, encoding='utf-8')
         logger.info(f"Report generated: {report_path}")
-
-        # Cleanup old reports
         self._cleanup_old_reports()
-
         return str(report_path)
 
-    def _generate_charts(
-        self,
-        opportunities: List[AnalyzedOpportunity],
-        symbol_data_cache: Dict = None
-    ) -> Dict[str, str]:
-        """Generate K-line charts for top opportunities."""
-        chart_paths = {}
+    def _build_html(self, market, sectors, focus, timestamp) -> str:
+        parts = ['<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>TradeScanner · ', market.date, '</title><style>', STYLE, '</style></head><body>']
 
-        for opp in opportunities[:10]:  # Top 10 only
-            try:
-                chart_path = self._generate_kline_chart(opp, symbol_data_cache)
-                if chart_path:
-                    chart_paths[opp.symbol] = chart_path
-            except Exception as e:
-                logger.error(f"Failed to generate chart for {opp.symbol}: {e}")
+        # Header
+        total_stocks = len(set(h.symbol for s in sectors for h in s.highlights))
+        parts.append(f'<div class="header"><div><h1>TradeScanner</h1><div class="header-meta">{market.date} &middot; {len(sectors)} tags &middot; {total_stocks} picks</div></div><div class="header-meta" style="text-align:right;font-size:10px">{timestamp[:16]}</div></div>')
 
-        return chart_paths
-
-    def _generate_kline_chart(self, opp: AnalyzedOpportunity, symbol_data_cache: Dict = None) -> Optional[str]:
-        """Generate static PNG chart for a single stock."""
-        # Use cached data if available, otherwise fetch
-        if symbol_data_cache and opp.symbol in symbol_data_cache:
-            df = symbol_data_cache[opp.symbol]
-            logger.debug(f"Using cached data for {opp.symbol} chart")
-        else:
-            df = self.fetcher.fetch_stock_data(opp.symbol, period="3mo", interval="1d")
-
-        if df is None or len(df) < 20:
-            return None
-
-        # Use static PNG chart (lighter, no 404 issues)
-        chart_path = generate_static_plotly_chart(
-            symbol=opp.symbol,
-            df=df,
-            entry_price=opp.entry_price,
-            stop_loss=opp.stop_loss,
-            take_profit=opp.take_profit,
-            strategy=opp.strategy,
-            output_dir=self.charts_dir
-        )
-
-        return chart_path
-
-    def _build_html(
-        self,
-        opportunities: List[AnalyzedOpportunity],
-        all_candidates: List,
-        market_sentiment: str,
-        sentiment_result: Dict,
-        scan_date: str,
-        scan_time: str,
-        total_stocks: int,
-        success_count: int,
-        fail_count: int,
-        fail_symbols: List[str],
-        chart_paths: Dict[str, str]
-    ) -> str:
-        """Build HTML report content."""
-
-        # Extract sentiment details
-        sentiment_reasoning = sentiment_result.get('reasoning', '')
-        sentiment_factors = sentiment_result.get('key_factors', [])
-        sentiment_confidence = sentiment_result.get('confidence', 50)
-        sentiment_timestamp = sentiment_result.get('timestamp', '')
-
-        # Format timestamp if available
-        sentiment_time_str = ""
-        if sentiment_timestamp:
-            try:
-                from datetime import datetime
-                dt = datetime.fromisoformat(sentiment_timestamp)
-                sentiment_time_str = dt.strftime('%H:%M:%S')
-            except (ValueError, KeyError, TypeError) as e:
-                logger.debug(f"Failed to parse timestamp: {e}")
-                pass
-
-        # Format sentiment details
-        sentiment_factors_html = ""
-        if sentiment_factors:
-            sentiment_factors_html = '<div class="sentiment-factors">' + ''.join([f'<span class="factor">{f}</span>' for f in sentiment_factors[:5]]) + '</div>'
-
-        sentiment_reasoning_html = f'<div class="sentiment-reasoning">{sentiment_reasoning}</div>' if sentiment_reasoning else ""
-
-        sentiment_color = {
-            'bullish': '#28a745',
-            'bearish': '#dc3545',
-            'neutral': '#ffc107',
-            'watch': '#6c757d'
-        }.get(market_sentiment, '#6c757d')
-
-        # Build sentiment timestamp display
-        sentiment_timestamp_html = f' <span style="opacity:0.7;font-size:11px;">(analyzed at {sentiment_time_str})</span>' if sentiment_time_str else ""
-
-        # Get technical context from Tier 3 cache
-        technical_context_html = ""
-        try:
-            from data.db import Database
-            db = Database()
-
-            spy_df = db.get_tier3_cache('SPY')
-            vix_df = db.get_tier3_cache('^VIX')
-            if vix_df is None:
-                vix_df = db.get_tier3_cache('VIXY')
-
-            if spy_df is not None and len(spy_df) >= 200:
-                close = spy_df['close']
-                ema50 = close.ewm(span=50, adjust=False).mean().iloc[-1]
-                ema200 = close.ewm(span=200, adjust=False).mean().iloc[-1]
-                current_spy = close.iloc[-1]
-                spy_5d = (current_spy - close.iloc[-6]) / close.iloc[-6] * 100 if len(close) >= 6 else 0
-
-                vix_value = vix_df['close'].iloc[-1] if vix_df is not None else 0
-
-                trend = "Bullish" if current_spy > ema200 else "Bearish"
-                golden_cross = "✓" if ema50 > ema200 else "✗"
-
-                technical_context_html = f'''<div class="technical-context" style="margin-top:10px;padding:10px;background:rgba(255,255,255,0.05);border-radius:4px;font-size:12px;">
-                    <div style="display:flex;gap:20px;flex-wrap:wrap;">
-                        <span><strong>SPY:</strong> ${current_spy:.2f} ({spy_5d:+.2f}% 5d)</span>
-                        <span><strong>Trend:</strong> {trend}</span>
-                        <span><strong>Golden Cross:</strong> {golden_cross} (EMA50 {'>' if ema50 > ema200 else '<'} EMA200)</span>
-                        <span><strong>VIX:</strong> {vix_value:.1f} ({'Fear' if vix_value > 30 else 'Elevated' if vix_value > 20 else 'Normal'})</span>
-                    </div>
-                </div>'''
-        except Exception as e:
-            logger.debug(f"Could not fetch technical context: {e}")
-
-        # Build top opportunities section
-        top_section = ""
-        for i, opp in enumerate(opportunities[:10], 1):
-            rrr = (opp.take_profit - opp.entry_price) / (opp.entry_price - opp.stop_loss) if opp.entry_price != opp.stop_loss else 0
-
-            # Determine confidence color class
-            if opp.confidence >= 70:
-                conf_class = "confidence-high"
-            elif opp.confidence >= 50:
-                conf_class = "confidence-medium"
+        # Heatmap Bar
+        max_chg = max(abs(s.daily_change) for s in sectors if s.daily_change is not None) or 1
+        total_stocks_all = sum(s.stock_count for s in sectors) or 1
+        segments = []
+        labels = []
+        for s in sectors:
+            chg = s.daily_change or 0
+            width_pct = max(s.stock_count / total_stocks_all * 100, 3)
+            intensity = min(abs(chg) / max(max_chg, 0.01), 1.0)
+            if chg >= 0:
+                bg = f"rgba(126,203,90,{intensity * 0.7:.2f})"
+                color = "#fff" if intensity > 0.5 else "var(--volt)"
             else:
-                conf_class = "confidence-low"
+                bg = f"rgba(224,85,61,{intensity * 0.7:.2f})"
+                color = "#fff" if intensity > 0.5 else "var(--ember)"
+            sign = '+' if chg >= 0 else ''
+            title = f"{s.name}: {sign}{chg:.2f}%"
+            seg = f'<div class="heatmap-seg" style="width:{width_pct:.1f}%;background:{bg};color:{color}" title="{title}">{sign}{chg:.1f}%</div>'
+            segments.append(seg)
+            labels.append(f'<span style="width:{width_pct:.1f}%">{s.name[:12]}</span>')
+        parts.append(HEATMAP_BAR.format(segments=''.join(segments), labels=''.join(labels)))
 
-            chart_html = ""
-            if opp.symbol in chart_paths:
-                chart_relative_path = chart_paths[opp.symbol]
-                # Use img tag for static PNG chart, positioned beside analysis
-                chart_html = f'<img src="{chart_relative_path}" alt="{opp.symbol} Chart" class="chart-image">'
+        # Stats Strip
+        spy_cls = 'up' if market.spy_change_5d >= 0 else 'down'
+        parts.append(STATS_STRIP.format(
+            spy_price=market.spy_price, spy_5d=market.spy_change_5d, spy_cls=spy_cls,
+            vix=market.vix, regime=market.regime))
 
-            risk_badges = "".join([f'<span class="badge badge-risk">{r}</span>' for r in opp.risk_factors[:3]])
+        # Market Overview (tight — narrative only)
+        if market.reasoning:
+            parts.append(f'<div class="card"><div class="detail-row">{market.reasoning}</div>')
+            if market.macro_drivers:
+                parts.append('<div class="detail-label" style="margin-top:6px">Drivers</div>')
+                parts.extend(f'<span class="driver">{d}</span>' for d in market.macro_drivers[:2])
+            if market.risks:
+                parts.append('<div class="detail-label" style="margin-top:6px">Risks</div>')
+                parts.extend(f'<span class="risk">{r}</span>' for r in market.risks[:1])
+            parts.append('</div>')
 
-            # Get tier and position size from technical_snapshot if available
-            tier = getattr(opp, 'technical_snapshot', {}).get('tier', '')
-            position_pct = getattr(opp, 'technical_snapshot', {}).get('position_pct', 0)
-            score = getattr(opp, 'technical_snapshot', {}).get('score', 0) or getattr(opp, 'technical_snapshot', {}).get('total_score', 0)
+        # Positioning (merged Focus + Avoid)
+        if focus and (focus.focus_sectors or focus.avoid_sectors):
+            parts.append('<div class="positioning">')
+            parts.append(f'<div class="pos-focus"><div class="pos-label">Focus</div><div class="pos-sectors">{", ".join(focus.focus_sectors or [])}</div></div>')
+            parts.append(f'<div class="pos-avoid"><div class="pos-label">Avoid</div><div class="pos-sectors">{", ".join(focus.avoid_sectors or [])}</div></div>')
+            parts.append('</div>')
+            if focus.reasoning:
+                parts.append(f'<div class="pos-reason" style="margin:-8px 0 16px 0;font-size:11px;color:var(--ash)">{focus.reasoning}</div>')
 
-            tier_badge = ""
-            if tier:
-                tier_colors = {'S': '#28a745', 'A': '#17a2b8', 'B': '#fd7e14'}
-                tier_color = tier_colors.get(tier, '#6c757d')
-                tier_badge = f'<span class="badge" style="background:{tier_color};color:white;margin-left:8px;">Tier {tier} ({position_pct*100:.0f}%)</span>'
+        # Sector Details
+        parts.append('<h2>Tag Details</h2>')
+        for s in sectors:
+            chg = s.daily_change
+            chg_str = f"{chg:+.2f}%" if chg is not None else "--"
+            chg_cls = 'badge-up' if (chg or 0) >= 0 else 'badge-down'
 
-            score_info = ""
-            if score:
-                score_info = f'<span class="badge" style="background:#6f42c1;color:white;margin-left:8px;">Score: {score:.0f}/15</span>'
+            drivers_html = ''.join(f'<span class="driver">{d}</span>' for d in (s.key_drivers or []))
+            risks_html = ''.join(f'<span class="risk">{r}</span>' for r in (s.risks or []))
 
-            top_section += f"""
-            <div class="opportunity">
-                <div class="opp-header">
-                    <span class="rank">#{i}</span>
-                    <span class="symbol">{opp.symbol}</span>
-                    <span class="strategy">{opp.strategy}</span>
-                    <span class="confidence {conf_class}">{opp.confidence}%</span>
-                    {tier_badge}
-                    {score_info}
-                </div>
-                <div class="opp-details">
-                    <div class="trade-levels">
-                        <span class="level entry">Entry: ${opp.entry_price:.2f}</span>
-                        <span class="level stop">Stop: ${opp.stop_loss:.2f}</span>
-                        <span class="level target">Target: ${opp.take_profit:.2f}</span>
-                        <span class="level rrr">R/R: {rrr:.1f}x</span>
-                    </div>
-                    <div class="analysis-row">
-                        <div class="ai-analysis">
-                            <h4>Analysis</h4>
-                            <p><strong>Reasoning:</strong> {opp.ai_reasoning}</p>
-                            <p><strong>Catalyst:</strong> {opp.catalyst}</p>
-                            <p><strong>Risks:</strong> {risk_badges}</p>
-                        </div>
-                        {chart_html}
-                    </div>
-                </div>
-            </div>
-            """
+            highlights_html = ''
+            if s.highlights:
+                reason_map = {'Near Resistance': 'badge-neutral', 'Near Support': 'badge-neutral',
+                              'Breakout': 'badge-up', 'Strong Momentum': 'badge-up', 'Good R/R': 'badge-up'}
+                rows = []
+                for h in s.highlights:
+                    rr_str = f"{h.rr:.1f}x" if h.rr > 0 else "--"
+                    rows.append(HIGHLIGHT_ROW.format(
+                        symbol=h.symbol, name=h.name or h.symbol, price=h.price,
+                        reason=h.reason, reason_cls=reason_map.get(h.reason, 'badge-neutral'),
+                        entry=h.entry, stop=h.stop, target=h.target, rr=rr_str))
+                highlights_html = '<table style="margin-top:8px"><thead><tr><th>Symbol</th><th>Name</th><th>Price</th><th>Reason</th><th>Entry</th><th>Stop</th><th>Target</th><th>R/R</th></tr></thead><tbody>' + ''.join(rows) + '</tbody></table>'
 
-        # Build runner-ups section (11-30) from all_candidates, excluding top 10
-        # Get symbols in top 10 to exclude
-        top_symbols = {opp.symbol for opp in opportunities[:10]}
+            parts.append(SECTOR_CARD.format(
+                name=s.name, chg_cls=chg_cls, daily_change=chg_str,
+                outlook=s.outlook or '',
+                drivers=drivers_html or '<span class="dim">--</span>',
+                risks=risks_html or '<span class="dim">--</span>',
+                highlights_html=highlights_html))
 
-        runners_section = ""
-        runner_count = 0
-        for cand in all_candidates:
-            if cand.symbol in top_symbols:
-                continue
-            if runner_count >= 30:  # Max 30 additional candidates
-                break
-            runner_count += 1
-
-            # Handle both AnalyzedOpportunity and StrategyMatch
-            match_reasons = getattr(cand, 'match_reasons', [])
-            stop_loss = getattr(cand, 'stop_loss', 0)
-            take_profit = getattr(cand, 'take_profit', 0)
-            runners_section += f"""
-            <tr>
-                <td>{cand.symbol}</td>
-                <td>{cand.strategy}</td>
-                <td>${cand.entry_price:.2f}</td>
-                <td>${stop_loss:.2f}</td>
-                <td>${take_profit:.2f}</td>
-                <td>{cand.confidence}%</td>
-                <td>{', '.join(match_reasons[:2])}</td>
-            </tr>
-            """
-
-        # Fail symbols
-        fail_section = ", ".join(fail_symbols[:20]) if fail_symbols else "None"
-
-        html = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Trade Scanner Report - {scan_date}</title>
-    <style>
-        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-        body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
-            background: #f8f9fa;
-            color: #212529;
-            line-height: 1.5;
-            font-size: 14px;
-        }}
-        .container {{ max-width: 1400px; margin: 0 auto; padding: 16px; }}
-        header {{
-            background: #1a1a2e;
-            color: white;
-            padding: 20px 24px;
-            margin-bottom: 20px;
-            border-bottom: 3px solid #16213e;
-        }}
-        header h1 {{
-            margin-bottom: 8px;
-            font-size: 24px;
-            font-weight: 600;
-            letter-spacing: 0.5px;
-        }}
-        .meta {{
-            opacity: 0.8;
-            font-size: 13px;
-            color: #a0a0a0;
-        }}
-        .sentiment {{
-            display: inline-block;
-            padding: 4px 12px;
-            border-radius: 4px;
-            color: white;
-            font-weight: 600;
-            margin-top: 8px;
-            font-size: 12px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            background: {sentiment_color};
-        }}
-        .sentiment-details {{
-            background: rgba(255,255,255,0.1);
-            padding: 12px 16px;
-            border-radius: 4px;
-            margin-top: 12px;
-            font-size: 13px;
-            line-height: 1.5;
-        }}
-        .sentiment-reasoning {{
-            color: #e0e0e0;
-            margin-bottom: 8px;
-        }}
-        .sentiment-factors {{
-            display: flex;
-            flex-wrap: wrap;
-            gap: 6px;
-            margin-top: 8px;
-        }}
-        .sentiment-factors .factor {{
-            background: rgba(255,255,255,0.15);
-            padding: 2px 8px;
-            border-radius: 3px;
-            font-size: 11px;
-            color: #f0f0f0;
-        }}
-        .stats-compact {{
-            font-size: 12px;
-            color: #6c757d;
-            margin-bottom: 16px;
-            padding: 8px 0;
-            border-bottom: 1px solid #dee2e6;
-        }}
-        .section-title {{
-            font-size: 16px;
-            font-weight: 600;
-            margin: 24px 0 12px 0;
-            color: #1a1a2e;
-            border-bottom: 2px solid #dee2e6;
-            padding-bottom: 8px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }}
-        .opportunity {{
-            background: white;
-            border-radius: 4px;
-            padding: 16px;
-            margin-bottom: 12px;
-            border: 1px solid #dee2e6;
-            border-left: 4px solid #1a1a2e;
-        }}
-        .opp-header {{
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            margin-bottom: 12px;
-            padding-bottom: 12px;
-            border-bottom: 1px solid #e9ecef;
-        }}
-        .rank {{
-            font-size: 18px;
-            font-weight: 700;
-            color: #1a1a2e;
-            width: 32px;
-            text-align: center;
-        }}
-        .symbol {{ font-size: 20px; font-weight: 700; color: #1a1a2e; }}
-        .strategy {{
-            background: #e9ecef;
-            color: #495057;
-            padding: 2px 8px;
-            border-radius: 3px;
-            font-size: 11px;
-            font-weight: 600;
-            text-transform: uppercase;
-        }}
-        .confidence {{
-            margin-left: auto;
-            font-weight: 700;
-            font-size: 16px;
-        }}
-        .confidence-high {{ color: #198754; }}
-        .confidence-medium {{ color: #fd7e14; }}
-        .confidence-low {{ color: #dc3545; }}
-        .trade-levels {{
-            display: flex;
-            gap: 8px;
-            margin-bottom: 12px;
-            flex-wrap: wrap;
-        }}
-        .level {{
-            padding: 4px 10px;
-            border-radius: 3px;
-            font-size: 12px;
-            font-weight: 600;
-        }}
-        .entry {{ background: #d1ecf1; color: #0c5460; }}
-        .stop {{ background: #f8d7da; color: #721c24; }}
-        .target {{ background: #d4edda; color: #155724; }}
-        .rrr {{ background: #fff3cd; color: #856404; }}
-        .ai-analysis {{
-            background: #f8f9fa;
-            padding: 12px;
-            border-radius: 4px;
-            border: 1px solid #e9ecef;
-            flex: 1;
-            min-width: 300px;
-        }}
-        .analysis-row {{
-            display: flex;
-            gap: 16px;
-            align-items: flex-start;
-            margin-top: 12px;
-        }}
-        .chart-image {{
-            width: 400px;
-            height: 300px;
-            object-fit: contain;
-            border: 1px solid #dee2e6;
-            border-radius: 4px;
-            background: white;
-        }}
-        @media (max-width: 900px) {{
-            .analysis-row {{
-                flex-direction: column;
-            }}
-            .chart-image {{
-                width: 100%;
-                height: auto;
-                max-height: 250px;
-            }}
-        }}
-        @media (max-width: 600px) {{
-            .container {{ padding: 8px; }}
-            header {{ padding: 12px 16px; }}
-            header h1 {{ font-size: 18px; }}
-            .meta {{ font-size: 11px; }}
-            .sentiment {{ font-size: 10px; padding: 3px 8px; }}
-            .sentiment-details {{ padding: 8px 10px; font-size: 11px; }}
-            .sentiment-reasoning {{ font-size: 12px; }}
-            .technical-context {{ font-size: 10px !important; }}
-            .stats-compact {{ font-size: 10px; }}
-            .section-title {{ font-size: 13px; margin: 16px 0 8px 0; }}
-            .opportunity {{ padding: 10px; margin-bottom: 8px; }}
-            .opp-header {{ flex-wrap: wrap; gap: 6px; padding-bottom: 8px; margin-bottom: 8px; }}
-            .rank {{ font-size: 14px; width: 24px; }}
-            .symbol {{ font-size: 16px; }}
-            .strategy {{ font-size: 9px; padding: 1px 5px; }}
-            .confidence {{ font-size: 14px; }}
-            .trade-levels {{ gap: 4px; }}
-            .level {{ padding: 3px 6px; font-size: 10px; }}
-            .ai-analysis {{ padding: 8px; min-width: unset; }}
-            .ai-analysis h4 {{ font-size: 11px; }}
-            .ai-analysis p {{ font-size: 11px; }}
-            .badge {{ font-size: 8px; }}
-            .table-scroll {{ overflow-x: auto; -webkit-overflow-scrolling: touch; }}
-            table {{ font-size: 11px; min-width: 500px; }}
-            th, td {{ padding: 6px 8px; }}
-            .fail-symbols {{ font-size: 11px; word-break: break-all; }}
-        }}
-        .ai-analysis h4 {{
-            margin-bottom: 8px;
-            color: #1a1a2e;
-            font-size: 13px;
-            font-weight: 600;
-            text-transform: uppercase;
-        }}
-        .ai-analysis p {{ margin-bottom: 6px; font-size: 13px; line-height: 1.5; }}
-        .badge {{
-            display: inline-block;
-            padding: 2px 6px;
-            border-radius: 3px;
-            font-size: 10px;
-            background: #e9ecef;
-            color: #495057;
-            margin-right: 4px;
-            margin-bottom: 4px;
-        }}
-        .badge-risk {{ background: #f8d7da; color: #721c24; }}
-        table {{
-            width: 100%;
-            border-collapse: collapse;
-            background: white;
-            border: 1px solid #dee2e6;
-            font-size: 13px;
-        }}
-        th, td {{ padding: 10px 12px; text-align: left; border-bottom: 1px solid #dee2e6; }}
-        th {{ background: #1a1a2e; color: white; font-weight: 600; font-size: 12px; text-transform: uppercase; }}
-        tr:hover {{ background: #f8f9fa; }}
-        .fail-symbols {{
-            background: #f8f9fa;
-            padding: 12px;
-            border-radius: 4px;
-            color: #6c757d;
-            font-size: 13px;
-            border: 1px solid #dee2e6;
-        }}
-        iframe {{ border-radius: 4px; border: 1px solid #dee2e6; margin-top: 12px; }}
-        footer {{ margin-top: 32px; padding-top: 16px; border-top: 1px solid #dee2e6; text-align: center; color: #6c757d; font-size: 11px; }}
-    </style>
-</head>
-<body>
-    <div class="container">
-        <header>
-            <h1>Trade Scanner Report</h1>
-            <div class="meta">
-                Date: {scan_date} | Time: {scan_time} ET | Scanned: {total_stocks} stocks
-            </div>
-            <div class="sentiment">Sentiment: {market_sentiment.upper()} ({sentiment_confidence}% confidence){sentiment_timestamp_html}</div>
-            {sentiment_reasoning_html}
-            {sentiment_factors_html}
-            {technical_context_html}
-        </header>
-
-        <div class="stats-compact">
-            Scanned: {total_stocks} | Success: {success_count} | Failed: {fail_count} | Top Picks: {len(opportunities[:10])}
-        </div>
-
-        <h2 class="section-title">Top 10 Opportunities</h2>
-        {top_section}
-
-        <h2 class="section-title">Additional Candidates (11-{10 + runner_count})</h2>
-        <div class="table-scroll">
-        <table>
-            <thead>
-                <tr>
-                    <th>Symbol</th>
-                    <th>Strategy</th>
-                    <th>Entry</th>
-                    <th>Stop</th>
-                    <th>Target</th>
-                    <th>Confidence</th>
-                    <th>Key Signals</th>
-                </tr>
-            </thead>
-            <tbody>
-                {runners_section}
-            </tbody>
-        </table>
-        </div>
-
-        <h2 class="section-title">Failed Symbols</h2>
-        <div class="fail-symbols">
-            {fail_section}
-        </div>
-
-        <footer>
-            <p>Trade Scanner v1.0 | Generated on {scan_date} {scan_time}</p>
-            <p>For informational purposes only. Not financial advice.</p>
-        </footer>
-    </div>
-</body>
-</html>"""
-        return html
-
-    def _build_fallback_html(self, scan_date: str, scan_time: str, error_message: str) -> str:
-        """Build minimal fallback HTML when main generation fails."""
-        return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>Trade Scanner Report - {scan_date}</title>
-    <style>
-        body {{ font-family: sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; }}
-        .error {{ background: #f8d7da; color: #721c24; padding: 20px; border-radius: 4px; }}
-    </style>
-</head>
-<body>
-    <h1>Trade Scanner Report</h1>
-    <p>Date: {scan_date} | Time: {scan_time}</p>
-    <div class="error">
-        <h2>Report Generation Error</h2>
-        <p>{error_message}</p>
-        <p>Please check the logs for more details.</p>
-    </div>
-</body>
-</html>"""
+        parts.append(f'<div class="footer">TradeScanner &middot; {timestamp[:16]}</div>')
+        parts.append('</body></html>')
+        return '\n'.join(parts)
 
     def _cleanup_old_reports(self):
-        """Remove old reports and charts beyond retention limit."""
         try:
-            # Cleanup old reports (keep only max_reports)
-            reports = sorted(
-                self.reports_dir.glob('report_*.html'),
-                key=lambda x: x.stat().st_mtime,
-                reverse=True
-            )
-            for old_report in reports[self.max_reports:]:
-                old_report.unlink()
-                logger.info(f"Removed old report: {old_report}")
-
-            # Cleanup old charts using same retention (keep max_reports * 10 charts)
-            # Each report generates up to 10 charts
-            charts = sorted(
-                list(self.charts_dir.glob('*.png')) + list(self.charts_dir.glob('*.html')),
-                key=lambda x: x.stat().st_mtime,
-                reverse=True
-            )
-            max_charts = self.max_reports * 10
-            for old_chart in charts[max_charts:]:
-                old_chart.unlink()
-                logger.info(f"Removed old chart: {old_chart}")
-
+            reports = sorted(self.reports_dir.glob('report_*.html'), key=lambda p: p.stat().st_mtime, reverse=True)
+            for old in reports[self.max_reports:]:
+                old.unlink()
+                logger.info(f"Removed old report: {old.name}")
         except Exception as e:
             logger.warning(f"Cleanup failed: {e}")
