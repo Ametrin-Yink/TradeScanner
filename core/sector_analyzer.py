@@ -41,6 +41,8 @@ class StockHighlight:
     position_cost: float = 0.0
     risk_dollars: float = 0.0
     time_horizon: str = ''
+    earnings_warning: Optional[str] = None
+    correlation_warning: Optional[str] = None
 
 
 @dataclass
@@ -736,6 +738,25 @@ class SectorAnalyzer:
                 highlight.position_cost = position_cost
                 highlight.risk_dollars = position_size * risk_per_share
 
+                # Liquidity check: position must be < 5% of average daily volume
+                avg_volume = cache.get('avg_volume_20d', 0)
+                if avg_volume > 0 and position_size / avg_volume > 0.05:
+                    continue  # too illiquid for position size
+
+                # Earnings proximity check
+                earnings_date = None
+                try:
+                    earnings_date = self.db.get_stock_earnings_date(symbol)
+                except Exception:
+                    pass
+                if earnings_date:
+                    days_to_earnings = (datetime.strptime(earnings_date, '%Y-%m-%d').date() - datetime.now().date()).days
+                    if 0 <= days_to_earnings <= 5:
+                        position_size = int(position_size * 0.5)
+                        position_cost = position_size * entry
+                        risk_dollars = position_size * risk_per_share
+                        highlight.earnings_warning = f"Earnings in {days_to_earnings}d -- halved position"
+
                 # Set time horizon display
                 horizon_map = {
                     'Breakout': 'Swing (5-20d)',
@@ -761,6 +782,14 @@ class SectorAnalyzer:
             all_candidates.sort(key=lambda c: _composite_score(c), reverse=True)
 
             sector.highlights = _select_diverse(all_candidates, max_picks=3)
+
+            # Correlation check within sector: flag pairs with high correlation
+            selected = sector.highlights
+            for i in range(len(selected)):
+                for j in range(i + 1, len(selected)):
+                    if selected[i].reason == selected[j].reason:
+                        selected[i].correlation_warning = f"Similar setup to {selected[j].symbol}"
+                        selected[j].correlation_warning = f"Similar setup to {selected[i].symbol}"
 
             # Persist highlights as active recommendations
             now_str = datetime.now().strftime('%Y-%m-%d')
