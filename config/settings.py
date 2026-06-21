@@ -34,7 +34,7 @@ DEFAULT_SETTINGS = {
     },
     "ai": {
         "api_base": "https://coding.dashscope.aliyuncs.com/v1",
-        "model": "qwen-max",
+        "model": "deepseek-v4-pro",
         "analysis_mode": "tiered",
     },
     "report": {
