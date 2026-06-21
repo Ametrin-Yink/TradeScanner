@@ -5,7 +5,7 @@ from datetime import datetime
 from unittest.mock import Mock, patch, MagicMock
 import numpy as np
 
-from core.fetcher import DataFetcher
+from core.fetcher import DataFetcher, validate_cache_freshness
 
 
 @pytest.fixture
@@ -197,3 +197,72 @@ def test_fetch_earnings_calendar(mock_ticker_class, mock_db):
 
     # The mock calendar returns a Timestamp that may or may not pass the date check
     # Just verify method runs without error
+
+
+def test_validate_cache_freshness_raises_when_tier1_cache_empty():
+    """Should raise RuntimeError when tier1_cache has no data today."""
+    mock_db = Mock()
+    mock_conn = MagicMock()
+    mock_db.get_connection.return_value = mock_conn
+
+    # Simulate empty tier1_cache, full etf_cache
+    def side_effect(sql, params):
+        mock_cursor = MagicMock()
+        if 'tier1_cache' in sql:
+            mock_cursor.fetchone.return_value = (0,)
+        else:
+            mock_cursor.fetchone.return_value = (5,)
+        return mock_cursor
+
+    mock_conn.execute.side_effect = side_effect
+
+    with pytest.raises(RuntimeError, match="Stale cache detected"):
+        validate_cache_freshness(mock_db)
+
+
+def test_validate_cache_freshness_raises_when_etf_cache_empty():
+    """Should raise RuntimeError when etf_cache has no data today."""
+    mock_db = Mock()
+    mock_conn = MagicMock()
+    mock_db.get_connection.return_value = mock_conn
+
+    def side_effect(sql, params):
+        mock_cursor = MagicMock()
+        if 'etf_cache' in sql:
+            mock_cursor.fetchone.return_value = (0,)
+        else:
+            mock_cursor.fetchone.return_value = (3,)
+        return mock_cursor
+
+    mock_conn.execute.side_effect = side_effect
+
+    with pytest.raises(RuntimeError, match="Stale cache detected"):
+        validate_cache_freshness(mock_db)
+
+
+def test_validate_cache_freshness_passes_when_all_fresh():
+    """Should not raise when both caches have today's data."""
+    mock_db = Mock()
+    mock_conn = MagicMock()
+    mock_db.get_connection.return_value = mock_conn
+
+    def side_effect(sql, params):
+        mock_cursor = MagicMock()
+        mock_cursor.fetchone.return_value = (5,)
+        return mock_cursor
+
+    mock_conn.execute.side_effect = side_effect
+
+    # Should not raise
+    validate_cache_freshness(mock_db)
+
+
+def test_validate_cache_freshness_handles_db_error():
+    """Should report table as stale when query raises exception."""
+    mock_db = Mock()
+    mock_conn = MagicMock()
+    mock_db.get_connection.return_value = mock_conn
+    mock_conn.execute.side_effect = Exception("no such table")
+
+    with pytest.raises(RuntimeError, match="error checking"):
+        validate_cache_freshness(mock_db)

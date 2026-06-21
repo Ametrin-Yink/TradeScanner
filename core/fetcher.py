@@ -19,6 +19,29 @@ from core.swing_detector import detect_swings, cluster_levels
 logger = logging.getLogger(__name__)
 
 
+def validate_cache_freshness(db, max_age_hours=24):
+    """Abort if any cache table lacks today's data."""
+    today = datetime.now().strftime('%Y-%m-%d')
+    tables = ['tier1_cache', 'etf_cache']
+    stale = []
+    for table in tables:
+        try:
+            rows = db.get_connection().execute(
+                f"SELECT COUNT(*) FROM {table} WHERE cache_date >= ?", (today,)
+            ).fetchone()
+            if rows and rows[0] == 0:
+                stale.append(table)
+        except Exception:
+            stale.append(f"{table} (error checking)")
+
+    if stale:
+        raise RuntimeError(
+            f"Stale cache detected in: {', '.join(stale)}. "
+            f"Run data fetch before analysis."
+        )
+    logger.info(f"Cache freshness OK: {today}")
+
+
 class DataFetcher:
     """Fetch stock data from yfinance with incremental updates and caching."""
 

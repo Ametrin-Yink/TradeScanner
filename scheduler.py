@@ -8,6 +8,7 @@ from config.settings import settings
 from data.db import Database
 from core.sector_analyzer import SectorAnalyzer
 from core.reporter import ReportGenerator
+from core.fetcher import validate_cache_freshness
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,18 @@ def run_sector_scan(test_symbols=None):
     })
 
     try:
+        # Abort if cache is stale — must run data fetch first
+        try:
+            validate_cache_freshness(db)
+        except RuntimeError as e:
+            logger.error(f"Aborting: {e}")
+            db.save_workflow_status({
+                'run_date': run_date,
+                'status': 'aborted_stale_cache',
+                'error_message': str(e),
+            })
+            return None
+
         analyzer = SectorAnalyzer(db=Database())
         result = analyzer.analyze()
         report_path = ReportGenerator().generate_report(result)
