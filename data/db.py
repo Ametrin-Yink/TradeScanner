@@ -55,6 +55,7 @@ class Database:
         finally:
             conn.close()
         self.create_ai_audit_table()
+        self.create_recommendations_table()
         self._add_performance_indexes()
         self._cleanup_legacy_tables()
 
@@ -1185,6 +1186,114 @@ class Database:
         if row:
             return json.loads(row[0]) if row[0] else {}
         return {}
+
+    def create_recommendations_table(self):
+        """Create recommendations table for tracking picks lifecycle."""
+        conn = self.get_connection()
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS recommendations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trade_date TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                sector TEXT NOT NULL,
+                setup_type TEXT NOT NULL,
+                entry_price REAL NOT NULL,
+                stop_price REAL NOT NULL,
+                target_price REAL NOT NULL,
+                rr REAL,
+                composite_score REAL,
+                position_size INTEGER,
+                position_cost REAL,
+                risk_dollars REAL,
+                current_price REAL,
+                entry_distance_pct REAL,
+                status TEXT DEFAULT 'active',
+                outcome TEXT,
+                pnl_pct REAL,
+                days_held INTEGER,
+                resolved_date TEXT,
+                max_days INTEGER DEFAULT 20,
+                created_at TEXT DEFAULT (datetime('now'))
+            )
+        """)
+        conn.commit()
+
+    def save_recommendation(self, rec: dict):
+        """Save a trade recommendation for lifecycle tracking.
+
+        Args:
+            rec: Dict with keys: trade_date, symbol, sector, setup_type,
+                 entry_price, stop_price, target_price. Optional: rr,
+                 composite_score, position_size, position_cost, risk_dollars,
+                 current_price, entry_distance_pct, max_days.
+        """
+        conn = self.get_connection()
+        conn.execute("""
+            INSERT INTO recommendations (trade_date, symbol, sector, setup_type,
+                entry_price, stop_price, target_price, rr, composite_score,
+                position_size, position_cost, risk_dollars, current_price,
+                entry_distance_pct, max_days)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            rec['trade_date'], rec['symbol'], rec['sector'], rec['setup_type'],
+            rec['entry_price'], rec['stop_price'], rec['target_price'],
+            rec.get('rr'), rec.get('composite_score'),
+            rec.get('position_size'), rec.get('position_cost'),
+            rec.get('risk_dollars'), rec.get('current_price'),
+            rec.get('entry_distance_pct'), rec.get('max_days', 20)
+        ))
+        conn.commit()
+
+    def get_active_recommendations(self):
+        """Get all active (unresolved) recommendations.
+
+        Returns:
+            List of recommendation dicts with status='active'.
+        """
+        conn = self.get_connection()
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM recommendations WHERE status = 'active'"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def resolve_recommendation(self, rec_id, status, outcome, pnl_pct, days_held):
+        """Resolve a recommendation with outcome data.
+
+        Args:
+            rec_id: Recommendation ID
+            status: 'stopped_out', 'target_hit', or 'expired'
+            outcome: Outcome description
+            pnl_pct: P&L percentage
+            days_held: Number of days the position was held
+        """
+        conn = self.get_connection()
+        conn.execute("""
+            UPDATE recommendations
+            SET status = ?, outcome = ?, pnl_pct = ?, days_held = ?,
+                resolved_date = date('now')
+            WHERE id = ?
+        """, (status, outcome, pnl_pct, days_held, rec_id))
+        conn.commit()
+
+    def get_resolved_recommendations(self, lookback_days=30):
+        """Get resolved recommendations within the lookback window.
+
+        Args:
+            lookback_days: Number of days to look back (default 30)
+
+        Returns:
+            List of resolved recommendation dicts ordered by resolved_date DESC.
+        """
+        conn = self.get_connection()
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("""
+            SELECT * FROM recommendations
+            WHERE status IN ('stopped_out', 'target_hit', 'expired')
+              AND resolved_date >= date('now', ?)
+            ORDER BY resolved_date DESC
+        """, (f'-{lookback_days} days',)).fetchall()
+        return [dict(r) for r in rows]
 
     def _migrate_to_tags(self):
         """One-time: migrate sector_assignments to tags + stock_tags."""
