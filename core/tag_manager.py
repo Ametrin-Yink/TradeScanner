@@ -52,15 +52,17 @@ class TagManager:
     def get_tag_stocks(self, tag_name: str, db: Database) -> List[Dict]:
         conn = db.get_connection()
         rows = conn.execute("""
-            SELECT s.symbol, s.name, s.market_cap
+            SELECT s.symbol, s.name, s.market_cap,
+                   COALESCE(t1.ret_5d, 0) as ret_5d
             FROM stocks s
             JOIN stock_tags st ON s.symbol = st.symbol
             JOIN tags t ON st.tag_id = t.id
+            LEFT JOIN tier1_cache t1 ON s.symbol = t1.symbol
             WHERE t.name = ? AND s.is_active = 1
             ORDER BY s.symbol
         """, (tag_name,)).fetchall()
         return [
-            {'symbol': r[0], 'name': r[1], 'market_cap': r[2]}
+            {'symbol': r[0], 'name': r[1] or r[0], 'market_cap': r[2], 'ret_5d': r[3]}
             for r in rows
         ]
 

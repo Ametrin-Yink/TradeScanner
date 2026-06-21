@@ -151,7 +151,7 @@ async function loadTagStocks(name) {
 
   const tbody = document.getElementById("stocksTableBody");
   tbody.innerHTML =
-    '<tr class="stock-table-empty"><td colspan="4"><div class="loading-pulse">Loading stocks...</div></td></tr>';
+    '<tr class="stock-table-empty"><td colspan="5"><div class="loading-pulse">Loading stocks...</div></td></tr>';
 
   try {
     const data = await api(
@@ -161,7 +161,7 @@ async function loadTagStocks(name) {
     renderStockTable(data.stocks || []);
   } catch (e) {
     tbody.innerHTML =
-      '<tr class="stock-table-empty"><td colspan="4" style="color:var(--danger)">Failed to load stocks: ' +
+      '<tr class="stock-table-empty"><td colspan="5" style="color:var(--danger)">Failed to load stocks: ' +
       e.message +
       "</td></tr>";
   }
@@ -172,20 +172,23 @@ function renderStockTable(stocks) {
   tbody.innerHTML = "";
   if (!stocks || stocks.length === 0) {
     tbody.innerHTML =
-      '<tr class="stock-table-empty"><td colspan="4">No stocks assigned to this tag</td></tr>';
+      '<tr class="stock-table-empty"><td colspan="5">No stocks assigned to this tag</td></tr>';
     return;
   }
   stocks.sort((a, b) => (a.symbol || "").localeCompare(b.symbol || ""));
   stocks.forEach((st) => {
+    const chg = st.ret_5d != null ? st.ret_5d : 0;
+    const chgCls = chg >= 0 ? "up" : "down";
+    const chgSign = chg >= 0 ? "+" : "";
     const tr = document.createElement("tr");
     tr.innerHTML =
       '<td class="sym">' +
       escapeHtml(st.symbol) +
       "</td>" +
       "<td>" +
-      escapeHtml(st.name || "") +
+      escapeHtml(st.name || st.symbol) +
       "</td>" +
-      '<td class="cap">' +
+      '<td class="num">$<!--ret--></td><td class="cap">' +
       formatMarketCap(st.market_cap) +
       "</td>" +
       '<td class="actions"><button class="remove-btn" data-action="remove-stock" data-symbol="' +
