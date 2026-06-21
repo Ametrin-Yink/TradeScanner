@@ -214,6 +214,40 @@ def compute_stop_target(
     return round(stop, 2), round(target, 2), f"{stop_method}+{target_method}"
 
 
+def compute_volume_profile(df, num_levels=15):
+    """Volume-at-price for recent bars. Returns POC and value area."""
+    if len(df) < 20:
+        return None
+
+    recent = df.tail(60)
+    price_min = float(recent['Low'].min())
+    price_max = float(recent['High'].max())
+
+    bins = np.linspace(price_min, price_max, num_levels + 1)
+    volume_by_price = np.zeros(num_levels)
+
+    for _, row in recent.iterrows():
+        candle_min = float(row['Low'])
+        candle_max = float(row['High'])
+        vol = float(row['Volume']) if 'Volume' in row and row['Volume'] > 0 else 1
+
+        for j in range(num_levels):
+            overlap = max(0, min(candle_max, bins[j+1]) - max(candle_min, bins[j]))
+            if overlap > 0:
+                volume_by_price[j] += vol * (overlap / (candle_max - candle_min + 0.01))
+
+    poc_idx = int(np.argmax(volume_by_price))
+    poc = float((bins[poc_idx] + bins[poc_idx + 1]) / 2)
+
+    return {
+        'poc': poc,
+        'levels': [
+            {'price': float((bins[i] + bins[i+1]) / 2), 'volume': float(volume_by_price[i])}
+            for i in range(num_levels)
+        ]
+    }
+
+
 def compute_sr_for_symbol(db, symbol: str) -> tuple:
     """Compute support/resistance levels from recent (60-bar) and full-range OHLC.
     Returns (supports: List[float], resistances: List[float]).
@@ -280,6 +314,14 @@ def compute_sr_for_symbol(db, symbol: str) -> tuple:
         price_ceiling = current_price * (1 + filter_pct)
         supports = sorted([z['level'] for z in low_zones if price_floor < z['level'] < current_price], reverse=True)[:5]
         resistances = sorted([z['level'] for z in high_zones if current_price < z['level'] < price_ceiling])[:5]
+
+        # POC as support/resistance depending on position vs current price
+        vp = compute_volume_profile(df)
+        if vp:
+            if vp['poc'] < current_price:
+                supports.append(vp['poc'])
+            else:
+                resistances.append(vp['poc'])
 
         # Cache in tier1_cache
         import json

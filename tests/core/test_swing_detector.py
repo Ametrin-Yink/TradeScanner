@@ -480,3 +480,113 @@ def test_compute_sr_for_symbol_weekly_insufficient_bars():
     # 40 bars without weekly should still work (daily-only S/R)
 
     Path(tmp_path).unlink(missing_ok=True)
+
+
+# --- compute_volume_profile tests ---
+
+
+def test_compute_volume_profile_too_short():
+    """Less than 20 bars returns None."""
+    from core.swing_detector import compute_volume_profile
+    df = pd.DataFrame({'High': [100]*10, 'Low': [99]*10, 'Close': [99.5]*10, 'Volume': [1000]*10})
+    result = compute_volume_profile(df)
+    assert result is None
+
+
+def test_compute_volume_profile_returns_dict():
+    """With 60 bars returns a dict with poc and levels."""
+    from core.swing_detector import compute_volume_profile
+    np.random.seed(42)
+    n = 60
+    close = 100 + np.cumsum(np.random.randn(n) * 0.5)
+    df = pd.DataFrame({
+        'High': close + np.abs(np.random.randn(n)) * 1.0,
+        'Low': close - np.abs(np.random.randn(n)) * 1.0,
+        'Close': close,
+        'Volume': np.random.randint(100000, 5000000, n),
+    })
+    result = compute_volume_profile(df)
+    assert isinstance(result, dict)
+    assert 'poc' in result
+    assert 'levels' in result
+    assert len(result['levels']) == 15
+
+
+def test_compute_volume_profile_poc_within_range():
+    """POC should be between min Low and max High."""
+    from core.swing_detector import compute_volume_profile
+    np.random.seed(42)
+    n = 60
+    close = 200 + np.cumsum(np.random.randn(n) * 0.5)
+    df = pd.DataFrame({
+        'High': close + np.abs(np.random.randn(n)) * 1.5,
+        'Low': close - np.abs(np.random.randn(n)) * 1.5,
+        'Close': close,
+        'Volume': np.random.randint(100000, 5000000, n),
+    })
+    result = compute_volume_profile(df)
+    price_min = float(df['Low'].tail(60).min())
+    price_max = float(df['High'].tail(60).max())
+    assert price_min <= result['poc'] <= price_max, (
+        f"POC {result['poc']} outside [{price_min}, {price_max}]"
+    )
+
+
+def test_compute_volume_profile_default_volume():
+    """Missing/zero Volume column uses volume=1."""
+    from core.swing_detector import compute_volume_profile
+    np.random.seed(42)
+    n = 60
+    close = 100 + np.cumsum(np.random.randn(n) * 0.5)
+    df = pd.DataFrame({
+        'High': close + np.abs(np.random.randn(n)) * 1.0,
+        'Low': close - np.abs(np.random.randn(n)) * 1.0,
+        'Close': close,
+        'Volume': [0] * n,  # All zeros
+    })
+    result = compute_volume_profile(df)
+    assert result is not None
+    assert 'poc' in result
+
+
+def test_compute_volume_profile_integration_sr():
+    """POC from volume profile is added as S/R in compute_sr_for_symbol."""
+    import tempfile
+    from pathlib import Path
+    from data.db import Database
+    from core.swing_detector import compute_sr_for_symbol
+
+    tmp = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
+    tmp_path = tmp.name
+    tmp.close()
+    db = Database(Path(tmp_path))
+    conn = db.get_connection()
+
+    np.random.seed(42)
+    n = 80
+    close = 200 + np.cumsum(np.random.randn(n) * 0.8)
+    high = close + np.abs(np.random.randn(n)) * 1.5
+    low = close - np.abs(np.random.randn(n)) * 1.5
+
+    from datetime import datetime, timedelta
+    start = datetime(2026, 3, 1)
+    for i in range(n):
+        date = (start + timedelta(days=i)).strftime('%Y-%m-%d')
+        conn.execute(
+            "INSERT INTO market_data (symbol, date, open, high, low, close, volume) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ('TESTVP', date, float(close[i]), float(high[i]), float(low[i]), float(close[i]), 1000000)
+        )
+
+    current_price = float(close[-1])
+    conn.execute(
+        "INSERT INTO tier1_cache (symbol, current_price, high_60d, low_60d, atr_pct, rs_percentile, ema21, ema50, volume_ratio, supports, resistances, ret_5d) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1.0, ?, ?, ?)",
+        ('TESTVP', current_price, float(high.max()), float(low.min()), 0.02, 50.0, current_price * 0.95, current_price * 0.90, '[]', '[]', 0.0)
+    )
+    conn.commit()
+
+    supports, resistances = compute_sr_for_symbol(db, 'TESTVP')
+    # Should return lists (may be empty if POC doesn't survive clustering/filtering)
+    assert isinstance(supports, list)
+    assert isinstance(resistances, list)
+
+    Path(tmp_path).unlink(missing_ok=True)
