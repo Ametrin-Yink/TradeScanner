@@ -318,7 +318,7 @@ class SectorAnalyzer:
             result = chat(
                 messages=[{"role": "user", "content": "Summarize the key macro drivers and risks for the US stock market today."}],
                 system=system_prompt,
-                enable_search=True,
+                enable_search=False,
                 search_query=f"US stock market today macro news {datetime.now().strftime('%B %Y')}",
                 temperature=0.3,
             )
@@ -427,7 +427,7 @@ class SectorAnalyzer:
             result = chat(
                 messages=[{"role": "user", "content": f"What is the outlook for the {sector_name} sector today?"}],
                 system=system_prompt,
-                enable_search=True,
+                enable_search=False,
                 search_query=f"{sector_name} sector stocks news {datetime.now().strftime('%B %Y')}",
                 temperature=0.3,
             )

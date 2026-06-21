@@ -287,7 +287,7 @@ class ReportGenerator:
         parts.append('</div><div class="header-meta" style="text-align:right;font-size:10px">' + formatted_ts + '</div></div>')
 
         # Bar Chart (horizontal)
-        max_chg = max(abs(s.daily_change) for s in sectors if s.daily_change is not None) or 1
+        max_chg = max((abs(s.daily_change) for s in sectors if s.daily_change is not None), default=1)
         bars = []
         for s in sectors:
             chg = s.daily_change or 0
