@@ -2,27 +2,36 @@
 import logging
 import numpy as np
 from typing import List, Dict, Tuple, Optional
-from scipy.signal import argrelextrema
+from scipy.signal import find_peaks
 from scipy.cluster.hierarchy import linkage, fcluster
 
 logger = logging.getLogger(__name__)
 
 
-def detect_swings(df, order: int = 5):
-    """Detect swing highs and lows using local extrema.
+def detect_swings(df, order: int = None, atr: float = None):
+    """Detect swing highs and lows using adaptive order and peak prominence.
 
     Args:
         df: DataFrame with 'High' and 'Low' columns
-        order: bars on each side to confirm a pivot
+        order: bars on each side (auto-computed if None)
+        atr: average true range for prominence threshold
 
     Returns:
         (list of swing_high_prices, list of swing_low_prices)
     """
+    if order is None:
+        order = max(3, min(8, len(df) // 15))
+
     if len(df) < order * 2 + 1:
         return [], []
 
-    high_idx = argrelextrema(df['High'].values, np.greater_equal, order=order)[0]
-    low_idx = argrelextrema(df['Low'].values, np.less_equal, order=order)[0]
+    if atr is None:
+        atr = (df['High'] - df['Low']).mean()
+
+    prominence = atr * 0.5
+
+    high_idx, _ = find_peaks(df['High'].values, distance=order, prominence=prominence)
+    low_idx, _ = find_peaks(-df['Low'].values, distance=order, prominence=prominence)
 
     swing_highs = df['High'].iloc[high_idx].tolist()
     swing_lows = df['Low'].iloc[low_idx].tolist()
@@ -64,12 +73,14 @@ def cluster_levels(points: List[float], tolerance: float = 0.005) -> List[Dict]:
     return zones
 
 
-def _compute_fib_target(df, entry_price: float) -> Optional[float]:
+def _compute_fib_target(df, entry_price: float, order: int = None) -> Optional[float]:
     """Compute Fibonacci extension target from the most recent completed swing.
     Returns target price or None if no valid swing found.
     """
     try:
-        swings_h, swings_l = detect_swings(df, order=5)
+        if order is None:
+            order = max(3, min(8, len(df) // 15))
+        swings_h, swings_l = detect_swings(df, order=order)
         if len(swings_l) < 1 or len(swings_h) < 1:
             return None
         # Find last swing low and the subsequent swing high
