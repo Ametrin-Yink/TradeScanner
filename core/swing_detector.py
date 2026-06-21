@@ -176,9 +176,9 @@ def compute_sr_for_symbol(db, symbol: str) -> tuple:
         df = pd.DataFrame(rows, columns=['date', 'open', 'high', 'low', 'close'])
         df.columns = ['date', 'Open', 'High', 'Low', 'Close']
 
-        # Use recent 60 bars for active trading levels
+        # Use recent 60 bars with order=2 to catch 2-day pullbacks
         recent = df.tail(60)
-        swing_highs, swing_lows = detect_swings(recent, order=5)
+        swing_highs, swing_lows = detect_swings(recent, order=2)
         high_zones = cluster_levels(swing_highs, tolerance=0.005)
         low_zones = cluster_levels(swing_lows, tolerance=0.005)
 
