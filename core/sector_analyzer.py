@@ -5,7 +5,6 @@ Analyzes sectors daily and produces a sector-first report with AI-powered insigh
 """
 import json
 import logging
-import yaml
 from pathlib import Path
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -15,6 +14,7 @@ from typing import List, Optional, Dict
 from core.ai_client import chat
 from core.constants import SECTOR_ETFS
 from core.swing_detector import compute_stop_target, cluster_levels
+from config.portfolio_config import load_config
 from core.tag_manager import TagManager
 from data.db import Database
 
@@ -82,18 +82,9 @@ class FocusSummary:
     reasoning: str
 
 
-_portfolio_config = None
 def _load_portfolio_config():
-    """Load portfolio config from YAML, with fallback defaults."""
-    global _portfolio_config
-    if _portfolio_config is None:
-        config_path = Path(__file__).parent.parent / "config" / "portfolio_config.yaml"
-        if config_path.exists():
-            with open(config_path) as f:
-                _portfolio_config = yaml.safe_load(f)
-        else:
-            _portfolio_config = {'account_value': 50000, 'risk_per_trade_pct': 0.01, 'max_position_pct': 0.20}
-    return _portfolio_config
+    """Load portfolio config -- delegates to shared module."""
+    return load_config()
 
 
 def _composite_score(c: StockHighlight, setup_bonus: Dict[str, float]) -> float:
@@ -492,6 +483,8 @@ class SectorAnalyzer:
                     ema21=ema21 or 0.0,
                     ema50=ema50 or 0.0,
                 )
+                if stop is None:
+                    continue  # skip -- no valid stop/target combo
 
                 rr = round((target - entry) / max(entry - stop, 0.01), 1)
                 rr = min(rr, 20.0)

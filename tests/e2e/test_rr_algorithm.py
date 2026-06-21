@@ -44,9 +44,10 @@ def test_cluster_levels_merges_nearby():
 
 
 def test_compute_stop_target_uses_swing_low():
-    """Nearest support below entry becomes stop. Target from nearest resistance or fallback."""
+    """Nearest quality support below entry becomes stop. Target from nearest resistance or fallback."""
     df = make_test_data()
-    entry_price = 115.0
+    # Use lower entry so forced swing low (~108) is within max_stop_distance
+    entry_price = 112.0
     atr = 2.5
     highs, lows = detect_swings(df, order=5)
     low_zones = cluster_levels(lows, tolerance=0.005)
@@ -54,9 +55,11 @@ def test_compute_stop_target_uses_swing_low():
     stop, target, method = compute_stop_target(
         entry_price, atr, low_zones, high_zones, df, time_horizon='swing'
     )
+    assert stop is not None, f"Stop should not be None"
     assert stop < entry_price, f"Stop {stop} should be below entry {entry_price}"
+    assert target is not None, f"Target should not be None"
     assert target > entry_price, f"Target {target} should be above entry {entry_price}"
-    assert method.startswith('support'), f"Should use support, got {method}"
+    assert 'support' in method, f"Should use support stop, got {method}"
 
 
 def test_compute_stop_target_fallback_atr():
