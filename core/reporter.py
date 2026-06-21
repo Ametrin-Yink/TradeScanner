@@ -425,6 +425,7 @@ class ReportGenerator:
         parts.append('<script>window._EMBEDDED_OHLC = ')
         parts.append(json.dumps(all_ohlc))
         parts.append(';</script>')
+        parts.append('<script src="../js/table-utils.js"></script>')
         parts.append('</body></html>')
         return '\n'.join(parts)
 

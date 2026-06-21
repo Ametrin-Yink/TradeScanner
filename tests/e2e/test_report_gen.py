@@ -87,6 +87,30 @@ def test_report_embeds_ohlc_data(tmp_path, seeded_db):
     assert 'window._EMBEDDED_OHLC' in content.split('function showChart')[1].split('function drawCandles')[0]
 
 
+def test_report_includes_table_utils_js(tmp_path):
+    """Report HTML includes a script reference to table-utils.js for client-side sorting."""
+    market = MarketOverview(
+        date='2026-06-19', regime='neutral', confidence=50,
+        reasoning='', spy_price=500, spy_change_5d=0, vix=20, vix_status='neutral',
+    )
+    sectors = [
+        SectorAnalysis(
+            name='Test', etf='', stock_count=0, daily_change=0,
+            ret_3m=None, rs_percentile=None, trend='neutral', above_ema50=None,
+            outlook='Test sector.',
+        ),
+    ]
+    result = {
+        'market': market, 'sectors': sectors, 'focus_summary': None,
+        'timestamp': '2026-06-19T22:00',
+    }
+    gen = ReportGenerator(reports_dir=tmp_path)
+    report_path = gen.generate_report(result)
+    content = open(report_path).read()
+    assert '../js/table-utils.js' in content
+    assert '<script src="../js/table-utils.js"></script>' in content
+
+
 def test_report_handles_empty_ai(tmp_path):
     market = MarketOverview(
         date='2026-06-19', regime='neutral', confidence=50,
