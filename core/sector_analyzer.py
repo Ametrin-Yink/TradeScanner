@@ -11,6 +11,9 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Optional, Dict
 
+import numpy as np
+import pandas as pd
+
 from core.ai_client import chat
 from core.constants import SECTOR_ETFS
 from core.swing_detector import compute_stop_target, cluster_levels
@@ -106,6 +109,8 @@ def _composite_score(c: StockHighlight) -> float:
     setup_bonus = scoring_cfg.get('setup_bonus', {
         'Breakout': 1.0, 'Strong Momentum': 0.95,
         'Near Support': 0.85, 'Resistance Test': 0.80, 'Good R/R': 0.75,
+        'MA Bounce': 0.85, 'Inside Day Breakout': 0.90,
+        'Bull Flag': 0.80, 'ADX Trend': 0.90,
     })
     trend_above = 1.0 if getattr(c, 'ema_above', False) else 0.4
     structure = setup_bonus.get(c.reason, 0.5) * 15 + trend_above * 10
@@ -156,6 +161,36 @@ def _select_diverse(candidates, max_picks=3):
                 selected.append(c)
 
     return selected
+
+
+def _compute_adx(df, period=14):
+    """Compute ADX trend strength indicator."""
+    if len(df) < period * 2:
+        return None, None, None
+    high = df['High'].values
+    low = df['Low'].values
+    close = df['Close'].values
+
+    tr = np.zeros(len(df))
+    plus_dm = np.zeros(len(df))
+    minus_dm = np.zeros(len(df))
+
+    for i in range(1, len(df)):
+        tr[i] = max(high[i] - low[i], abs(high[i] - close[i-1]), abs(low[i] - close[i-1]))
+        up = high[i] - high[i-1]
+        down = low[i-1] - low[i]
+        if up > down and up > 0:
+            plus_dm[i] = up
+        if down > up and down > 0:
+            minus_dm[i] = down
+
+    atr_vals = pd.Series(tr).rolling(period).mean().values
+    plus_di = pd.Series(plus_dm).rolling(period).mean().values / atr_vals * 100
+    minus_di = pd.Series(minus_dm).rolling(period).mean().values / atr_vals * 100
+    dx = np.abs(plus_di - minus_di) / (plus_di + minus_di + 0.0001) * 100
+    adx = pd.Series(dx).rolling(period).mean().values
+
+    return float(adx[-1]), float(plus_di[-1]), float(minus_di[-1])
 
 
 class SectorAnalyzer:
@@ -518,6 +553,15 @@ class SectorAnalyzer:
                 low_60d = cache.get('low_60d')
                 volume_ratio = cache.get('volume_ratio', 1.0) or 1.0
                 near_threshold = max(0.01, atr_pct * 0.8)
+                ret_5d = cache.get('ret_5d', 0) or 0
+
+                # Fetch OHLC data for measured-move/fib target and setup detection
+                ohlc_df = self.db.get_market_data_df(symbol)
+                if ohlc_df is not None and len(ohlc_df) > 0:
+                    ohlc_df = ohlc_df.rename(columns={
+                        'open': 'Open', 'high': 'High', 'low': 'Low',
+                        'close': 'Close', 'volume': 'Volume'
+                    })
 
                 reason = None
                 detail = None
@@ -545,6 +589,7 @@ class SectorAnalyzer:
                         reason = 'Strong Momentum'
                         detail = f"RS {_ord(int(rs_percentile))} percentile, above EMAs"
                         time_horizon = 'position'
+
                 elif low_60d and high_60d:
                     # Good R/R check — only if no other reason matched
                     # Uptrend filter: require at least one confirmation
@@ -565,6 +610,48 @@ class SectorAnalyzer:
                             reason = 'Good R/R'
                             detail = f"Stop at ${stop_level:.0f}, target ${target_level:.0f}"
                             time_horizon = 'swing'
+
+                # --- Standalone checks (after elif chain) ---
+
+                # MA Bounce: price near EMA with bullish reversal candle
+                if reason is None and ema21 and ema50:
+                    near_ema = (abs(price - ema21) / price < 0.02 or abs(price - ema50) / price < 0.02)
+                    bullish_candle = (
+                        cache.get('close', price) > cache.get('open', price) and
+                        (cache.get('close', price) - cache.get('low', price)) >
+                        (cache.get('high', price) - cache.get('low', price)) * 0.6
+                    )
+                    if near_ema and bullish_candle and price > ema50:
+                        reason = 'MA Bounce'
+                        detail = f"Bounced near EMA, bullish reversal candle"
+                        time_horizon = 'swing'
+
+                # Inside Day Breakout: today's range within yesterday's, breaks above
+                if reason is None and ohlc_df is not None and len(ohlc_df) >= 2:
+                    try:
+                        yest = ohlc_df.iloc[-2]
+                        today_bar = ohlc_df.iloc[-1]
+                        inside = (today_bar['High'] < yest['High'] and today_bar['Low'] > yest['Low'])
+                        if inside and volume_ratio > 1.0 and price > yest['High'] * 0.995:
+                            reason = 'Inside Day Breakout'
+                            detail = f"Inside day, broke above ${yest['High']:.2f}"
+                            time_horizon = 'swing'
+                    except Exception:
+                        pass
+
+                # Bull Flag: sharp move up, then tight consolidation on declining volume
+                if reason is None and ret_5d and ret_5d > 5 and volume_ratio < 0.8 and ema21 and price > ema21:
+                    reason = 'Bull Flag'
+                    detail = f"{ret_5d:.1f}% 5d surge, low-vol consolidation"
+                    time_horizon = 'swing'
+
+                # ADX Trend: strong trend with directional bias
+                if reason is None and ohlc_df is not None and len(ohlc_df) >= 28:
+                    adx, plus_di, minus_di = _compute_adx(ohlc_df)
+                    if adx and adx > 20 and plus_di > minus_di and ema21 and price > ema21:
+                        reason = 'ADX Trend'
+                        detail = f"ADX {adx:.0f}, +DI > -DI, strong uptrend"
+                        time_horizon = 'position'
 
                 # Resistance Test (standalone if, not elif -- Good R/R's broad
                 # `elif low_60d and high_60d` would shadow it in the chain)
@@ -601,13 +688,6 @@ class SectorAnalyzer:
                 if abs(entry - price) / price > max_entry_gap:
                     entry = price
 
-                # Compute OHLC data for measured-move/fib target calculations
-                ohlc_df = self.db.get_market_data_df(symbol)
-                if ohlc_df is not None and len(ohlc_df) > 0:
-                    ohlc_df = ohlc_df.rename(columns={
-                        'open': 'Open', 'high': 'High', 'low': 'Low',
-                        'close': 'Close', 'volume': 'Volume'
-                    })
 
                 # Compute stop and target from chart S/R levels
                 stop, target, method = compute_stop_target(
@@ -663,6 +743,10 @@ class SectorAnalyzer:
                     'Near Support': 'Swing (5-20d)',
                     'Strong Momentum': 'Position (10-40d)',
                     'Good R/R': 'Swing (5-20d)',
+                    'MA Bounce': 'Swing (5-20d)',
+                    'Inside Day Breakout': 'Short (3-10d)',
+                    'Bull Flag': 'Swing (5-20d)',
+                    'ADX Trend': 'Position (10-40d)',
                 }
                 highlight.time_horizon = horizon_map.get(reason, 'Swing (5-20d)')
 
