@@ -175,8 +175,9 @@ HIGHLIGHT_ROW = """<tr><td class="sym sym-link" onclick="showChart('{symbol}','{
 
 
 class ReportGenerator:
-    def __init__(self, reports_dir=None):
+    def __init__(self, reports_dir=None, db=None):
         self.reports_dir = Path(reports_dir) if reports_dir else REPORTS_DIR
+        self.db = db
         self.max_reports = settings.get('report', {}).get('max_reports', 15) if reports_dir is None else 999
 
     def _compute_diff(self, highlights, scan_date):
@@ -262,6 +263,39 @@ class ReportGenerator:
             parts.append('</div>')
             if focus.reasoning:
                 parts.append(f'<div class="pos-reason" style="margin:-8px 0 16px 0;font-size:11px;color:var(--ash)">{focus.reasoning}</div>')
+
+        # Prior Picks Recap
+        if self.db is not None:
+            prior_recs = self.db.get_recommendations_since(
+                (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
+            )
+        else:
+            prior_recs = []
+
+        if prior_recs:
+            parts.append('<h2>Prior Picks Recap</h2>')
+            parts.append('<table><thead><tr><th>Symbol</th><th>Date</th><th>Setup</th>'
+                         '<th>Entry</th><th>Stop</th><th>Target</th><th>Status</th><th>P&amp;L</th></tr></thead><tbody>')
+
+            for r in prior_recs[:30]:
+                status_icon = {
+                    'active': '<span class="badge-up">▲ Active</span>',
+                    'target_hit': '<span class="badge-up">✓ Hit</span>',
+                    'stopped_out': '<span class="badge-down">▼ Stopped</span>',
+                    'expired': '<span class="badge-neutral">— Expired</span>',
+                }.get(r['status'], r['status'])
+
+                pnl_str = f"{r['pnl_pct']:+.1f}%" if r.get('pnl_pct') else '--'
+                parts.append(f'<tr><td class="sym">{r["symbol"]}</td>'
+                             f'<td>{r["trade_date"][-5:]}</td>'
+                             f'<td>{r["setup_type"]}</td>'
+                             f'<td class="num">${r["entry_price"]:.2f}</td>'
+                             f'<td class="num">${r["stop_price"]:.2f}</td>'
+                             f'<td class="num">${r["target_price"]:.2f}</td>'
+                             f'<td>{status_icon}</td>'
+                             f'<td class="num">{pnl_str}</td></tr>')
+
+            parts.append('</tbody></table>')
 
         # Tag Details
         parts.append('<h2>Tag Details</h2>')

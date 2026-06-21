@@ -1295,6 +1295,18 @@ class Database:
         """, (f'-{lookback_days} days',)).fetchall()
         return [dict(r) for r in rows]
 
+    def get_recommendations_since(self, since_date):
+        """Get recommendations with trade_date >= since_date.
+        Used by the report generator for Prior Picks Recap.
+        """
+        conn = self.get_connection()
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM recommendations WHERE trade_date >= ? ORDER BY trade_date DESC, id DESC",
+            (since_date,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
     def _migrate_to_tags(self):
         """One-time: migrate sector_assignments to tags + stock_tags."""
         conn = self.get_connection()
