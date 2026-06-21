@@ -188,7 +188,8 @@ function renderStockTable(stocks) {
       "<td>" +
       escapeHtml(st.name || st.symbol) +
       "</td>" +
-      '<td class="num">$<!--ret--></td><td class="cap">' +
+      '<td class="num ' + chgCls + '">' + chgSign + chg.toFixed(2) + '%' + "</td>" +
+        '<td class="cap">' +
       formatMarketCap(st.market_cap) +
       "</td>" +
       '<td class="actions"><button class="remove-btn" data-action="remove-stock" data-symbol="' +

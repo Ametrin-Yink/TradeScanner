@@ -5,6 +5,8 @@ CSS Custom Properties & Reset
   --bg-root: #0b1019;
   --bg-surface: #141c26;
   --bg-elevated: #1c2738;
+  --volt: #7ecb5a;
+  --ember: #e0553d;
   --border: #1c2738;
   --accent: #d4a853;
   --accent-dim: rgba(212, 168, 83, 0.12);
@@ -1050,3 +1052,6 @@ Responsive
     display: none;
   }
 }
+
+.up{color:#7ecb5a}
+.down{color:#e0553d}
