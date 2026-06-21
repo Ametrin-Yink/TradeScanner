@@ -54,6 +54,7 @@ class Database:
             conn.commit()
         finally:
             conn.close()
+        self.create_ai_audit_table()
         self._add_performance_indexes()
         self._cleanup_legacy_tables()
 
@@ -952,6 +953,40 @@ class Database:
             if row:
                 return dict(row)
             return None
+
+    def create_ai_audit_table(self):
+        """Create table for AI call audit logging."""
+        conn = self.get_connection()
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS ai_audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                call_type TEXT,
+                sector_name TEXT,
+                prompt_hash TEXT,
+                response_hash TEXT,
+                model TEXT,
+                temperature REAL,
+                seed INTEGER,
+                tokens_in INTEGER,
+                tokens_out INTEGER,
+                cost_estimate REAL,
+                created_at TEXT DEFAULT (datetime('now'))
+            )
+        """)
+        conn.commit()
+
+    def log_ai_call(self, call_type, sector_name, prompt_hash, response_hash,
+                    model, temperature, seed, tokens_in, tokens_out, cost):
+        """Record an AI API call for audit trail."""
+        conn = self.get_connection()
+        conn.execute("""
+            INSERT INTO ai_audit_log (call_type, sector_name, prompt_hash,
+                response_hash, model, temperature, seed, tokens_in, tokens_out,
+                cost_estimate)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (call_type, sector_name, prompt_hash, response_hash, model,
+              temperature, seed, tokens_in, tokens_out, cost))
+        conn.commit()
 
     def create_ai_confidence_outcomes_table(self):
         """Create table for AI confidence outcome tracking."""

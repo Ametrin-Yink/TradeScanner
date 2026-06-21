@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Optional, Dict, List
 
 from config.settings import settings
+from data.db import db
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +117,20 @@ def chat(
                 f"AI call: {call_type} {sector_name} -- "
                 f"{tokens_in}+{tokens_out} tokens, ${cost:.4f}, "
                 f"hash={response_hash}"
+            )
+
+            # Persist audit log
+            db.log_ai_call(
+                call_type=call_type,
+                sector_name=sector_name,
+                prompt_hash=prompt_hash,
+                response_hash=response_hash,
+                model=MODEL,
+                temperature=temperature,
+                seed=seed,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                cost=cost,
             )
 
             # Cache result
