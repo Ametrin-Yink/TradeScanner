@@ -336,7 +336,11 @@ class ReportGenerator:
                 risks=risks_html or '<span class="dim">--</span>',
                 highlights_html=highlights_html))
 
-        parts.append(f'<div class="footer">TradeScanner &middot; {timestamp[:16]}</div>')
+        # Track AI status
+        ai_errors = sum(1 for s in sectors if 'unavailable' in (s.outlook or ''))
+        ai_status = f"AI: {len(sectors) - ai_errors}/{len(sectors)} sectors OK"
+        # Add cost total from audit log
+        parts.append(f'<div class="footer">TradeScanner &middot; {timestamp[:16]} &middot; {ai_status}</div>')
         parts.append('</body></html>')
         return '\n'.join(parts)
 

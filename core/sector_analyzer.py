@@ -290,6 +290,16 @@ class SectorAnalyzer:
         trend = self._determine_trend(daily_change, ret_3m, above_ema50)
         outlook, drivers, risks = self._ai_sector_analysis(name)
 
+        # Consistency check: AI outlook vs quantitative trend
+        if outlook and trend:
+            outlook_lower = outlook.lower()
+            if trend == 'uptrend' and any(w in outlook_lower for w in ['bearish', 'declining', 'weak']):
+                logger.warning(f"{name}: AI outlook conflicts with uptrend — flagging")
+                outlook = outlook.rstrip('.') + ".\n\n[AI/quantitative divergence: uptrend detected but AI outlook cautious]"
+            elif trend == 'downtrend' and any(w in outlook_lower for w in ['bullish', 'strong', 'accelerating']):
+                logger.warning(f"{name}: AI outlook conflicts with downtrend — flagging")
+                outlook = outlook.rstrip('.') + ".\n\n[AI/quantitative divergence: downtrend detected but AI outlook optimistic]"
+
         return SectorAnalysis(
             name=name,
             etf=etf,
