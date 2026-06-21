@@ -96,6 +96,17 @@ def _load_portfolio_config():
     return _portfolio_config
 
 
+def _composite_score(c: StockHighlight, setup_bonus: Dict[str, float]) -> float:
+    """Multi-factor composite score for ranking stock highlights."""
+    momentum = (c.rs_percentile or 0) * 0.30 + min((getattr(c, 'rs_consecutive_days_80', 0) or 0) / 2, 10)
+    quality = min(c.rr * 5, 15) + min((c.volume_ratio or 1) * 5, 10)
+    rs_cons = getattr(c, 'rs_consecutive_days_80', 0) or 0
+    quality += min(rs_cons / 2, 10)
+    tb = 1.0 if getattr(c, 'ema_above', False) else 0.4
+    structure = setup_bonus.get(c.reason, 0.5) * 15 + tb * 10
+    return momentum + quality + structure
+
+
 class SectorAnalyzer:
     """Full pipeline: market overview -> sector analysis -> stock highlights -> focus summary."""
 
@@ -496,6 +507,7 @@ class SectorAnalyzer:
                 highlight.rs_percentile = rs_percentile
                 highlight.volume_ratio = volume_ratio
                 highlight.ret_5d = cache.get('ret_5d', 0) or 0
+                highlight.rs_consecutive_days_80 = cache.get('rs_consecutive_days_80', 0) or 0
                 highlight.ema_above = (ema50 and price > ema50) or False
                 highlight.ema21 = ema21 or 0
                 highlight.ema50 = ema50 or 0
@@ -532,16 +544,7 @@ class SectorAnalyzer:
             # Multi-factor composite scoring
             setup_bonus = {'Breakout': 1.0, 'Strong Momentum': 0.9, 'Near Support': 0.7,
                            'Near Resistance': 0.5, 'Good R/R': 0.5}
-            def composite_score(c):
-                momentum = (c.rs_percentile or 0) * 0.30 + min((c.ret_5d or 0) * 1.5, 10)
-                quality = min(c.rr * 5, 15) + min((c.volume_ratio or 1) * 5, 10)
-                rs_cons = getattr(c, 'rs_consecutive_days_80', 0) or 0
-                quality += min(rs_cons / 2, 10)
-                tb = 1.0 if getattr(c, 'ema_above', False) else 0.4
-                structure = setup_bonus.get(c.reason, 0.5) * 15 + tb * 10
-                return momentum + quality + structure
-
-            all_candidates.sort(key=composite_score, reverse=True)
+            all_candidates.sort(key=lambda c: _composite_score(c, setup_bonus), reverse=True)
 
             selected = []
             used_reasons = set()
