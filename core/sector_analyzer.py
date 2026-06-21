@@ -126,6 +126,38 @@ def _composite_score(c: StockHighlight) -> float:
     return momentum + quality + structure + vol_penalty
 
 
+def _select_diverse(candidates, max_picks=3):
+    """Soft diversity selection: prefer different reasons, allow same-reason
+    high-scorers when score >= diversity_soft_threshold * top_score.
+
+    Args:
+        candidates: list of StockHighlight, pre-sorted by composite score descending.
+        max_picks: maximum number of picks to return.
+
+    Returns:
+        List of selected StockHighlight (max max_picks).
+    """
+    pcfg = _load_portfolio_config()
+    scoring_cfg = pcfg.get('scoring', {})
+    div_threshold = scoring_cfg.get('diversity_soft_threshold', 0.70)
+
+    selected = []
+    used_reasons = set()
+
+    for c in candidates:
+        if len(selected) >= max_picks:
+            break
+        if c.reason not in used_reasons:
+            selected.append(c)
+            used_reasons.add(c.reason)
+        elif len(selected) < max_picks:
+            top_score = _composite_score(selected[0])
+            if _composite_score(c) >= top_score * div_threshold:
+                selected.append(c)
+
+    return selected
+
+
 class SectorAnalyzer:
     """Full pipeline: market overview -> sector analysis -> stock highlights -> focus summary."""
 
@@ -644,23 +676,7 @@ class SectorAnalyzer:
             all_candidates = [c for c in all_candidates if _composite_score(c) >= min_score]
             all_candidates.sort(key=lambda c: _composite_score(c), reverse=True)
 
-            selected = []
-            used_reasons = set()
-            for c in all_candidates:
-                if len(selected) >= 3:
-                    break
-                if c.reason not in used_reasons:
-                    selected.append(c)
-                    used_reasons.add(c.reason)
-                elif len(selected) == 2 and len(used_reasons) == 1:
-                    # Diversity rule: if top 2 are same type, force 3rd to be different
-                    continue
-                else:
-                    # Fill remaining slots by score
-                    if len(selected) < 3:
-                        selected.append(c)
-
-            sector.highlights = selected
+            sector.highlights = _select_diverse(all_candidates, max_picks=3)
 
     # ------------------------------------------------------------------
     # Step 4: Focus Summary

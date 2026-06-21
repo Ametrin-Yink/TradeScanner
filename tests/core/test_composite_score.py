@@ -11,9 +11,13 @@ from core.sector_analyzer import StockHighlight, _composite_score
 def _make_highlight(**overrides):
     """Create a StockHighlight with sensible defaults for scoring tests."""
     h = StockHighlight(
-        symbol='TEST', name='Test Stock', price=100.0,
-        market_cap=1_000_000_000, reason='Breakout', detail='Test detail',
-        rr=2.0,
+        symbol=overrides.pop('symbol', 'TEST'),
+        name=overrides.pop('name', 'Test Stock'),
+        price=overrides.pop('price', 100.0),
+        market_cap=overrides.pop('market_cap', 1_000_000_000),
+        reason=overrides.pop('reason', 'Breakout'),
+        detail=overrides.pop('detail', 'Test detail'),
+        rr=overrides.pop('rr', 2.0),
     )
     h.rs_percentile = overrides.get('rs_percentile', 50)
     h.volume_ratio = overrides.get('volume_ratio', 1.5)
@@ -80,3 +84,48 @@ def test_data_completeness_one_missing_ok():
     # Should not return -999 since only 1 field missing
     assert _composite_score(h) != -999
     assert _composite_score(h) > 0
+
+
+# ------------------------------------------------------------------
+# Soft diversity gate tests
+# ------------------------------------------------------------------
+
+
+def test_soft_diversity_different_reasons_preferred():
+    """Different reasons are always selected before same-reason picks."""
+    from core.sector_analyzer import _select_diverse
+    reasons = ['Breakout', 'Near Support', 'Strong Momentum']
+    candidates = [_make_highlight(symbol=f'S{i}', reason=r) for i, r in enumerate(reasons)]
+    result = _select_diverse(candidates, max_picks=3)
+    assert len(result) == 3
+    assert {h.reason for h in result} == set(reasons)
+
+
+def test_soft_diversity_allows_high_score_same_reason():
+    """Same-reason candidates with score >= 70% of top score are selected."""
+    from core.sector_analyzer import _select_diverse
+    top = _make_highlight(symbol='A', reason='Breakout', rs_percentile=95, volume_ratio=2.0, rr=3.0)
+    mid = _make_highlight(symbol='B', reason='Breakout', rs_percentile=80, volume_ratio=1.5, rr=2.5)
+    candidates = sorted([top, mid], key=lambda c: _composite_score(c), reverse=True)
+    result = _select_diverse(candidates, max_picks=3)
+    assert len(result) == 2
+    assert {h.symbol for h in result} == {'A', 'B'}
+
+
+def test_soft_diversity_excludes_low_score_same_reason():
+    """Same-reason candidates below 70% of top score are excluded."""
+    from core.sector_analyzer import _select_diverse
+    top = _make_highlight(symbol='A', reason='Breakout', rs_percentile=95, volume_ratio=2.0, rr=3.0)
+    low = _make_highlight(symbol='B', reason='Breakout', rs_percentile=10, volume_ratio=0.5, rr=0.5)
+    candidates = sorted([top, low], key=lambda c: _composite_score(c), reverse=True)
+    result = _select_diverse(candidates, max_picks=3)
+    assert len(result) == 1
+    assert result[0].symbol == 'A'
+
+
+def test_soft_diversity_max_three():
+    """At most max_picks candidates are returned."""
+    from core.sector_analyzer import _select_diverse
+    candidates = [_make_highlight(symbol=f'S{i}', reason=f'R{i}') for i in range(5)]
+    result = _select_diverse(candidates, max_picks=3)
+    assert len(result) == 3
