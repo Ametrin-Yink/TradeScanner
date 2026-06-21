@@ -13,3 +13,12 @@ stop_target:
   min_rr_position: 2.0 # minimum risk:reward for position trades
   fib_extension_default: 1.618 # Fibonacci extension multiplier
   atr_multiplier_swing: 1.5 # ATR multiplier for stop fallback
+
+# S/R detection parameters
+sr:
+  swing_order_min: 3
+  swing_order_max: 8
+  cluster_method: complete
+  zone_min_touches: 2
+  price_filter_atr_mult: 5.0
+  price_filter_min_pct: 0.10
