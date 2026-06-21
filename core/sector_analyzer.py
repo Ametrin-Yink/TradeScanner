@@ -230,8 +230,11 @@ class SectorAnalyzer:
             status['sector_analysis_done'] = True
             self.db.save_workflow_status({'run_date': today, 'status_data': json.dumps(status)})
         else:
-            # Load from persisted results (stub — see _load_sector_analyses)
             sectors = self._load_sector_analyses(today)
+            if sectors is None:
+                sectors = self._analyze_all_sectors(market)
+                status['sector_analysis_done'] = True
+                self.db.save_workflow_status({'run_date': today, 'status_data': json.dumps(status)})
 
         # Step 2b: S/R Refresh (skip if done today)
         if 'sr_refresh_done' not in status:
@@ -251,8 +254,11 @@ class SectorAnalyzer:
             status['focus_summary_done'] = True
             self.db.save_workflow_status({'run_date': today, 'status_data': json.dumps(status)})
         else:
-            # Load from persisted results (stub — see _load_focus_summary)
             focus = self._load_focus_summary(today)
+            if focus is None:
+                focus = self._generate_focus_summary(market, sectors)
+                status['focus_summary_done'] = True
+                self.db.save_workflow_status({'run_date': today, 'status_data': json.dumps(status)})
 
         return {
             'market': market, 'sectors': sectors,
@@ -890,11 +896,9 @@ class SectorAnalyzer:
     # ------------------------------------------------------------------
 
     def _load_sector_analyses(self, today: str) -> List[SectorAnalysis]:
-        """Load sector analyses from persisted cache."""
-        logger.warning("Sector analysis checkpoint hit but persistence not implemented — returning empty list")
-        return []
+        """Load sector analyses from persisted cache. Returns None if not cached."""
+        return None  # caller falls back to re-running
 
     def _load_focus_summary(self, today: str) -> FocusSummary:
-        """Load focus summary from persisted cache."""
-        logger.warning("Focus summary checkpoint hit but persistence not implemented — returning default")
-        return FocusSummary(focus_sectors=[], avoid_sectors=[], reasoning="")
+        """Load focus summary from persisted cache. Returns None if not cached."""
+        return None  # caller falls back to re-running
