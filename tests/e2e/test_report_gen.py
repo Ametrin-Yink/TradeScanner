@@ -43,6 +43,50 @@ def test_report_generates_html(tmp_path):
     assert 'SPY' in content
 
 
+def test_report_embeds_ohlc_data(tmp_path, seeded_db):
+    """Report HTML embeds 120-bar OHLC data as JSON blob for offline charts."""
+    from core.sector_analyzer import MarketOverview, SectorAnalysis, StockHighlight
+
+    market = MarketOverview(
+        date='2026-06-19', regime='bull_moderate', confidence=70,
+        reasoning='Market is steady.', spy_price=525.0, spy_change_5d=1.2,
+        vix=14.5, vix_status='low',
+    )
+    sectors = [
+        SectorAnalysis(
+            name='Semiconductors', etf='SMH', stock_count=1,
+            daily_change=2.5, ret_3m=15.0, rs_percentile=85.0,
+            trend='uptrend', above_ema50=True,
+            outlook='Strong demand from AI.',
+            key_drivers=[{'text': 'AI boom'}], risks=[{'text': 'Supply chain'}],
+            highlights=[
+                StockHighlight('NVDA', 'NVIDIA', 950, 2.5e12, 'Breakout',
+                               'Broke 60d high', 950, 900, 1100, 3.0),
+            ],
+        ),
+    ]
+    result = {
+        'market': market, 'sectors': sectors, 'focus_summary': None,
+        'timestamp': '2026-06-19T22:00',
+    }
+    gen = ReportGenerator(reports_dir=tmp_path, db=seeded_db)
+    report_path = gen.generate_report(result)
+    content = open(report_path).read()
+    assert 'window._EMBEDDED_OHLC' in content
+    import json
+    # Extract the JSON blob
+    marker = 'window._EMBEDDED_OHLC = '
+    start = content.index(marker) + len(marker)
+    end = content.index(';</script>', start)
+    ohlc_data = json.loads(content[start:end])
+    assert 'NVDA' in ohlc_data
+    assert len(ohlc_data['NVDA']) > 0
+    assert 'open' in ohlc_data['NVDA'][0]
+    assert 'date' in ohlc_data['NVDA'][0]
+    # showChart references embedded data first
+    assert 'window._EMBEDDED_OHLC' in content.split('function showChart')[1].split('function drawCandles')[0]
+
+
 def test_report_handles_empty_ai(tmp_path):
     market = MarketOverview(
         date='2026-06-19', regime='neutral', confidence=50,

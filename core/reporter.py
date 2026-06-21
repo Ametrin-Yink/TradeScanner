@@ -1,4 +1,5 @@
 """Report generator - sector-first HTML reports with amber palette."""
+import json
 import logging
 import re
 from pathlib import Path
@@ -79,6 +80,11 @@ async function showChart(sym,tagName){
   container.style.display='block';
   container.scrollIntoView({behavior:'smooth'});
   container.innerHTML='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px"><span style="color:var(--gold);font-weight:600;font-size:13px">'+sym+'</span><span style="color:var(--ash);font-size:10px">loading...</span></div><canvas id="'+anchor+'-canvas" style="width:100%;height:400px"></canvas>';
+  // Try embedded data first
+  if(window._EMBEDDED_OHLC&&window._EMBEDDED_OHLC[sym]){
+    drawCandles(anchor+'-canvas',window._EMBEDDED_OHLC[sym],[],[],sym);
+    return;
+  }
   try{
     var resp=await fetch('/api/data/ohlc/'+sym,{headers:{'Authorization':'Bearer '+_key()}});
     var d=await resp.json();
@@ -375,6 +381,30 @@ class ReportGenerator:
         ai_status = f"AI: {len(sectors) - ai_errors}/{len(sectors)} sectors OK"
         # Add cost total from audit log
         parts.append(f'<div class="footer">TradeScanner &middot; {timestamp[:16]} &middot; {ai_status}</div>')
+
+        # Embed OHLC data for offline chart rendering
+        all_ohlc = {}
+        if self.db:
+            for sector in sectors:
+                for h in sector.highlights:
+                    if h.symbol not in all_ohlc:
+                        df = self.db.get_market_data_df(h.symbol)
+                        if df is not None and len(df) > 0:
+                            df_tail = df.tail(120)
+                            records = []
+                            for _, row in df_tail.iterrows():
+                                records.append({
+                                    'date': str(row['date'])[:10] if 'date' in row else '',
+                                    'open': float(row['open']),
+                                    'high': float(row['high']),
+                                    'low': float(row['low']),
+                                    'close': float(row['close'])
+                                })
+                            all_ohlc[h.symbol] = records
+
+        parts.append('<script>window._EMBEDDED_OHLC = ')
+        parts.append(json.dumps(all_ohlc))
+        parts.append(';</script>')
         parts.append('</body></html>')
         return '\n'.join(parts)
 
