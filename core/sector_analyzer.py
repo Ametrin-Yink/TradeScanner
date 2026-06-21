@@ -87,15 +87,44 @@ def _load_portfolio_config():
     return load_config()
 
 
-def _composite_score(c: StockHighlight, setup_bonus: Dict[str, float]) -> float:
-    """Multi-factor composite score for ranking stock highlights."""
-    momentum = (c.rs_percentile or 0) * 0.30 + min((getattr(c, 'rs_consecutive_days_80', 0) or 0) / 2, 10)
+def _composite_score(c: StockHighlight) -> float:
+    """Multi-factor composite score for ranking stock highlights.
+
+    Components: Momentum (30%), Quality (30%), Structure (25%),
+    Volatility penalty (5%), with data completeness gate.
+    """
+    # Momentum (30%): RS percentile + streak bonus
+    momentum = (c.rs_percentile or 0) * 0.30
+    momentum += min((getattr(c, 'rs_consecutive_days_80', 0) or 0) / 2, 10)
+
+    # Quality (30%): R:R quality + volume confirmation
     quality = min(c.rr * 5, 15) + min((c.volume_ratio or 1) * 5, 10)
-    rs_cons = getattr(c, 'rs_consecutive_days_80', 0) or 0
-    quality += min(rs_cons / 2, 10)
-    tb = 1.0 if getattr(c, 'ema_above', False) else 0.4
-    structure = setup_bonus.get(c.reason, 0.5) * 15 + tb * 10
-    return momentum + quality + structure
+
+    # Structure (25%): setup type bonus + trend alignment
+    setup_bonus = {
+        'Breakout': 1.0,
+        'Strong Momentum': 0.95,
+        'Near Support': 0.85,
+        'Resistance Test': 0.80,
+        'Good R/R': 0.75,
+    }
+    trend_above = 1.0 if getattr(c, 'ema_above', False) else 0.4
+    structure = setup_bonus.get(c.reason, 0.5) * 15 + trend_above * 10
+
+    # Volatility penalty (5%): high-vol stocks penalized
+    atr_pct_val = getattr(c, 'atr_pct', 0.03) or 0.03
+    vol_penalty = -min(atr_pct_val * 100, 10) * 0.5
+
+    # Data completeness gate
+    missing = 0
+    for field in ['rs_percentile', 'volume_ratio']:
+        val = getattr(c, field, None)
+        if val is None or val == 0:
+            missing += 1
+    if missing >= 2:
+        return -999
+
+    return momentum + quality + structure + vol_penalty
 
 
 class SectorAnalyzer:
@@ -578,6 +607,7 @@ class SectorAnalyzer:
                 highlight.ema_above = (ema50 and price > ema50) or False
                 highlight.ema21 = ema21 or 0
                 highlight.ema50 = ema50 or 0
+                highlight.atr_pct = atr_pct
                 highlight.entry_distance_pct = abs(entry - price) / price * 100
 
                 # Per-trade position sizing (based on actual entry, not current price)
@@ -608,10 +638,12 @@ class SectorAnalyzer:
                 all_candidates.append(highlight)
                 used_symbols.add(symbol)
 
-            # Multi-factor composite scoring
-            setup_bonus = {'Breakout': 1.0, 'Strong Momentum': 0.9, 'Near Support': 0.7,
-                           'Resistance Test': 0.80, 'Good R/R': 0.5}
-            all_candidates.sort(key=lambda c: _composite_score(c, setup_bonus), reverse=True)
+            # Multi-factor composite scoring with score threshold
+            from config.settings import settings
+            min_score = settings.get('scoring', {}).get('min_composite_score', 20) if hasattr(settings, 'get') else 20
+
+            all_candidates = [c for c in all_candidates if _composite_score(c) >= min_score]
+            all_candidates.sort(key=lambda c: _composite_score(c), reverse=True)
 
             selected = []
             used_reasons = set()

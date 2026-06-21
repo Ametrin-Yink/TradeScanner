@@ -10,15 +10,7 @@ from core.sector_analyzer import SectorAnalyzer, _composite_score, StockHighligh
 
 
 def test_resistance_test_setup_bonus_in_composite_score():
-    """Resistance Test (0.80 bonus) should score higher than Good R/R (0.50) all else equal."""
-    setup_bonus = {
-        'Resistance Test': 0.80,
-        'Breakout': 1.0,
-        'Strong Momentum': 0.9,
-        'Good R/R': 0.5,
-        'Near Support': 0.7,
-    }
-
+    """Resistance Test (0.80 bonus) should score higher than Good R/R (0.75) all else equal."""
     rt = StockHighlight(
         symbol='RT', name='Resistance Test', price=100.0,
         market_cap=1_000_000_000, reason='Resistance Test', detail='Test', rr=2.0,
@@ -37,7 +29,7 @@ def test_resistance_test_setup_bonus_in_composite_score():
     grr.ema_above = True
     grr.rs_consecutive_days_80 = 0
 
-    assert _composite_score(rt, setup_bonus) > _composite_score(grr, setup_bonus)
+    assert _composite_score(rt) > _composite_score(grr)
 
 
 def test_resistance_test_requires_all_confirmations(seeded_db, mock_ai):
