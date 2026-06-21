@@ -241,6 +241,35 @@ def compute_sr_for_symbol(db, symbol: str) -> tuple:
         high_zones = cluster_levels(swing_highs, atr=atr, price=current_price)
         low_zones = cluster_levels(swing_lows, atr=atr, price=current_price)
 
+        # Weekly S/R: resample to weekly, last 24 weeks (confluence bonus)
+        if len(df) >= 60:
+            try:
+                dates = pd.to_datetime(df['date'], errors='coerce')
+                if dates.notna().sum() >= 60:
+                    weekly = df.set_index(dates).resample('W').agg({
+                        'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last'
+                    }).dropna().tail(24)
+
+                    if len(weekly) >= 10:
+                        weekly_swing_h, weekly_swing_l = detect_swings(weekly, order=2)
+                        weekly_high_zones = cluster_levels(weekly_swing_h, atr=atr, price=current_price)
+                        weekly_low_zones = cluster_levels(weekly_swing_l, atr=atr, price=current_price)
+
+                        # Confluence bonus: boost daily zones that align with weekly
+                        for dz in low_zones:
+                            for wz in weekly_low_zones:
+                                if abs(dz['level'] - wz['level']) / dz['level'] < 0.01:
+                                    dz['count'] = dz.get('count', 1) + 2
+                                    dz['level'] = (dz['level'] + wz['level']) / 2
+
+                        for dz in high_zones:
+                            for wz in weekly_high_zones:
+                                if abs(dz['level'] - wz['level']) / dz['level'] < 0.01:
+                                    dz['count'] = dz.get('count', 1) + 2
+                                    dz['level'] = (dz['level'] + wz['level']) / 2
+            except Exception:
+                pass  # Weekly S/R is non-critical; fall through to daily-only
+
         # Filter: only multi-touch zones (count >= 2)
         high_zones = [z for z in high_zones if z['count'] >= 2]
         low_zones = [z for z in low_zones if z['count'] >= 2]

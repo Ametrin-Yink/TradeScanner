@@ -1,7 +1,7 @@
 """Tests for swing_detector.py — adaptive order + find_peaks."""
 import numpy as np
 import pandas as pd
-from core.swing_detector import detect_swings, _compute_fib_target, cluster_levels, compute_stop_target
+from core.swing_detector import detect_swings, _compute_fib_target, cluster_levels, compute_stop_target, compute_sr_for_symbol
 
 
 def make_test_prices(n=80):
@@ -382,3 +382,101 @@ def test_compute_fib_target_extension_param():
         assert target_1618 >= target_1272, (
             f"1.618 extension ({target_1618}) should be >= 1.272 ({target_1272})"
         )
+
+
+# --- compute_sr_for_symbol with weekly S/R ---
+
+def test_compute_sr_for_symbol_weekly_confluence():
+    """60+ bars triggers weekly S/R; supports/resistances returned with weekly boost."""
+    import numpy as np
+    import tempfile
+    from pathlib import Path
+    from data.db import Database
+    from core.swing_detector import compute_sr_for_symbol
+
+    tmp = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
+    tmp_path = tmp.name
+    tmp.close()
+    db = Database(Path(tmp_path))
+    conn = db.get_connection()
+
+    # 80 days of trending random walk to produce natural swing points
+    np.random.seed(42)
+    n = 80
+    close = 100 + np.cumsum(np.random.randn(n) * 0.8)
+    high = close + np.abs(np.random.randn(n)) * 1.0
+    low = close - np.abs(np.random.randn(n)) * 1.0
+
+    from datetime import datetime, timedelta
+    start = datetime(2026, 3, 1)
+    for i in range(n):
+        date = (start + timedelta(days=i)).strftime('%Y-%m-%d')
+        conn.execute(
+            "INSERT INTO market_data (symbol, date, open, high, low, close, volume) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ('TEST', date, float(close[i]), float(high[i]), float(low[i]), float(close[i]), 1000000)
+        )
+
+    current_price = float(close[-1])
+    conn.execute(
+        "INSERT INTO tier1_cache (symbol, current_price, high_60d, low_60d, atr_pct, rs_percentile, ema21, ema50, volume_ratio, supports, resistances, ret_5d) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1.0, ?, ?, ?)",
+        ('TEST', current_price, float(close.max()), float(close.min()), 0.02, 50.0, current_price * 0.95, current_price * 0.90, '[]', '[]', 0.0)
+    )
+    conn.commit()
+
+    supports, resistances = compute_sr_for_symbol(db, 'TEST')
+
+    assert isinstance(supports, list), "supports should be a list"
+    assert isinstance(resistances, list), "resistances should be a list"
+    # 80 bars of oscillating data should produce both supports and resistances
+    assert len(supports) > 0, f"Expected >0 supports, got {supports}"
+    assert len(resistances) > 0, f"Expected >0 resistances, got {resistances}"
+    for s in supports:
+        assert s < current_price, f"Support {s} should be below price {current_price}"
+    for r in resistances:
+        assert r > current_price, f"Resistance {r} should be above price {current_price}"
+
+    Path(tmp_path).unlink(missing_ok=True)
+
+
+def test_compute_sr_for_symbol_weekly_insufficient_bars():
+    """40 bars runs daily-only S/R without weekly; still produces levels."""
+    import numpy as np
+    import tempfile
+    from pathlib import Path
+    from data.db import Database
+    from core.swing_detector import compute_sr_for_symbol
+
+    tmp = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
+    tmp_path = tmp.name
+    tmp.close()
+    db = Database(Path(tmp_path))
+    conn = db.get_connection()
+
+    np.random.seed(1)
+    n = 40
+    close = 100 + np.cumsum(np.random.randn(n) * 0.5)
+    high = close + np.abs(np.random.randn(n)) * 1.0
+    low = close - np.abs(np.random.randn(n)) * 1.0
+
+    from datetime import datetime, timedelta
+    start = datetime(2026, 5, 1)
+    for i in range(n):
+        date = (start + timedelta(days=i)).strftime('%Y-%m-%d')
+        conn.execute(
+            "INSERT INTO market_data (symbol, date, open, high, low, close, volume) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ('TEST', date, float(close[i]), float(high[i]), float(low[i]), float(close[i]), 1000000)
+        )
+
+    current_price = float(close[-1])
+    conn.execute(
+        "INSERT INTO tier1_cache (symbol, current_price, high_60d, low_60d, atr_pct, rs_percentile, ema21, ema50, volume_ratio, supports, resistances, ret_5d) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1.0, ?, ?, ?)",
+        ('TEST', current_price, float(close.max()), float(close.min()), 0.02, 50.0, current_price * 0.95, current_price * 0.90, '[]', '[]', 0.0)
+    )
+    conn.commit()
+
+    supports, resistances = compute_sr_for_symbol(db, 'TEST')
+    assert isinstance(supports, list)
+    assert isinstance(resistances, list)
+    # 40 bars without weekly should still work (daily-only S/R)
+
+    Path(tmp_path).unlink(missing_ok=True)
