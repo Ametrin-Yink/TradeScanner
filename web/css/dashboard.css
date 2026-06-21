@@ -1053,5 +1053,12 @@ Responsive
   }
 }
 
-.up{color:#7ecb5a}
-.down{color:#e0553d}
+.up {
+  color: #7ecb5a;
+}
+.down {
+  color: #e0553d;
+}
+
+th.sortable{cursor:pointer;user-select:none}
+th.sortable:hover{color:var(--accent)}
