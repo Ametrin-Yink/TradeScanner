@@ -4,6 +4,7 @@ import numpy as np
 from typing import List, Dict, Tuple, Optional
 from scipy.signal import find_peaks
 from scipy.cluster.hierarchy import linkage, fcluster
+from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -286,6 +287,32 @@ def session_levels(df):
     ]
 
 
+def anchored_vwap(df, anchor_date, current_price):
+    """VWAP from a specific anchor date to present."""
+    import pandas as pd
+    anchor_df = df[df.index >= pd.to_datetime(anchor_date)]
+    if len(anchor_df) < 5:
+        return None
+    if 'Volume' not in anchor_df.columns or anchor_df['Volume'].sum() == 0:
+        return None
+    vwap = (anchor_df['Close'] * anchor_df['Volume']).sum() / anchor_df['Volume'].sum()
+    if abs(vwap - current_price) / current_price < 0.15:
+        return {'level': round(float(vwap), 2), 'count': 2, 'type': 'anchored_vwap'}
+    return None
+
+
+def compute_anchored_vwaps(db, symbol, df, current_price):
+    """Compute AVWAPs from key anchor dates: earnings, 52w high, gap day."""
+    levels = []
+    # From last earnings date
+    earnings = db.get_stock_earnings_date(symbol)
+    if earnings and earnings > (datetime.now() - timedelta(days=120)).strftime('%Y-%m-%d'):
+        avwap = anchored_vwap(df, earnings, current_price)
+        if avwap:
+            levels.append(avwap)
+    return levels
+
+
 def compute_sr_for_symbol(db, symbol: str) -> tuple:
     """Compute support/resistance levels from recent (60-bar) and full-range OHLC.
     Returns (supports: List[float], resistances: List[float]).
@@ -295,14 +322,14 @@ def compute_sr_for_symbol(db, symbol: str) -> tuple:
         import pandas as pd
         conn = db.get_connection()
         rows = conn.execute(
-            "SELECT date, open, high, low, close FROM market_data "
+            "SELECT date, open, high, low, close, volume FROM market_data "
             "WHERE symbol = ? ORDER BY date ASC",
             (symbol,)
         ).fetchall()
         if len(rows) < 30:
             return [], []
-        df = pd.DataFrame(rows, columns=['date', 'open', 'high', 'low', 'close'])
-        df.columns = ['date', 'Open', 'High', 'Low', 'Close']
+        df = pd.DataFrame(rows, columns=['date', 'open', 'high', 'low', 'close', 'volume'])
+        df.columns = ['date', 'Open', 'High', 'Low', 'Close', 'Volume']
 
         # Use recent 60 bars with order=2 to catch 2-day pullbacks
         recent = df.tail(60)
@@ -372,6 +399,21 @@ def compute_sr_for_symbol(db, symbol: str) -> tuple:
                 supports.append(lvl_dict['level'])
             elif lvl_dict['level'] > current_price:
                 resistances.append(lvl_dict['level'])
+
+        # Anchored VWAP levels from earnings dates (non-critical)
+        try:
+            avwap_df = df.copy()
+            avwap_dates = pd.to_datetime(df['date'], errors='coerce')
+            if avwap_dates.notna().sum() >= 30:
+                avwap_df.index = avwap_dates
+                avwaps = compute_anchored_vwaps(db, symbol, avwap_df, current_price)
+                for lvl_dict in avwaps:
+                    if lvl_dict['level'] < current_price:
+                        supports.append(lvl_dict['level'])
+                    elif lvl_dict['level'] > current_price:
+                        resistances.append(lvl_dict['level'])
+        except Exception:
+            pass  # AVWAP is non-critical; fall through
 
         # Cache in tier1_cache
         cache = db.get_tier1_cache(symbol)

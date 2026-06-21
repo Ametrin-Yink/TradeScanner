@@ -723,3 +723,241 @@ def test_session_levels_pivot_midpoint():
     assert abs(week_high['level'] - h) < 0.01
     week_low = [lvl for lvl in levels if lvl['type'] == 'prior_week_low'][0]
     assert abs(week_low['level'] - l) < 0.01
+
+
+# --- Anchored VWAP tests ---
+
+
+def test_anchored_vwap_valid():
+    """Anchored VWAP returns correct level when data is sufficient."""
+    from core.swing_detector import anchored_vwap
+    import pandas as pd
+    import numpy as np
+
+    dates = pd.date_range('2026-01-01', periods=100, freq='D')
+    np.random.seed(42)
+    close = 100 + np.cumsum(np.random.randn(100) * 0.5)
+    volume = np.random.randint(100000, 5000000, 100)
+    df = pd.DataFrame({'Close': close, 'Volume': volume}, index=dates)
+
+    result = anchored_vwap(df, '2026-03-01', current_price=close[-1])
+    assert result is not None
+    assert 'level' in result
+    assert result['count'] == 2
+    assert result['type'] == 'anchored_vwap'
+
+
+def test_anchored_vwap_too_short():
+    """Less than 5 bars from anchor returns None."""
+    from core.swing_detector import anchored_vwap
+    import pandas as pd
+    import numpy as np
+
+    dates = pd.date_range('2026-01-01', periods=10, freq='D')
+    np.random.seed(42)
+    close = 100 + np.cumsum(np.random.randn(10) * 0.5)
+    volume = np.random.randint(100000, 5000000, 10)
+    df = pd.DataFrame({'Close': close, 'Volume': volume}, index=dates)
+
+    result = anchored_vwap(df, '2026-01-08', current_price=close[-1])
+    assert result is None
+
+
+def test_anchored_vwap_zero_volume():
+    """Zero total volume returns None."""
+    from core.swing_detector import anchored_vwap
+    import pandas as pd
+    import numpy as np
+
+    dates = pd.date_range('2026-01-01', periods=100, freq='D')
+    np.random.seed(42)
+    close = 100 + np.cumsum(np.random.randn(100) * 0.5)
+    df = pd.DataFrame({'Close': close, 'Volume': [0]*100}, index=dates)
+
+    result = anchored_vwap(df, '2026-03-01', current_price=close[-1])
+    assert result is None
+
+
+def test_anchored_vwap_too_far_from_price():
+    """VWAP > 15% from current price returns None."""
+    from core.swing_detector import anchored_vwap
+    import pandas as pd
+    import numpy as np
+
+    dates = pd.date_range('2026-01-01', periods=100, freq='D')
+    # Prices climb steadily — VWAP from early anchor far below current
+    close = 100 + np.arange(100) * 0.5  # climbs to 149.5
+    volume = np.random.randint(100000, 5000000, 100)
+    df = pd.DataFrame({'Close': close, 'Volume': volume}, index=dates)
+
+    current_price = close[-1]
+    # Anchor at start: VWAP ~124.8, current ~149.5, diff ~16.5% > 15%
+    result = anchored_vwap(df, '2026-01-01', current_price=current_price)
+    assert result is None, f"Expected None, got {result}"
+
+
+def test_anchored_vwap_missing_volume_column():
+    """Missing Volume column returns None."""
+    from core.swing_detector import anchored_vwap
+    import pandas as pd
+    import numpy as np
+
+    dates = pd.date_range('2026-01-01', periods=100, freq='D')
+    close = 100 + np.cumsum(np.random.randn(100) * 0.5)
+    df = pd.DataFrame({'Close': close}, index=dates)
+
+    result = anchored_vwap(df, '2026-03-01', current_price=close[-1])
+    assert result is None
+
+
+def test_compute_anchored_vwaps_from_earnings():
+    """Earnings date within 120 days produces AVWAP level."""
+    import tempfile
+    from pathlib import Path
+    from data.db import Database
+    from datetime import datetime, timedelta
+    import pandas as pd
+    from core.swing_detector import compute_anchored_vwaps
+
+    tmp = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
+    tmp_path = tmp.name
+    tmp.close()
+    db = Database(Path(tmp_path))
+
+    thirty_days_ago = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+    conn = db.get_connection()
+    conn.execute(
+        "INSERT INTO stocks (symbol, next_earnings_date, is_active) VALUES (?, ?, 1)",
+        ('TESTAV', thirty_days_ago)
+    )
+    conn.commit()
+
+    dates = pd.date_range(thirty_days_ago, periods=30, freq='D')
+    close = [100.0] * 30
+    volume = [1000000] * 30
+    df = pd.DataFrame({'Close': close, 'Volume': volume}, index=dates)
+
+    levels = compute_anchored_vwaps(db, 'TESTAV', df, 100.0)
+    assert len(levels) == 1
+    assert levels[0]['type'] == 'anchored_vwap'
+    assert abs(levels[0]['level'] - 100.0) < 0.01
+
+    Path(tmp_path).unlink(missing_ok=True)
+
+
+def test_compute_anchored_vwaps_skips_old_earnings():
+    """Earnings date older than 120 days returns no levels."""
+    import tempfile
+    from pathlib import Path
+    from data.db import Database
+    from datetime import datetime, timedelta
+    import pandas as pd
+    from core.swing_detector import compute_anchored_vwaps
+
+    tmp = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
+    tmp_path = tmp.name
+    tmp.close()
+    db = Database(Path(tmp_path))
+
+    old_date = (datetime.now() - timedelta(days=200)).strftime('%Y-%m-%d')
+    conn = db.get_connection()
+    conn.execute(
+        "INSERT INTO stocks (symbol, next_earnings_date, is_active) VALUES (?, ?, 1)",
+        ('TESTAV', old_date)
+    )
+    conn.commit()
+
+    dates = pd.date_range(old_date, periods=30, freq='D')
+    close = [100.0] * 30
+    volume = [1000000] * 30
+    df = pd.DataFrame({'Close': close, 'Volume': volume}, index=dates)
+
+    levels = compute_anchored_vwaps(db, 'TESTAV', df, 100.0)
+    assert len(levels) == 0
+
+    Path(tmp_path).unlink(missing_ok=True)
+
+
+def test_compute_anchored_vwaps_no_earnings():
+    """No earnings date returns empty list."""
+    import tempfile
+    from pathlib import Path
+    from data.db import Database
+    import pandas as pd
+    from core.swing_detector import compute_anchored_vwaps
+
+    tmp = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
+    tmp_path = tmp.name
+    tmp.close()
+    db = Database(Path(tmp_path))
+
+    conn = db.get_connection()
+    conn.execute(
+        "INSERT INTO stocks (symbol, is_active) VALUES (?, 1)",
+        ('TESTAV',)
+    )
+    conn.commit()
+
+    df = pd.DataFrame({'Close': [100]*30, 'Volume': [1000000]*30},
+                       index=pd.date_range('2026-01-01', periods=30, freq='D'))
+
+    levels = compute_anchored_vwaps(db, 'TESTAV', df, 100.0)
+    assert len(levels) == 0
+
+    Path(tmp_path).unlink(missing_ok=True)
+
+
+def test_anchored_vwap_integration_compute_sr():
+    """AVWAP from earnings appears in compute_sr_for_symbol output."""
+    import tempfile
+    from pathlib import Path
+    from data.db import Database
+    from core.swing_detector import compute_sr_for_symbol
+    from datetime import datetime, timedelta
+    import numpy as np
+
+    tmp = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
+    tmp_path = tmp.name
+    tmp.close()
+    db = Database(Path(tmp_path))
+    conn = db.get_connection()
+
+    # Set earnings date to 30 days ago
+    earnings_date = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+    conn.execute(
+        "INSERT INTO stocks (symbol, next_earnings_date, is_active) VALUES (?, ?, 1)",
+        ('TESTVWAP', earnings_date)
+    )
+
+    # Slow downtrend from 110 to 100 over 80 days — AVWAP will be ~101.9
+    n = 80
+    close = [110.0 - i * (10.0 / 79) for i in range(n)]
+    high = [c + 1.0 for c in close]
+    low = [c - 1.0 for c in close]
+    volume = [1000000] * n
+
+    start = datetime.now() - timedelta(days=n)
+    for i in range(n):
+        date = (start + timedelta(days=i)).strftime('%Y-%m-%d')
+        conn.execute(
+            "INSERT INTO market_data (symbol, date, open, high, low, close, volume) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ('TESTVWAP', date, float(close[i]), float(high[i]), float(low[i]), float(close[i]), volume[i])
+        )
+
+    current_price = float(close[-1])
+    conn.execute(
+        "INSERT INTO tier1_cache (symbol, current_price, high_60d, low_60d, atr_pct, rs_percentile, ema21, ema50, volume_ratio, supports, resistances, ret_5d) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1.0, ?, ?, ?)",
+        ('TESTVWAP', current_price, float(max(high)), float(min(low)), 0.02, 50.0, current_price * 0.95, current_price * 0.90, '[]', '[]', 0.0)
+    )
+    conn.commit()
+
+    supports, resistances = compute_sr_for_symbol(db, 'TESTVWAP')
+    all_levels = supports + resistances
+
+    # AVWAP ~ average of last 30 closes, with downtrend ~101.9 > current 100
+    expected_avwap = round(sum(close[-30:]) / 30, 2)
+    assert any(abs(lvl - expected_avwap) / expected_avwap < 0.02 for lvl in all_levels), (
+        f"Expected AVWAP ~{expected_avwap} not found in levels {all_levels}"
+    )
+
+    Path(tmp_path).unlink(missing_ok=True)
