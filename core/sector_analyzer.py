@@ -447,6 +447,7 @@ class SectorAnalyzer:
                 high_60d = cache.get('high_60d')
                 low_60d = cache.get('low_60d')
                 volume_ratio = cache.get('volume_ratio', 1.0) or 1.0
+                near_threshold = max(0.01, atr_pct * 0.8)
 
                 reason = None
                 detail = None
@@ -456,8 +457,11 @@ class SectorAnalyzer:
                     reason = 'Breakout'
                     detail = f"Broke 60d high ${high_60d:.2f}, {volume_ratio:.1f}x vol"
                     time_horizon = 'swing'
-                elif low_60d and price > low_60d and (price - low_60d) / low_60d <= 0.02:
+                elif low_60d and price > low_60d and (price - low_60d) / low_60d <= near_threshold:
                     reason = 'Near Support'
+                    # Selling pressure should be fading at support
+                    if volume_ratio >= 1.0:
+                        continue  # skip — elevated volume at support = risk of breakdown
                     dist = (price - low_60d) / low_60d * 100
                     detail = f"{dist:.1f}% above 60d low ${low_60d:.2f}"
                     time_horizon = 'swing'
@@ -473,6 +477,16 @@ class SectorAnalyzer:
                         time_horizon = 'position'
                 elif low_60d and high_60d:
                     # Good R/R check — only if no other reason matched
+                    # Uptrend filter: require at least one confirmation
+                    uptrend_ok = False
+                    if ema50 and price > ema50:
+                        uptrend_ok = True
+                    elif sector.trend == 'uptrend':
+                        uptrend_ok = True
+                    elif volume_ratio > 1.2:
+                        uptrend_ok = True
+                    if not uptrend_ok:
+                        continue  # skip falling knives
                     stop_level = low_60d * 0.99
                     target_level = high_60d
                     if price > stop_level and target_level > price:
@@ -485,7 +499,6 @@ class SectorAnalyzer:
                 # Resistance Test (standalone if, not elif -- Good R/R's broad
                 # `elif low_60d and high_60d` would shadow it in the chain)
                 if reason is None and high_60d and price < high_60d:
-                    near_threshold = max(0.01, atr_pct * 0.8)
                     if (high_60d - price) / price <= near_threshold:
                         # Require ALL confirmations
                         ema_ok = (ema50 and price > ema50) or False
