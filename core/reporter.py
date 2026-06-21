@@ -218,7 +218,7 @@ BAR_CHART_HTML = """<div class="bar-chart-wrap"><div class="bar-chart">{bars}</d
 STATS_STRIP = """<div class="stats-strip"><span class="stats-item"><b>SPY</b> ${spy_price:.2f} <span class="{spy_cls}">{spy_5d:+.2f}% 5d</span></span><span class="stats-item"><b>VIX</b> {vix:.1f}</span><span class="stats-item">{regime}</span></div>"""
 
 SECTOR_CARD = """<div class="card tag-card" id="tag-{anchor}" style="display:none">
-<div class="card-header fold-toggle" onclick="this.classList.toggle('collapsed');this.nextElementSibling.classList.toggle('hidden')"><h3>{name}</h3><span class="badge {chg_cls}">{daily_change}</span></div>
+<div class="card-header fold-toggle" onclick="this.classList.toggle('collapsed');this.nextElementSibling.classList.toggle('hidden')"><h3>{confidence_dot}{name}</h3><span class="badge {chg_cls}">{daily_change}</span></div>
 <div class="fold-body"><div class="detail-row">{outlook}</div>
 <div class="detail-row" style="margin-top:4px"><span class="detail-label">Drivers</span></div>
 {drivers}
@@ -299,6 +299,39 @@ class ReportGenerator:
         parts.append(BAR_CHART_HTML.format(bars=''.join(bars)))
         parts.append(BAR_CHART_JS)
         parts.append(KEYBOARD_JS)
+        parts.append("""<script>
+function exportHighlightsCSV() {
+  var rows = [
+    ["Symbol","Sector","Reason","Entry","Stop","Target","R/R","Size","Cost","Risk$"],
+  ];
+  document.querySelectorAll(".tag-card").forEach(function(card) {
+    var sector = card.querySelector("h3").textContent.trim();
+    card.querySelectorAll("tbody tr").forEach(function(tr) {
+      var cells = tr.querySelectorAll("td");
+      if (cells.length >= 12) {
+        rows.push([
+          cells[0].textContent,
+          sector,
+          cells[3].textContent,
+          cells[4].textContent,
+          cells[6].textContent,
+          cells[7].textContent,
+          cells[8].textContent,
+          cells[9].textContent,
+          cells[10].textContent,
+          cells[11].textContent,
+        ]);
+      }
+    });
+  });
+  var csv = rows.map(function(r){return r.join(",");}).join("\\n");
+  var blob = new Blob([csv], {type:"text/csv"});
+  var a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "tradescanner_highlights.csv";
+  a.click();
+}
+</script>""")
 
         # Stats Strip
         spy_cls = 'up' if market.spy_change_5d >= 0 else 'down'
@@ -367,6 +400,7 @@ class ReportGenerator:
         parts.append('<button onclick="document.querySelectorAll(\'.fold-toggle\').forEach(function(el){el.classList.remove(\'collapsed\');el.nextElementSibling.classList.remove(\'hidden\')})" style="background:var(--paper);color:var(--frost);border:1px solid var(--divider);border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Expand All</button>')
         parts.append('<button onclick="document.querySelectorAll(\'.fold-toggle\').forEach(function(el){el.classList.add(\'collapsed\');el.nextElementSibling.classList.add(\'hidden\')})" style="background:var(--paper);color:var(--frost);border:1px solid var(--divider);border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Collapse All</button>')
         parts.append('</div>')
+        parts.append('<button onclick="exportHighlightsCSV()" style="margin-bottom:12px;background:var(--paper);color:var(--frost);border:1px solid var(--divider);border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Export CSV</button>')
         parts.append('<div id="tag-hint" style="color:var(--ash);font-size:12px;margin-bottom:12px">Click a bar above to see tag details</div>')
         reason_map = {'Near Resistance': 'badge-neutral', 'Near Support': 'badge-neutral', 'Breakout': 'badge-up', 'Strong Momentum': 'badge-up', 'Good R/R': 'badge-up'}
         for s in sectors:
@@ -437,9 +471,17 @@ class ReportGenerator:
             if not s.outlook or s.outlook == f"{s.name} sector: no AI analysis available.":
                 outlook_html = '<span style="color:var(--ash);font-style:italic">AI analysis unavailable -- using fallback data</span>'
 
+            if s.outlook and 'unavailable' not in s.outlook:
+                if 'divergence' in s.outlook.lower():
+                    confidence_dot = '<span style="color:var(--ember)" title="AI/quant divergence">●</span> '
+                else:
+                    confidence_dot = '<span style="color:var(--volt)" title="AI analysis OK">●</span> '
+            else:
+                confidence_dot = '<span style="color:var(--ash)" title="AI unavailable">●</span> '
+
             parts.append(SECTOR_CARD.format(
                 name=s.name, anchor=anchor, chg_cls=chg_cls, daily_change=chg_str,
-                outlook=outlook_html,
+                confidence_dot=confidence_dot, outlook=outlook_html,
                 drivers=drivers_html or '<span class="dim">--</span>',
                 risks=risks_html or '<span class="dim">--</span>',
                 highlights_html=highlights_html))

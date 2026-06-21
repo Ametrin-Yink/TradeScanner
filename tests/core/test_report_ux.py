@@ -100,3 +100,88 @@ def test_expand_collapse_buttons(tmp_path):
     content = open(gen.generate_report(result)).read()
     assert 'Expand All' in content
     assert 'Collapse All' in content
+
+
+def test_confidence_dot_ok(tmp_path):
+    """Green dot (#7ecb5a = --volt) when AI analysis is OK with no divergence."""
+    market = MarketOverview(
+        date='2026-06-19', regime='neutral', confidence=50,
+        reasoning='', spy_price=500, spy_change_5d=0, vix=20, vix_status='neutral',
+    )
+    sectors = [SectorAnalysis(name='Tech', etf='XLK', stock_count=0, daily_change=0,
+                              ret_3m=None, rs_percentile=None, trend='neutral',
+                              above_ema50=None,
+                              outlook='Sector is steady with strong fundamentals.')]
+    result = {
+        'market': market, 'sectors': sectors, 'focus_summary': None,
+        'timestamp': '2026-06-19T22:00',
+    }
+    gen = ReportGenerator(reports_dir=tmp_path)
+    content = open(gen.generate_report(result)).read()
+    assert 'color:var(--volt)' in content
+    assert 'title="AI analysis OK"' in content
+    # Ensure no divergence/unavailable dot classes appear for this case
+    assert 'title="AI/quant divergence"' not in content
+    assert 'title="AI unavailable"' not in content
+
+
+def test_confidence_dot_divergence(tmp_path):
+    """Red dot (#e0553d = --ember) when AI detects divergence."""
+    market = MarketOverview(
+        date='2026-06-19', regime='neutral', confidence=50,
+        reasoning='', spy_price=500, spy_change_5d=0, vix=20, vix_status='neutral',
+    )
+    sectors = [SectorAnalysis(name='Energy', etf='XLE', stock_count=0, daily_change=0,
+                              ret_3m=None, rs_percentile=None, trend='neutral',
+                              above_ema50=None,
+                              outlook='Divergence between price and volume trends.')]
+    result = {
+        'market': market, 'sectors': sectors, 'focus_summary': None,
+        'timestamp': '2026-06-19T22:00',
+    }
+    gen = ReportGenerator(reports_dir=tmp_path)
+    content = open(gen.generate_report(result)).read()
+    assert 'color:var(--ember)' in content
+    assert 'title="AI/quant divergence"' in content
+
+
+def test_confidence_dot_unavailable(tmp_path):
+    """Gray dot (#5d6d80 = --ash) when AI analysis is unavailable."""
+    market = MarketOverview(
+        date='2026-06-19', regime='neutral', confidence=50,
+        reasoning='', spy_price=500, spy_change_5d=0, vix=20, vix_status='neutral',
+    )
+    sectors = [SectorAnalysis(name='Health', etf='XLV', stock_count=0, daily_change=0,
+                              ret_3m=None, rs_percentile=None, trend='neutral',
+                              above_ema50=None,
+                              outlook='Health sector: analysis unavailable.')]
+    result = {
+        'market': market, 'sectors': sectors, 'focus_summary': None,
+        'timestamp': '2026-06-19T22:00',
+    }
+    gen = ReportGenerator(reports_dir=tmp_path)
+    content = open(gen.generate_report(result)).read()
+    assert 'color:var(--ash)' in content
+    assert 'title="AI unavailable"' in content
+
+
+def test_csv_export_button(tmp_path):
+    """CSV export button and JavaScript function should be in the report."""
+    market = MarketOverview(
+        date='2026-06-19', regime='neutral', confidence=50,
+        reasoning='', spy_price=500, spy_change_5d=0, vix=20, vix_status='neutral',
+    )
+    sectors = [SectorAnalysis(name='Test', etf='', stock_count=0, daily_change=0,
+                              ret_3m=None, rs_percentile=None, trend='neutral',
+                              above_ema50=None, outlook='Test.')]
+    result = {
+        'market': market, 'sectors': sectors, 'focus_summary': None,
+        'timestamp': '2026-06-19T22:00',
+    }
+    gen = ReportGenerator(reports_dir=tmp_path)
+    content = open(gen.generate_report(result)).read()
+    assert 'exportHighlightsCSV' in content
+    assert 'Export CSV' in content
+    assert 'tradescanner_highlights.csv' in content
+    assert 'Blob' in content
+    assert 'text/csv' in content
