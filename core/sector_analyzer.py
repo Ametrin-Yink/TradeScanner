@@ -449,21 +449,21 @@ class SectorAnalyzer:
                     continue
 
                 # Context-aware entry based on setup type
+                pconfig = _load_portfolio_config()
+                max_entry_gap = pconfig.get('max_entry_distance_pct', 0.10)
+
                 entry = price  # default
                 if reason == 'Near Support':
-                    below_sup = [z for z in support_zones if z['level'] < price]
+                    # Only use support if within the configured gap from price
+                    below_sup = [z for z in support_zones if z['level'] < price and (price - z['level']) / price <= max_entry_gap]
                     if below_sup:
                         entry = max(below_sup, key=lambda z: z['level'])['level']
-                elif reason == 'Strong Momentum':
-                    if ema21 and ema21 < price:
-                        entry = ema21
-                    elif [z for z in support_zones if z['level'] < price]:
-                        below_sup = [z for z in support_zones if z['level'] < price]
-                        entry = max(below_sup, key=lambda z: z['level'])['level']
-                elif reason == 'Breakout':
-                    above_res = [z for z in resistance_zones if z['level'] > price]
-                    if above_res:
-                        entry = min(above_res, key=lambda z: z['level'])['level'] * 1.005
+                # Breakout and Strong Momentum: enter at current price (momentum trades)
+                # These don't wait for pullbacks — the trend is the signal
+
+                # Final proximity check: if entry is too far from price, use current price
+                if abs(entry - price) / price > max_entry_gap:
+                    entry = price
 
                 # Compute OHLC data for measured-move/fib target calculations
                 ohlc_df = self.db.get_market_data_df(symbol)
@@ -499,6 +499,7 @@ class SectorAnalyzer:
                 highlight.ema_above = (ema50 and price > ema50) or False
                 highlight.ema21 = ema21 or 0
                 highlight.ema50 = ema50 or 0
+                highlight.entry_distance_pct = abs(entry - price) / price * 100
 
                 # Per-trade position sizing (based on actual entry, not current price)
                 pconfig = _load_portfolio_config()
@@ -585,44 +586,12 @@ class SectorAnalyzer:
             score = daily * 0.25 + ret_norm * 0.35 + rs * 0.30 + uptrend_bonus * 0.10
             scored.append((score, s.name))
 
-        scored = self._apply_feedback(scored)
-
         scored.sort(key=lambda x: x[0], reverse=True)
         focus = [s[1] for s in scored[:3]]
         avoid = [s[1] for s in scored[-3:]]
 
         reasoning = self._ai_focus_reasoning(market, focus, avoid, scored[:5])
         return FocusSummary(focus_sectors=focus, avoid_sectors=avoid, reasoning=reasoning)
-
-    def _apply_feedback(self, scored):
-        """Adjust tag scores based on simulation outcomes. No-op if no data."""
-        try:
-            conn = self.db.get_connection()
-            outcomes = conn.execute("""
-                SELECT tag, outcome, COUNT(*) as cnt
-                FROM simulation_positions
-                WHERE outcome IN ('win', 'loss', 'expired')
-                GROUP BY tag, outcome
-            """).fetchall()
-
-            tag_perf = {}
-            for tag, outcome, cnt in outcomes:
-                tag_perf.setdefault(tag, {'win': 0, 'total': 0})
-                tag_perf[tag]['total'] += cnt
-                if outcome == 'win':
-                    tag_perf[tag]['win'] += cnt
-
-            scored_out = list(scored)
-            for i, (score, name) in enumerate(scored_out):
-                perf = tag_perf.get(name)
-                if perf and perf['total'] >= 5:
-                    win_rate = perf['win'] / perf['total']
-                    bonus = (win_rate - 0.5) * 0.10
-                    scored_out[i] = (score + bonus, name)
-
-            return scored_out
-        except Exception:
-            return scored
 
     def _ai_focus_reasoning(self, market: MarketOverview, focus: List[str], avoid: List[str], top5) -> str:
         """Call AI (no search) for 2-3 sentence focus summary reasoning."""

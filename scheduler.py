@@ -8,10 +8,7 @@ from config.settings import settings
 from data.db import Database
 from core.sector_analyzer import SectorAnalyzer
 from core.reporter import ReportGenerator
-from core.simulation_engine import SimulationEngine
-from core.logging_config import setup_logging
-
-setup_logging()
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 logger = logging.getLogger(__name__)
 
 # NYSE 2026 holidays (market closed)
@@ -59,19 +56,6 @@ def run_sector_scan(test_symbols=None):
         total_stocks = sum(s.stock_count for s in result['sectors'])
         highlights = sum(len(s.highlights) for s in result['sectors'])
 
-        # Simulation auto-select
-        try:
-            engine = SimulationEngine(Database())
-            all_highlights = []
-            for sector in result['sectors']:
-                for h in sector.highlights:
-                    h.primary_tag = sector.name
-                    all_highlights.append(h)
-            engine.auto_select(all_highlights, run_date)
-            engine.daily_check()
-        except Exception as e:
-            logger.warning(f"Simulation step failed (non-fatal): {e}")
-
         duration = (datetime.now() - start).total_seconds()
         db.save_workflow_status({
             'run_date': run_date,
@@ -112,6 +96,8 @@ def main():
     if args.test:
         symbols = args.symbols.split(',') if args.symbols else None
         report_path = run_sector_scan(test_symbols=symbols)
+    elif args.force:
+        report_path = run_sector_scan(test_symbols=[])  # empty list = skip trading day check
     else:
         report_path = run_sector_scan()
 

@@ -56,6 +56,12 @@ def seeded_db(in_memory_db):
         )
     """)
     conn.execute("""
+        CREATE TABLE IF NOT EXISTS market_data (
+            symbol TEXT, date TEXT, open REAL, high REAL, low REAL,
+            close REAL, volume INTEGER
+        )
+    """)
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS etf_cache (
             symbol TEXT, current_price REAL, ret_5d REAL, ret_3m REAL,
             rs_percentile REAL, above_ema50 BOOLEAN, vix_current REAL,
@@ -111,6 +117,23 @@ def seeded_db(in_memory_db):
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1.0, ?, ?, ?)
         """, (sym, price, high60, low60, atr_pct, rs, price * 0.95, price * 0.90, sup, res, 1.5))
 
+    # Seed market_data for daily change computation (2 rows per stock)
+    for sym, prev_close, last_close in [
+        ('AAPL', 190.0, 195.0),
+        ('NVDA', 920.0, 950.0),
+        ('MSFT', 410.0, 420.0),
+        ('TSLA', 240.0, 245.0),
+        ('PLTR', 27.0, 28.0),
+    ]:
+        conn.execute(
+            "INSERT INTO market_data (symbol, date, open, high, low, close, volume) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (sym, '2026-06-18', prev_close, prev_close, prev_close, prev_close, 1000000)
+        )
+        conn.execute(
+            "INSERT INTO market_data (symbol, date, open, high, low, close, volume) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (sym, '2026-06-19', last_close, last_close, last_close, last_close, 1000000)
+        )
+
     # Seed etf_cache (SPY)
     conn.execute("""
         INSERT INTO etf_cache
@@ -122,19 +145,6 @@ def seeded_db(in_memory_db):
     conn.execute("""
         INSERT INTO regime_cache (regime, allocation, ai_regime, ai_confidence, ai_reasoning, cache_date)
         VALUES ('bull_moderate', '{}', 'bull_moderate', 70, 'Market in steady uptrend with low volatility.', '2026-06-19')
-    """)
-
-    # Create simulation_positions table (needed by _apply_feedback in pipeline)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS simulation_positions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            opened_date TEXT, symbol TEXT, tag TEXT, reason TEXT,
-            entry_price REAL, stop_price REAL, target_price REAL,
-            rr_ratio REAL, position_size_shares INTEGER, risk_dollars REAL,
-            time_horizon_days INTEGER, close_date TEXT, close_price REAL,
-            outcome TEXT DEFAULT 'open', pnl_dollars REAL, pnl_r REAL,
-            report_date TEXT
-        )
     """)
 
     conn.commit()

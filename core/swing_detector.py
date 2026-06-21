@@ -183,8 +183,11 @@ def compute_sr_for_symbol(db, symbol: str) -> tuple:
         low_zones = cluster_levels(swing_lows, tolerance=0.005)
 
         current_price = float(df['Close'].iloc[-1])
-        supports = sorted([z['level'] for z in low_zones if z['level'] < current_price], reverse=True)[:5]
-        resistances = sorted([z['level'] for z in high_zones if z['level'] > current_price])[:5]
+        # Filter levels >50% away from current price (data artifacts, pre-split prices)
+        price_floor = current_price * 0.50
+        price_ceiling = current_price * 1.50
+        supports = sorted([z['level'] for z in low_zones if price_floor < z['level'] < current_price], reverse=True)[:5]
+        resistances = sorted([z['level'] for z in high_zones if current_price < z['level'] < price_ceiling])[:5]
 
         # Cache in tier1_cache
         import json

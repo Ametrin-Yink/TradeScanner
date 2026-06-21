@@ -2,7 +2,47 @@
 
 ## Project overview
 
-Automated US stock trading opportunity scanner analyzing stocks with market cap >= $2B daily using multiple trading strategies. Generates web-based reports with AI-powered analysis. Read the README.md for project details when needed.
+Automated US stock trading scanner — sector-first daily analysis using DeepSeek V4 Pro AI with web search. Generates an HTML dashboard report with technical setups (entry/stop/target/R:R) across 13 curated sectors (~340 stocks).
+
+## Environment
+
+- Python 3.13 with Miniconda at `/home/ametrin/miniconda3/bin/python3`
+- Required packages: flask, numpy, scipy, pandas, yfinance, pyyaml
+- `DEEPSEEK_API_KEY` env var required for AI analysis (set in shell profile or `config/settings.py`)
+
+## Commands
+
+```bash
+python scheduler.py --force      # Run full daily scan (AI + S/R + report)
+python -m pytest tests/e2e/ -v   # Run E2E tests (23 tests, ~0.15s)
+python api/server.py             # Start API + dashboard on port 19801
+```
+
+## Architecture
+
+```
+scheduler.py          # Daily orchestrator: sector analysis → highlights → report
+core/
+├── sector_analyzer.py   # AI sector analysis + stock highlight selection (entry/stop/target)
+├── reporter.py          # HTML report generator (amber-palette dashboard)
+├── swing_detector.py    # Support/resistance detection (60-bar, order=2) + stop/target calc
+├── tag_manager.py       # Sector tag CRUD and stock assignment
+├── ai_client.py         # DeepSeek V4 Pro wrapper with web search tool-calling
+├── fetcher.py           # Market data fetcher (OHLC, ETF prices)
+└── constants.py         # Sector ↔ ETF mappings
+api/
+├── server.py            # Flask API: scan endpoint, OHLC data, config CRUD
+└── config_api.py        # Tag/sector config REST API
+data/
+└── db.py                # SQLite database (market_data, tier1_cache, tags, stocks)
+config/
+├── portfolio_config.yaml # Account value, risk %, entry distance thresholds
+└── settings.py           # API keys, paths, report/web settings
+web/
+├── dashboard.html       # Single-page dashboard (Today/Tags/Reports/Config tabs)
+├── js/                  # ES modules: app, api, tags, today, reports, config
+└── reports/             # Generated HTML reports (report_YYYY-MM-DD.html)
+```
 
 ## Working Orchestration
 
@@ -45,12 +85,18 @@ Automated US stock trading opportunity scanner analyzing stocks with market cap 
 
 ## Task Management
 
-1. **Plan First**: Write plan to docs/todo.md with checkable items
-2. **Verify Plan**: Check in before starting implementation
-3. **Track Progress**: Mark items complete as you go
-4. **Explain Changes**: High-level summary at each step
-5. **Document Results**: Add review section to docs/todo.md
-6. **Capture Lessons**: Update lessons.md after corrections
+1. **Plan First**: Write plan with checkable items before touching code
+2. **Track Progress**: Use TaskCreate/TaskUpdate to mark completion as you go
+3. **Capture Lessons**: Update `.claude/reference/lessons.md` after any correction
+
+## Gotchas
+
+- S/R levels use only the last 60 bars with `order=2` (catches 2-day pullbacks). Levels >50% away from current price are filtered as artifacts.
+- Entry prices are proximity-capped: if computed entry is >10% from current price, entry defaults to current price (`max_entry_distance_pct` in portfolio_config.yaml).
+- Breakout and Strong Momentum setups always use current price as entry (they're trend-following, not pullback trades).
+- Highlights are diversity-gated per sector: max 3 picks, preferring different reason types (Breakout, Near Support, Strong Momentum, etc.).
+- `config/delisted.py` and `config/stocks.py` are static reference files — the live stock list is in the DB `stocks` table.
+- Simulation engine and all simulation tests were removed 2026-06-21 — do not re-add until recommendation quality is solid.
 
 ## Core Principles
 
@@ -101,39 +147,12 @@ Read the rules and agent definitions in .claude/ before starting work.
 - State what you found, where, and the fix. One pass.
 - If cause is unclear: say so. Do not guess.
 
-### 6. Script Naming and Placement
+### 6. Script and Test Placement
 
-All runnable scripts go in `scripts/`. No scripts in `core/` or `tests/`.
-
-#### Directory structure
-
-```
-scripts/           # all runnable scripts
-├── run_phase*.py  # pipeline phase runners
-├── backtest*.py   # backtest tools
-├── bulk_*.py      # one-time data operations
-└── debug/         # dev debug scripts
-tests/             # pytest files ONLY
-└── test_*.py      # must start with test_ prefix
-core/              # library modules only (never run directly)
-```
-
-#### Naming conventions
-
-| Prefix               | Purpose                                      | Example                                     |
-| -------------------- | -------------------------------------------- | ------------------------------------------- |
-| `run_`               | Pipeline phase runners (production or debug) | `run_phase0.py`, `run_phase2.py`            |
-| `backtest_`          | Historical backtest tools                    | `backtest.py`, `backtest_all_strategies.py` |
-| `bulk_` / `cleanup_` | One-time data operations                     | `bulk_fetch_shares_earnings.py`             |
-| `test_`              | Pytest test files (must be in `tests/`)      | `test_screener.py`                          |
-
-#### Rules
-
-- **core/** contains only importable modules. No `if __name__ == '__main__'` blocks that act as entry points.
-- **tests/** contains only files that pytest discovers (`test_*.py`). No runner scripts or ad-hoc tools.
-- **scripts/** contains all standalone runners and utilities.
-- Before creating a new script, check if an existing one can be extended.
-- Delete stale scripts that no longer serve a purpose instead of leaving them to rot.
+- `core/` — library modules only, never run directly (no `if __name__ == '__main__'`)
+- `scripts/` — standalone runners and one-shot utilities
+- `tests/` — pytest only, organized in subdirs (`tests/e2e/`, `tests/core/`, etc.). Files must start with `test_`.
+- Before creating a new script, check if an existing one can be extended. Delete stale ones.
 
 ### 7. Simple Formatting
 

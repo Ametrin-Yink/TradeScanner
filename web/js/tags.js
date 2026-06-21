@@ -168,18 +168,20 @@ async function loadTagStocks(name) {
 }
 
 var _stockData = [];
-var _tagSortCol = 'symbol';
+var _tagSortCol = "symbol";
 var _tagSortAsc = false;
 
 function _val(r, col) {
-  if (col === 'symbol') return (r.symbol || '').toLowerCase();
-  if (col === 'ret_5d') return parseFloat(r.ret_5d) || 0;
-  if (col === 'vol_ratio') return parseFloat(r.vol_ratio) || 1.0;
+  if (col === "symbol") return (r.symbol || "").toLowerCase();
+  if (col === "daily_change") return parseFloat(r.daily_change) || 0;
+  if (col === "vol_ratio") return parseFloat(r.vol_ratio) || 1.0;
   return 0;
 }
 
 function renderStockTable(stocks) {
-  if (stocks) { _stockData = stocks; }
+  if (stocks) {
+    _stockData = stocks;
+  }
   const tbody = document.getElementById("stocksTableBody");
   tbody.innerHTML = "";
   if (!_stockData || _stockData.length === 0) {
@@ -188,26 +190,41 @@ function renderStockTable(stocks) {
     return;
   }
   var sorted = _stockData.slice();
-  sorted.sort(function(a, b) {
-    var va = _val(a, _tagSortCol), vb = _val(b, _tagSortCol);
-    if (typeof va === 'string') return _tagSortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
+  sorted.sort(function (a, b) {
+    var va = _val(a, _tagSortCol),
+      vb = _val(b, _tagSortCol);
+    if (typeof va === "string")
+      return _tagSortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
     return _tagSortAsc ? va - vb : vb - va;
   });
-  sorted.forEach(function(st) {
-    var chg = st.ret_5d != null ? st.ret_5d : 0;
+  sorted.forEach(function (st) {
+    var chg = st.daily_change != null ? st.daily_change : 0;
     var chgCls = chg >= 0 ? "up" : "down";
     var chgSign = chg >= 0 ? "+" : "";
     var vr = st.vol_ratio != null ? st.vol_ratio : 1.0;
-    var vPct = ((vr - 1.0) * 100);
+    var vPct = (vr - 1.0) * 100;
     var vCls = vPct >= 0 ? "up" : "down";
     var vSign = vPct >= 0 ? "+" : "";
     var tr = document.createElement("tr");
     tr.innerHTML =
-      '<td class="sym">' + escapeHtml(st.symbol) + "</td>" +
-      '<td class="num ' + chgCls + '">' + chgSign + chg.toFixed(2) + "%</td>" +
-      '<td class="num ' + vCls + '">' + vSign + vPct.toFixed(1) + "%</td>" +
+      '<td class="sym">' +
+      escapeHtml(st.symbol) +
+      "</td>" +
+      '<td class="num ' +
+      chgCls +
+      '">' +
+      chgSign +
+      chg.toFixed(2) +
+      "%</td>" +
+      '<td class="num ' +
+      vCls +
+      '">' +
+      vSign +
+      vPct.toFixed(1) +
+      "%</td>" +
       '<td class="actions"><button class="remove-btn" data-action="remove-stock" data-symbol="' +
-      escapeHtml(st.symbol) + '">Remove</button></td>';
+      escapeHtml(st.symbol) +
+      '">Remove</button></td>';
     const removeBtn = tr.querySelector('[data-action="remove-stock"]');
     removeBtn.addEventListener("click", async (e) => {
       const btn = e.currentTarget;
@@ -408,17 +425,27 @@ document.getElementById("stockSearchInput").addEventListener("keydown", (e) => {
   if (e.key === "Enter") document.getElementById("addStockBtn").click();
 });
 
-document.addEventListener('DOMContentLoaded', function() {
-  document.querySelector('#stocksTableBody').closest('table').querySelectorAll('th.sortable').forEach(function(th) {
-    th.addEventListener('click', function() {
-      var col = th.dataset.sort;
-      if (_tagSortCol === col) { _tagSortAsc = !_tagSortAsc; }
-      else { _tagSortCol = col; _tagSortAsc = false; }
-      renderStockTable();
-      th.closest('table').querySelectorAll('th.sortable').forEach(function(h) {
-        h.textContent = h.textContent.replace(' ▴','').replace(' ▾','');
+document.addEventListener("DOMContentLoaded", function () {
+  document
+    .querySelector("#stocksTableBody")
+    .closest("table")
+    .querySelectorAll("th.sortable")
+    .forEach(function (th) {
+      th.addEventListener("click", function () {
+        var col = th.dataset.sort;
+        if (_tagSortCol === col) {
+          _tagSortAsc = !_tagSortAsc;
+        } else {
+          _tagSortCol = col;
+          _tagSortAsc = false;
+        }
+        renderStockTable();
+        th.closest("table")
+          .querySelectorAll("th.sortable")
+          .forEach(function (h) {
+            h.textContent = h.textContent.replace(" ▴", "").replace(" ▾", "");
+          });
+        th.textContent += _tagSortAsc ? " ▴" : " ▾";
       });
-      th.textContent += _tagSortAsc ? ' ▴' : ' ▾';
     });
-  });
 });

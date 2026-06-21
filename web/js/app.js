@@ -1,8 +1,14 @@
 // web/js/app.js
-import { api, isLoggedIn, setApiKey, verifyKey, showToast } from "./api.js";
+import {
+  api,
+  isLoggedIn,
+  setApiKey,
+  verifyKey,
+  showToast,
+  syncKeyToLocalStorage,
+} from "./api.js";
 import { loadTags, initTags } from "./tags.js";
 import { loadReports } from "./reports.js";
-import { loadSimulation } from "./simulation.js";
 import { loadToday, initToday } from "./today.js";
 import { loadConfig, initConfig } from "./config.js";
 
@@ -19,7 +25,7 @@ export function switchTab(name) {
   if (tab) tab.classList.add("active");
   window.location.hash = name;
   if (name === "today") loadToday();
-  if (name === "simulation") loadSimulation();
+  if (name === "reports") loadReports();
   if (name === "config") loadConfig();
 }
 
@@ -66,13 +72,13 @@ async function handleLogin() {
 }
 
 async function initApp() {
+  syncKeyToLocalStorage();
   initTags();
   initToday();
   initConfig();
   await loadTags();
   loadReports();
   await loadToday();
-  if (window.location.hash === "#simulation") loadSimulation();
   if (window.location.hash === "#config") loadConfig();
 }
 
@@ -83,8 +89,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function initHash() {
     const hash = window.location.hash.replace("#", "");
-    if (["today", "tags", "reports", "simulation", "config"].includes(hash))
-      switchTab(hash);
+    if (["today", "tags", "reports", "config"].includes(hash)) switchTab(hash);
   }
   window.addEventListener("hashchange", initHash);
 

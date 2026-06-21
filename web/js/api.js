@@ -2,19 +2,31 @@
 const KEY_STORAGE = "tradescanner_api_key";
 
 export function getApiKey() {
-  return sessionStorage.getItem(KEY_STORAGE);
+  return (
+    sessionStorage.getItem(KEY_STORAGE) || localStorage.getItem(KEY_STORAGE)
+  );
 }
 
 export function setApiKey(key) {
   sessionStorage.setItem(KEY_STORAGE, key);
+  localStorage.setItem(KEY_STORAGE, key);
 }
 
 export function clearApiKey() {
   sessionStorage.removeItem(KEY_STORAGE);
+  localStorage.removeItem(KEY_STORAGE);
 }
 
 export function isLoggedIn() {
   return !!getApiKey();
+}
+
+// Migrate: if key exists in sessionStorage but not localStorage, mirror it
+export function syncKeyToLocalStorage() {
+  const key = sessionStorage.getItem(KEY_STORAGE);
+  if (key && !localStorage.getItem(KEY_STORAGE)) {
+    localStorage.setItem(KEY_STORAGE, key);
+  }
 }
 
 export async function verifyKey(key) {

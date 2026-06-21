@@ -171,13 +171,13 @@ SECTOR_CARD = """<div class="card tag-card" id="tag-{anchor}" style="display:non
 <div class="chart-inline" id="chart-{anchor}"></div>
 </div></div>"""
 
-HIGHLIGHT_ROW = """<tr><td class="sym sym-link" onclick="showChart('{symbol}','{tag_name}')">{symbol}</td><td class="name">{name}</td><td class="num">${price:.2f}</td><td><span class="badge {reason_cls}">{reason}</span></td><td class="num">${entry:.2f}</td><td class="num">${stop:.2f}</td><td class="num">${target:.2f}</td><td class="num">{rr}</td><td class="num">{size}</td><td class="num">${cost}</td><td class="num">${risk_dollars}</td><td><span class="badge badge-neutral">{horizon}</span></td></tr>"""
+HIGHLIGHT_ROW = """<tr><td class="sym sym-link" onclick="showChart('{symbol}','{tag_name}')">{symbol}</td><td class="name">{name}</td><td class="num">${price:.2f}</td><td><span class="badge {reason_cls}">{reason}</span></td><td class="num">${entry:.2f}</td><td class="num {dist_cls}">{entry_dist}</td><td class="num">${stop:.2f}</td><td class="num">${target:.2f}</td><td class="num">{rr}</td><td class="num">{size}</td><td class="num">${cost}</td><td class="num">${risk_dollars}</td><td><span class="badge badge-neutral">{horizon}</span></td></tr>"""
 
 
 class ReportGenerator:
-    def __init__(self):
-        self.reports_dir = REPORTS_DIR
-        self.max_reports = settings.get('report', {}).get('max_reports', 15)
+    def __init__(self, reports_dir=None):
+        self.reports_dir = Path(reports_dir) if reports_dir else REPORTS_DIR
+        self.max_reports = settings.get('report', {}).get('max_reports', 15) if reports_dir is None else 999
 
     def _compute_diff(self, highlights, scan_date):
         yesterday = (datetime.strptime(scan_date, '%Y-%m-%d') - timedelta(days=1)).strftime('%Y-%m-%d')
@@ -197,11 +197,14 @@ class ReportGenerator:
         return f'<div class="header-meta" style="margin-top:4px">{" &middot; ".join(parts)} vs yesterday</div>' if parts else ""
 
     def generate_report(self, analysis_result: dict) -> str:
+        import traceback
         market = analysis_result['market']
         sectors = analysis_result['sectors']
         focus = analysis_result.get('focus_summary')
         timestamp = analysis_result.get('timestamp', datetime.now().isoformat())
         scan_date = datetime.now().strftime('%Y-%m-%d')
+        highlights_count = sum(len(s.highlights) for s in sectors)
+        logger.info(f"ReportGenerator.generate_report called: date={scan_date} sectors={len(sectors)} picks={highlights_count} caller={traceback.extract_stack()[-3].filename}:{traceback.extract_stack()[-3].lineno}")
         html = self._build_html(market, sectors, focus, timestamp, scan_date)
         report_path = self.reports_dir / f"report_{scan_date}.html"
         report_path.write_text(html, encoding='utf-8')
@@ -281,8 +284,7 @@ class ReportGenerator:
 
             highlights_html = ''
             if s.highlights:
-                rows = []
-                for h in s.highlights:
+                def build_row(h):
                     if h.reason == 'Strong Momentum':
                         rs_val = getattr(h, 'rs_percentile', None)
                         if rs_val is not None:
@@ -298,12 +300,30 @@ class ReportGenerator:
                     cost_str = f"{getattr(h, 'position_cost', 0):,.0f}"
                     risk_str = f"{getattr(h, 'risk_dollars', 0):,.0f}"
                     horizon_str = getattr(h, 'time_horizon', '--')
-                    rows.append(HIGHLIGHT_ROW.format(
+                    dist_pct = getattr(h, 'entry_distance_pct', 0)
+                    dist_str = f"{dist_pct:.0f}%" if dist_pct > 0.5 else "now"
+                    dist_cls = 'up' if dist_pct <= 2 else ('dim' if dist_pct <= 5 else 'down')
+                    return HIGHLIGHT_ROW.format(
                         symbol=h.symbol, tag_name=s.name, name=h.name or h.symbol, price=h.price,
                         reason=reason_display, reason_cls=reason_map.get(h.reason, 'badge-neutral'),
-                        entry=h.entry, stop=h.stop, target=h.target, rr=rr_str,
-                        size=size_str, cost=cost_str, risk_dollars=risk_str, horizon=horizon_str))
-                highlights_html = '<table style="margin-top:8px"><thead><tr><th>Symbol</th><th>Name</th><th>Price</th><th>Reason</th><th>Entry</th><th>Stop</th><th>Target</th><th>R/R</th><th>Size</th><th>Cost</th><th>Risk</th><th>Horizon</th></tr></thead><tbody>' + ''.join(rows) + '</tbody></table>'
+                        entry=h.entry, entry_dist=dist_str, dist_cls=dist_cls,
+                        stop=h.stop, target=h.target, rr=rr_str,
+                        size=size_str, cost=cost_str, risk_dollars=risk_str, horizon=horizon_str)
+
+                active_threshold = 0.05  # matches portfolio_config.yaml active_entry_threshold
+                active = [h for h in s.highlights if getattr(h, 'entry_distance_pct', 0) <= active_threshold * 100]
+                watch = [h for h in s.highlights if getattr(h, 'entry_distance_pct', 0) > active_threshold * 100]
+
+                table_header = '<table style="margin-top:8px"><thead><tr><th>Symbol</th><th>Name</th><th>Price</th><th>Reason</th><th>Entry</th><th>Dist</th><th>Stop</th><th>Target</th><th>R/R</th><th>Size</th><th>Cost</th><th>Risk</th><th>Horizon</th></tr></thead><tbody>'
+
+                parts_html = []
+                if active:
+                    parts_html.append(f'<div style="margin-top:8px;font-size:10px;color:var(--volt);text-transform:uppercase;letter-spacing:.05em">Active Setups ({len(active)})</div>')
+                    parts_html.append(table_header + ''.join(build_row(h) for h in active) + '</tbody></table>')
+                if watch:
+                    parts_html.append(f'<div style="margin-top:12px;font-size:10px;color:var(--ash);text-transform:uppercase;letter-spacing:.05em">Pullback Watch ({len(watch)})</div>')
+                    parts_html.append(table_header + ''.join(build_row(h) for h in watch) + '</tbody></table>')
+                highlights_html = ''.join(parts_html)
 
             outlook_html = s.outlook
             if not s.outlook or s.outlook == f"{s.name} sector: no AI analysis available.":

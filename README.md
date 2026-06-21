@@ -1,128 +1,92 @@
 # Trade Scanner
 
-Automated US stock trading opportunity scanner analyzing stocks with market cap >= $2B daily using 8 trading strategies. Generates web-based reports with AI-powered analysis.
+Sector-first US stock trading scanner — daily AI-powered analysis across 13 curated sectors (~340 stocks), generating an HTML dashboard with technical trade setups.
 
-## Features
+## How It Works
 
-- **9 Trading Strategies**: Regime-aware allocation across bull/neutral/bear markets (A1/A2 sub-modes for Strategy A)
-- **7-Phase Workflow**: Pre-market prep through multi-channel notifications
-- **3-Tier Pre-Calculation**: Universal, lazy strategy-specific, and market data tiers
-- **Unified Scoring**: 0-15 point system, 4 dimensions per strategy
-- **Regime-Based Allocation**: 30 slots dynamically distributed by market regime
-- **AI Analysis**: AI-powered regime detection with built-in web search
-- **Web Reports**: Interactive HTML reports with top 30 table + top 10 deep analysis
-- **Automated Scheduling**: Runs daily at 3:00 AM ET
+1. **Market Overview** — SPY/VIX data + AI macro analysis with web search
+2. **Sector Analysis** — 13 sectors analyzed in parallel with AI web search for drivers/risks/outlook
+3. **Stock Highlights** — Technical screening per sector: Breakout, Near Support/Resistance, Strong Momentum, Good R/R
+4. **Entry/Stop/Target** — Chart-aligned S/R levels (60-bar window, order=2 swing detection), proximity-capped entries
+5. **Report** — Single HTML file with amber-palette dashboard, interactive charts, Active vs Pullback Watch split
+
+## Quick Start
+
+```bash
+python scheduler.py --force      # Run full daily scan
+python -m pytest tests/e2e/ -v   # Run E2E tests
+python api/server.py             # Start API + dashboard (port 19801)
+```
 
 ## Architecture
 
 ```
+scheduler.py          # Daily orchestrator: market → sectors → highlights → report
 core/
-├── strategies/              # 9 strategy plugins (A-H with A1/A2 sub-modes)
-│   ├── momentum_breakout.py        # A1: Long (confirmed breakout)
-│   ├── prebreakout_compression.py  # A2: Long (pre-breakout)
-│   ├── pullback_entry.py           # B: Long
-│   ├── support_bounce.py           # C: Long
-│   ├── distribution_top.py         # D: Short
-│   ├── accumulation_bottom.py      # E: Long
-│   ├── capitulation_rebound.py     # F: Long
-│   ├── earnings_gap.py             # G: Both
-│   └── relative_strength_long.py   # H: Long
-├── engine/                  # Pipeline workflow engine (Phase 3-4 restructure)
-│   ├── pipeline.py                  # PipelineOrchestrator
-│   ├── base_phase.py                # PhaseHandler ABC
-│   ├── context.py                   # PipelineContext
-│   └── phase_handlers/              # Individual phase implementations
-├── services/                # Service registry (dependency injection)
-│   └── registry.py                  # ServiceRegistry
-├── debug/                   # Integrated debug tools
-│   └── inspector.py                 # PipelineInspector
-├── logging_config.py        # Centralized logging configuration
-├── stock_universe.py        # Stock database management
-├── premarket_prep.py        # Phase 0: DB init, Tier 1/3, market cap filter
-├── market_regime.py         # Regime detection + allocation tables
-├── market_analyzer.py       # Phase 1: AI market analysis (enable_search)
-├── screener.py              # Phase 2: Multi-strategy screening
-├── ai_confidence_scorer.py  # Phase 3: Top 30 selection
-├── analyzer.py              # Phase 4: Deep analysis for top 10
-├── reporter.py              # Phase 5: HTML report generation
-├── notifier.py              # Phase 6: Discord + WeChat webhooks
-├── fetcher.py               # yfinance data fetching
-└── indicators.py            # Technical indicators (VCP, RSI, EMA, etc.)
-
-config/
-├── settings.json            # Configuration
-└── secrets.json             # API keys (gitignored)
-
+├── sector_analyzer.py   # AI sector analysis + stock highlight selection
+├── reporter.py          # HTML report generator
+├── swing_detector.py    # S/R detection + stop/target calculation
+├── tag_manager.py       # Sector tag CRUD and stock assignment
+├── ai_client.py         # DeepSeek V4 Pro wrapper with web search tool-calling
+├── fetcher.py           # Market data fetcher (yfinance)
+├── indicators.py        # Technical indicators (EMA, ATR, RS, etc.)
+└── constants.py         # Sector ↔ ETF mappings
+api/
+├── server.py            # Flask API: scan, OHLC data, tag/config CRUD
+└── config_api.py        # Tag/sector REST endpoints
 data/
-├── market_data.db           # SQLite database
-└── charts/                  # Generated charts
-
-api/server.py                # Flask API on port 19801
-scheduler.py                 # Main entry point, 7-phase workflow
+└── db.py                # SQLite: stocks, market_data, tier1_cache, tags, etf_cache
+config/
+├── portfolio_config.yaml # Account value, risk %, entry distance thresholds
+├── settings.py           # API keys, paths, web port
+├── stocks.py             # Static stock reference list
+└── delisted.py           # Known delisted symbols
+web/
+├── dashboard.html       # SPA: Today / Tags / Reports / Config tabs
+├── js/                  # ES modules: app, api, tags, today, reports, config
+├── css/                 # Dashboard styles
+└── reports/             # Generated HTML reports (report_YYYY-MM-DD.html)
+tests/
+└── e2e/                 # End-to-end pytest suite
 ```
 
-## 7-Phase Workflow
+## Sectors
 
-| Phase | Component        | Duration  | Description                                         |
-| ----- | ---------------- | --------- | --------------------------------------------------- |
-| 0     | PreMarketPrep    | 15-20 min | Init stock DB, Tier 1/3 pre-calc, market cap filter |
-| 1     | AIMarketRegime   | 30-60s    | DashScope enable_search regime detection            |
-| 2     | StrategyScreener | 10-15 min | Screen 30 slots, duplicate handling                 |
-| 3     | AIScoring        | 5-10 min  | Top 30 selection, parallel AI                       |
-| 4     | DeepAnalysis     | 10-15 min | Tavily + AI deep analysis for top 10                |
-| 5     | ReportGenerator  | 2-3 min   | HTML report (top 30 table + top 10 deep)            |
-| 6     | MultiNotifier    | 1 min     | WeChat + Discord notifications                      |
+Software, Semiconductors, Quantum Computing, Nuclear Energy, Photonics, Space, Memory, Drone, Robot, Rare Earth, Neocloud, Fintech, Crypto
 
-## Strategies
+Stocks are assigned to sectors via the Tags tab in the web dashboard. Each sector has a benchmark ETF for relative strength and trend data.
 
-| Letter | Strategy               | Type  | Description                      |
-| ------ | ---------------------- | ----- | -------------------------------- |
-| A1     | MomentumBreakout       | Long  | Confirmed breakout, VCP pattern  |
-| A2     | PreBreakoutCompression | Long  | Pre-breakout, range compression  |
-| B      | PullbackEntry          | Long  | EMA pullback with 4D scoring     |
-| C      | SupportBounce          | Long  | False breakdown reclaim          |
-| D      | DistributionTop        | Short | Distribution tops                |
-| E      | AccumulationBottom     | Long  | Accumulation bottoms             |
-| F      | CapitulationRebound    | Long  | VIX 15-35 window, extreme exempt |
-| G      | EarningsGap            | Both  | Post-earnings gap continuation   |
-| H      | RelativeStrengthLong   | Long  | RS leaders in bear markets       |
+## Technical Setup Types
 
-## Regime-Based Allocation (30 slots)
+| Setup           | Entry Logic                     | Horizon           |
+| --------------- | ------------------------------- | ----------------- |
+| Breakout        | Current price (momentum)        | Swing (5-20d)     |
+| Strong Momentum | Current price (trend-following) | Position (10-40d) |
+| Near Support    | Nearest support zone within 10% | Swing (5-20d)     |
+| Near Resistance | Current price                   | Swing (5-20d)     |
+| Good R/R        | Current price                   | Swing (5-20d)     |
 
-| Regime        | A1  | A2  | B   | C   | D   | E   | F   | G   | H   | Total |
-| ------------- | --- | --- | --- | --- | --- | --- | --- | --- | --- | ----- |
-| bull_strong   | 4   | 4   | 6   | 4   | 0   | 0   | 0   | 8   | 4   | 30    |
-| bull_moderate | 4   | 4   | 6   | 4   | 0   | 0   | 0   | 8   | 4   | 30    |
-| neutral       | 3   | 3   | 5   | 5   | 4   | 4   | 0   | 3   | 3   | 30    |
-| bear_moderate | 2   | 2   | 4   | 4   | 5   | 5   | 2   | 0   | 6   | 30    |
-| bear_strong   | 1   | 1   | 0   | 4   | 6   | 6   | 8   | 0   | 4   | 30    |
-| extreme_vix   | 0   | 0   | 0   | 0   | 3   | 3   | 12  | 0   | 12  | 30    |
+Entry prices are capped at 10% from current price (`max_entry_distance_pct` in portfolio_config.yaml). Breakout and Strong Momentum always use current price — they're momentum trades, not pullback entries.
 
-Position sizing scales by regime: bull=1.0x/0.3x, neutral=0.8x, bear_moderate/bear_strong=0.5x long, extreme_vix=0.3x (F,H exempt at 1.0x).
+## Report Features
 
-## Scoring System
+- **Active Setups** — entries at or near current price, actionable now
+- **Pullback Watch** — entries >5% below current price, wait for pullback
+- **Interactive charts** — click any symbol to see OHLC candlesticks with S/R levels
+- **Sector bar chart** — daily performance at a glance, click to drill into details
+- **AI analysis** — sector outlook, key drivers, risks per sector
 
-0-15 points, 4 dimensions per strategy. Tiers: S (12+, 20%), A (9+, 10%), B (7+, 5%), C (<7, reject). Linear interpolation for boundaries. Tiered sector penalty: Top=0%, 2nd=-5%, 3rd+=-10%.
+## AI
+
+Uses DeepSeek V4 Pro via `core/ai_client.py` with web search tool-calling. Sector analysis runs in parallel (4 threads). Market overview and sector outlook are search-enabled; focus summary reasoning is not.
 
 ## Server
 
 - Flask API on port 19801
-- Phase 0 runs in subprocess for memory isolation
-- Reports accessible via Tailscale Funnel: `https://ametrin-maco.tail81da69.ts.net/reports/report_YYYY-MM-DD.html`
-- Tailscale Funnel service runs via systemd (`tailscale-funnel.service`), survives reboots
-
-## Restructure (April 2026)
-
-The project was restructured to improve modularity and maintainability:
-
-- **Service Registry** (`core/services/`): Dependency injection for core services
-- **Strategy Plugins** (`core/strategies/`): Dynamic discovery, no hardcoded imports, YAML config
-- **Pipeline Engine** (`core/engine/`): Modular workflow with PhaseHandler interface
-- **Debug Tools** (`core/debug/`): Integrated pipeline inspection and analysis
-- **Centralized Logging** (`core/logging_config.py`): Single logging configuration
-
-See `docs/QUICKSTART.md` for usage examples of the new architecture.
+- API key auth for all endpoints
+- Tailscale Funnel for remote access: `https://ametrin-maco.tail81da69.ts.net/reports/`
+- Scan endpoint triggers full pipeline; scheduled via `scheduler.py` (can be cron'd)
 
 ## License
 
-Private project - All rights reserved.
+Private project — All rights reserved.

@@ -71,4 +71,4 @@ def test_tag_daily_change(seeded_db):
     manager = TagManager()
     change = manager.get_tag_daily_change('Software', seeded_db)
     assert change is not None
-    assert abs(change - 1.5) < 0.01
+    assert abs(change - 2.92) < 0.01  # avg of AAPL 2.63%, MSFT 2.44%, PLTR 3.70%

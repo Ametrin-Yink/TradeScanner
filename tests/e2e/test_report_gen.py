@@ -2,7 +2,7 @@ from core.reporter import ReportGenerator
 from core.sector_analyzer import MarketOverview, SectorAnalysis, FocusSummary, StockHighlight
 
 
-def test_report_generates_html():
+def test_report_generates_html(tmp_path):
     market = MarketOverview(
         date='2026-06-19', regime='bull_moderate', confidence=70,
         reasoning='Market is steady.', spy_price=525.0, spy_change_5d=1.2,
@@ -30,10 +30,11 @@ def test_report_generates_html():
         'market': market, 'sectors': sectors, 'focus_summary': focus,
         'timestamp': '2026-06-19T22:00',
     }
-    gen = ReportGenerator()
+    gen = ReportGenerator(reports_dir=tmp_path)
     report_path = gen.generate_report(result)
 
     assert 'report_2026' in report_path
+    assert str(tmp_path) in report_path
     content = open(report_path).read()
     assert 'NVDA' in content
     assert 'Semiconductors' in content
@@ -42,7 +43,7 @@ def test_report_generates_html():
     assert 'SPY' in content
 
 
-def test_report_handles_empty_ai():
+def test_report_handles_empty_ai(tmp_path):
     market = MarketOverview(
         date='2026-06-19', regime='neutral', confidence=50,
         reasoning='', spy_price=500, spy_change_5d=0, vix=20, vix_status='neutral',
@@ -58,7 +59,9 @@ def test_report_handles_empty_ai():
         'market': market, 'sectors': sectors, 'focus_summary': None,
         'timestamp': '2026-06-19T22:00',
     }
-    gen = ReportGenerator()
+    gen = ReportGenerator(reports_dir=tmp_path)
     report_path = gen.generate_report(result)
     content = open(report_path).read()
     assert 'unavailable' in content.lower() or 'fallback' in content.lower() or 'empty' in content.lower()
+    # Verify it wrote to tmp_path, not the production reports dir
+    assert str(tmp_path) in report_path

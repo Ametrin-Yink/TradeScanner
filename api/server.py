@@ -13,7 +13,6 @@ from config.settings import settings, REPORTS_DIR, CHARTS_DIR
 from data.db import Database
 from core.sector_analyzer import SectorAnalyzer
 from core.reporter import ReportGenerator
-from core.simulation_engine import SimulationEngine
 from api.config_api import config_api
 
 logging.basicConfig(level=logging.INFO)
@@ -109,19 +108,6 @@ def trigger_scan():
             'candidates_found': highlights,
             'report_path': report_path
         }
-
-        # Run simulation auto-select
-        try:
-            engine = SimulationEngine(Database())
-            all_highlights = []
-            for sector in result['sectors']:
-                for h in sector.highlights:
-                    h.primary_tag = sector.name
-                    all_highlights.append(h)
-            engine.auto_select(all_highlights, datetime.now().strftime('%Y-%m-%d'))
-            engine.daily_check()
-        except Exception as e:
-            logger.warning(f"Simulation auto-select failed (non-fatal): {e}")
 
         _last_scan_result = response_data
         _last_scan_time = datetime.now()
@@ -323,9 +309,20 @@ def list_reports():
 
         for report_file in sorted(REPORTS_DIR.glob('report_*.html'), reverse=True):
             stat = report_file.stat()
+            date_str = report_file.name.replace('report_', '').replace('.html', '')
+            # Get actual scan time from workflow_status, fall back to file mtime
+            scan_time = None
+            try:
+                row = db.get_workflow_status(date_str)
+                if row and row.get('start_time'):
+                    scan_time = row['start_time'][:5]  # "HH:MM"
+            except Exception:
+                pass
+            if not scan_time:
+                scan_time = datetime.fromtimestamp(stat.st_mtime).strftime('%H:%M')
             reports.append({
                 'filename': report_file.name,
-                'date': report_file.name.replace('report_', '').replace('.html', ''),
+                'date': f"{date_str}T{scan_time}:00",
                 'size': stat.st_size,
                 'url': f'/reports/{report_file.name}'
             })
@@ -412,35 +409,6 @@ def get_ohlc(symbol):
     return jsonify({'symbol': symbol.upper(), 'data': data, 'supports': supports, 'resistances': resistances})
 
 
-@app.route('/api/simulation/summary')
-@require_auth
-def sim_summary():
-    engine = SimulationEngine(db)
-    return jsonify(engine.get_summary())
-
-
-@app.route('/api/simulation/active')
-@require_auth
-def sim_active():
-    engine = SimulationEngine(db)
-    return jsonify({'positions': engine.get_active_positions()})
-
-
-@app.route('/api/simulation/closed')
-@require_auth
-def sim_closed():
-    outcome = request.args.get('outcome', 'all')
-    engine = SimulationEngine(db)
-    return jsonify({'positions': engine.get_closed_positions(outcome)})
-
-
-@app.route('/api/simulation/check', methods=['POST'])
-@require_auth
-def sim_check():
-    """Trigger a daily check of open positions."""
-    engine = SimulationEngine(db)
-    engine.daily_check()
-    return jsonify({'status': 'ok'})
 
 
 def run_server(host='0.0.0.0', port=None):

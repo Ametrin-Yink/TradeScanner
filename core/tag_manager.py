@@ -62,10 +62,47 @@ class TagManager:
             WHERE t.name = ? AND s.is_active = 1
             ORDER BY s.symbol
         """, (tag_name,)).fetchall()
+        symbols = [r[0] for r in rows]
+        daily_changes = self._get_daily_changes(symbols, db)
         return [
-            {'symbol': r[0], 'ret_5d': r[1], 'vol_ratio': r[2]}
+            {'symbol': r[0], 'ret_5d': r[1], 'vol_ratio': r[2],
+             'daily_change': daily_changes.get(r[0])}
             for r in rows
         ]
+
+    def _get_daily_changes(self, symbols: List[str], db: Database) -> Dict[str, Optional[float]]:
+        """Compute true 1-day price change for a list of symbols from market_data.
+        Returns dict mapping symbol -> daily_change_pct or None."""
+        if not symbols:
+            return {}
+        conn = db.get_connection()
+        # Check if market_data table exists (may not in test databases)
+        exists = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='market_data'"
+        ).fetchone()
+        if not exists:
+            return {s: None for s in symbols}
+        placeholders = ','.join(['?' for _ in symbols])
+        rows = conn.execute(f"""
+            SELECT symbol, close, date FROM market_data
+            WHERE symbol IN ({placeholders})
+            ORDER BY symbol, date DESC
+        """, symbols).fetchall()
+        # Group by symbol, take first two entries for each
+        by_symbol = {}
+        for symbol, close, date in rows:
+            if symbol not in by_symbol:
+                by_symbol[symbol] = []
+            if len(by_symbol[symbol]) < 2:
+                by_symbol[symbol].append(close)
+        result = {}
+        for sym in symbols:
+            closes = by_symbol.get(sym, [])
+            if len(closes) == 2 and closes[1] > 0:
+                result[sym] = (closes[0] - closes[1]) / closes[1] * 100
+            else:
+                result[sym] = None
+        return result
 
     def add_stock_to_tag(self, symbol: str, tag_name: str, db: Database):
         conn = db.get_connection()
@@ -109,11 +146,7 @@ class TagManager:
     def get_tag_daily_change(self, tag_name: str, db: Database) -> Optional[float]:
         """Compute aggregate daily change for a tag from constituent stocks."""
         stocks = self.get_tag_stocks(tag_name, db)
-        changes = []
-        for s in stocks:
-            cache = db.get_tier1_cache(s['symbol'])
-            if cache and cache.get('ret_5d') is not None:
-                changes.append(cache['ret_5d'])
+        changes = [s['daily_change'] for s in stocks if s.get('daily_change') is not None]
         if not changes:
             return None
         return sum(changes) / len(changes)
