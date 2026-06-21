@@ -101,13 +101,12 @@ def _composite_score(c: StockHighlight) -> float:
     quality = min(c.rr * 5, 15) + min((c.volume_ratio or 1) * 5, 10)
 
     # Structure (25%): setup type bonus + trend alignment
-    setup_bonus = {
-        'Breakout': 1.0,
-        'Strong Momentum': 0.95,
-        'Near Support': 0.85,
-        'Resistance Test': 0.80,
-        'Good R/R': 0.75,
-    }
+    pcfg = load_config()
+    scoring_cfg = pcfg.get('scoring', {})
+    setup_bonus = scoring_cfg.get('setup_bonus', {
+        'Breakout': 1.0, 'Strong Momentum': 0.95,
+        'Near Support': 0.85, 'Resistance Test': 0.80, 'Good R/R': 0.75,
+    })
     trend_above = 1.0 if getattr(c, 'ema_above', False) else 0.4
     structure = setup_bonus.get(c.reason, 0.5) * 15 + trend_above * 10
 
@@ -639,8 +638,8 @@ class SectorAnalyzer:
                 used_symbols.add(symbol)
 
             # Multi-factor composite scoring with score threshold
-            from config.settings import settings
-            min_score = settings.get('scoring', {}).get('min_composite_score', 20) if hasattr(settings, 'get') else 20
+            pcfg = _load_portfolio_config()
+            min_score = pcfg.get('scoring', {}).get('min_composite_score', 20)
 
             all_candidates = [c for c in all_candidates if _composite_score(c) >= min_score]
             all_candidates.sort(key=lambda c: _composite_score(c), reverse=True)

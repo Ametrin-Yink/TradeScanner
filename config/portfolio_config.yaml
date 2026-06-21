@@ -22,3 +22,18 @@ sr:
   zone_min_touches: 2
   price_filter_atr_mult: 5.0
   price_filter_min_pct: 0.10
+
+# Scoring weights for stock highlight ranking
+scoring:
+  momentum_weight: 0.30
+  quality_weight: 0.30
+  structure_weight: 0.25
+  volatility_penalty_weight: 0.05
+  min_composite_score: 20
+  setup_bonus:
+    Breakout: 1.0
+    Strong Momentum: 0.95
+    Near Support: 0.85
+    Resistance Test: 0.80
+    Good R/R: 0.75
+  diversity_soft_threshold: 0.70
