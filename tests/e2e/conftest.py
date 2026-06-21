@@ -75,6 +75,18 @@ def seeded_db(in_memory_db):
             ai_confidence INTEGER, ai_reasoning TEXT, cache_date TEXT
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS workflow_status (
+            run_date TEXT PRIMARY KEY,
+            start_time TEXT, end_time TEXT, status TEXT,
+            phase0_duration INTEGER, phase1_duration INTEGER,
+            phase2_duration INTEGER, phase3_duration INTEGER,
+            phase4_duration INTEGER, phase5_duration INTEGER,
+            total_duration INTEGER, symbols_count INTEGER,
+            candidates_count INTEGER, report_path TEXT,
+            error_message TEXT, status_data TEXT
+        )
+    """)
 
     # Seed stocks
     for sym, name, cap in [

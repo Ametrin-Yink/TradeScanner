@@ -128,6 +128,13 @@ class Database:
 
         # sector_assignments is created via SCHEMA in _init_db
 
+        # Add status_data column to workflow_status for pipeline checkpointing
+        cursor = conn.execute("PRAGMA table_info(workflow_status)")
+        ws_columns = {row[1] for row in cursor.fetchall()}
+        if 'status_data' not in ws_columns:
+            conn.execute("ALTER TABLE workflow_status ADD COLUMN status_data TEXT")
+            logger.info("Migrating workflow_status table: adding status_data column")
+
     def _migrate_tier1_cache(self, conn: sqlite3.Connection):
         """Add v5.0/v7.0/v7.1 columns to tier1_cache table."""
         cursor = conn.cursor()
@@ -672,7 +679,8 @@ class Database:
             'phase0_duration', 'phase1_duration', 'phase2_duration',
             'phase3_duration', 'phase4_duration', 'phase5_duration',
             'total_duration', 'symbols_count', 'candidates_count',
-            'report_path', 'error_message'
+            'report_path', 'error_message',
+            'status_data',
         ]
 
         values = [status_data.get(col, None) for col in columns]
@@ -1127,6 +1135,22 @@ class Database:
             )
 
 
+    def load_workflow_status(self, run_date: str) -> Dict:
+        """Load pipeline checkpoint flags for a run date.
+
+        Returns JSON-decoded status_data dict, or empty dict if none exists.
+        Unlike get_workflow_status() (which returns the full row), this
+        returns only the checkpoint flags stored as a JSON blob.
+        """
+        conn = self.get_connection()
+        row = conn.execute(
+            "SELECT status_data FROM workflow_status WHERE run_date = ?",
+            (run_date,)
+        ).fetchone()
+        if row:
+            return json.loads(row[0]) if row[0] else {}
+        return {}
+
     def _migrate_to_tags(self):
         """One-time: migrate sector_assignments to tags + stock_tags."""
         conn = self.get_connection()
@@ -1339,7 +1363,8 @@ CREATE TABLE IF NOT EXISTS workflow_status (
     symbols_count INTEGER,
     candidates_count INTEGER,
     report_path TEXT,
-    error_message TEXT
+    error_message TEXT,
+    status_data TEXT  -- JSON blob for pipeline checkpoint flags
 );
 
 -- AI confidence outcome tracking for quarterly audits
