@@ -57,6 +57,26 @@ tr:hover{background:rgba(212,168,83,.03)}
 .chart-inline canvas{display:block;max-width:100%}
 .sym-link{cursor:pointer;color:var(--gold);text-decoration:underline}
 .sym-link:hover{color:#e8c865}
+
+@media (max-width: 768px) {
+    body { padding: 12px; max-width: 100%; }
+    table { font-size: 9px; }
+    th, td { padding: 2px 4px; }
+    .bar-label { width: 60px; font-size: 8px; }
+    .positioning { flex-direction: column; }
+    .card { padding: 8px 10px; }
+    .stats-strip { gap: 8px; font-size: 10px; }
+}
+
+@media print {
+    body { background: #fff; color: #000; max-width: 100%; }
+    .fold-body { max-height: none !important; opacity: 1 !important; }
+    .fold-body.hidden { max-height: none !important; opacity: 1 !important; }
+    .bar-chart-wrap, .chart-inline { break-inside: avoid; }
+    .footer { border-top: 1px solid #ccc; color: #666; }
+    .card { background: #fff; border: 1px solid #ddd; }
+    .up { color: #2d7d3a; } .down { color: #c0392b; }
+}
 """
 
 BAR_CHART_JS = """<script>
