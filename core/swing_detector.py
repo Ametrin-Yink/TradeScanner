@@ -207,9 +207,11 @@ def compute_sr_for_symbol(db, symbol: str) -> tuple:
         # Filter: only multi-touch zones (count >= 2)
         high_zones = [z for z in high_zones if z['count'] >= 2]
         low_zones = [z for z in low_zones if z['count'] >= 2]
-        # Filter levels >50% away from current price (data artifacts, pre-split prices)
-        price_floor = current_price * 0.50
-        price_ceiling = current_price * 1.50
+        # Dynamic ATR-based filter: typical range 10-20% instead of flat 50%
+        atr_pct_val = atr / current_price if current_price > 0 else 0.02
+        filter_pct = max(0.10, 5 * atr_pct_val)
+        price_floor = current_price * (1 - filter_pct)
+        price_ceiling = current_price * (1 + filter_pct)
         supports = sorted([z['level'] for z in low_zones if price_floor < z['level'] < current_price], reverse=True)[:5]
         resistances = sorted([z['level'] for z in high_zones if current_price < z['level'] < price_ceiling])[:5]
 

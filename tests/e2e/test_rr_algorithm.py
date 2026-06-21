@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
-from core.swing_detector import detect_swings, cluster_levels, compute_stop_target
+from core.swing_detector import (detect_swings, cluster_levels,
+                                  compute_stop_target, compute_sr_for_symbol)
 
 
 def make_test_data():
@@ -70,3 +71,42 @@ def test_compute_stop_target_fallback_atr():
     assert abs(stop - expected_stop) < 0.01
     assert target > entry_price
     assert method.startswith('atr+')
+
+
+def test_compute_sr_for_symbol_dynamic_price_filter(seeded_db):
+    """ATR-based dynamic filter rejects levels beyond ~10% from current price."""
+    conn = seeded_db.get_connection()
+    n = 60
+    close = np.full(n, 100.0)
+    # Two dips to 88 (bars 5-14, 25-34) — creates swing lows near ~87.25
+    close[5:15] = [100, 95, 92, 90, 88, 89, 91, 93, 96, 100]
+    close[25:35] = [100, 95, 92, 90, 88, 89, 91, 93, 96, 100]
+    # Two spikes to 112 (bars 15-24, 35-44) — creates swing highs near ~112.75
+    close[15:25] = [100, 104, 107, 110, 112, 111, 109, 106, 103, 100]
+    close[35:45] = [100, 104, 107, 110, 112, 111, 109, 106, 103, 100]
+    # Near-100 swings (bars 45-59) — creates swing levels near ~97.25 and ~102.75
+    close[45:60] = [100, 102, 98, 101, 99, 100, 102, 98, 101, 99, 100, 101, 99, 100, 100]
+
+    for i in range(n):
+        cp = close[i]
+        conn.execute(
+            "INSERT INTO market_data (symbol, date, open, high, low, close, volume) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ('TEST', f'2026-01-{i+1:02d}', cp, cp + 0.75, cp - 0.75, cp, 1000000)
+        )
+    conn.commit()
+
+    supports, resistances = compute_sr_for_symbol(seeded_db, 'TEST')
+
+    # ATR = 1.5 (High-Low = 1.5 each bar), current_price = 100.0
+    # atr_pct_val = 0.015, filter_pct = max(0.10, 0.075) = 0.10
+    # floor = 90.0, ceiling = 110.0
+    # Old 50% filter: floor=50, ceiling=150 → 87.25 and 112.75 pass
+    # New dynamic filter: floor=90, ceiling=110 → 87.25 and 112.75 rejected
+
+    assert len(supports) > 0, "Should have at least one support near current price"
+    assert len(resistances) > 0, "Should have at least one resistance near current price"
+    for s in supports:
+        assert s >= 90.0, f"Support {s:.2f} is below dynamic floor 90.0"
+    for r in resistances:
+        assert r <= 110.0, f"Resistance {r:.2f} is above dynamic ceiling 110.0"
