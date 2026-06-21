@@ -12,24 +12,23 @@ from core.fetcher import validate_cache_freshness
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 logger = logging.getLogger(__name__)
 
-# NYSE 2026 holidays (market closed)
-HOLIDAYS_2026 = {
-    '2026-01-01', '2026-01-19', '2026-02-16', '2026-04-03',
-    '2026-05-25', '2026-06-19', '2026-07-03', '2026-09-07',
-    '2026-11-26', '2026-12-25',
-}
-
-
 def is_trading_day() -> bool:
-    """Check if today is a US trading day."""
-    today = datetime.now().strftime('%Y-%m-%d')
-    if today in HOLIDAYS_2026:
-        logger.info(f"Today is a holiday - not a trading day")
-        return False
-    if datetime.now().weekday() >= 5:
-        logger.info(f"Today is {datetime.now().strftime('%A')} - not a trading day")
-        return False
-    return True
+    """Check if today is a US trading day using pandas_market_calendars."""
+    try:
+        import pandas_market_calendars as mcal
+        nyse = mcal.get_calendar('NYSE')
+        today = datetime.now().date()
+        schedule = nyse.schedule(start_date=today, end_date=today)
+        if schedule.empty:
+            logger.info("No trading schedule today (holiday or weekend)")
+            return False
+        return True
+    except ImportError:
+        # Fallback: basic weekday check
+        if datetime.now().weekday() >= 5:
+            logger.info(f"Today is {datetime.now().strftime('%A')} - not a trading day")
+            return False
+        return True
 
 
 def run_sector_scan(test_symbols=None):
