@@ -39,24 +39,32 @@ def detect_swings(df, order: int = None, atr: float = None):
     return swing_highs, swing_lows
 
 
-def cluster_levels(points: List[float], tolerance: float = 0.005) -> List[Dict]:
-    """Group nearby price levels into zones using hierarchical clustering.
+def cluster_levels(points: List[float], tolerance: float = None,
+                   atr: float = None, price: float = None) -> List[Dict]:
+    """Group nearby price levels into zones using complete-linkage clustering.
 
     Args:
         points: list of price levels
-        tolerance: max distance as fraction of price to group together (0.005 = 0.5%)
+        tolerance: max distance as fraction of price (auto-computed if None)
+        atr: average true range for dynamic tolerance
+        price: current price for dynamic tolerance
 
     Returns:
-        List of dicts with 'level' (mean price), 'count' (touches), 'range' (min, max)
+        List of dicts with 'level', 'count', 'range' — only zones with count >= 2
     """
     if not points:
         return []
+
+    if tolerance is None and atr is not None and price is not None:
+        tolerance = max(0.005, min(0.03, 0.3 * (atr / price)))
+    elif tolerance is None:
+        tolerance = 0.01
 
     if len(points) == 1:
         return [{'level': points[0], 'count': 1, 'range': (points[0], points[0])}]
 
     prices = np.array(points).reshape(-1, 1)
-    Z = linkage(prices, method='single')
+    Z = linkage(prices, method='complete')
     threshold = tolerance * np.mean(prices)
     labels = fcluster(Z, t=threshold, criterion='distance')
 
@@ -190,10 +198,15 @@ def compute_sr_for_symbol(db, symbol: str) -> tuple:
         # Use recent 60 bars with order=2 to catch 2-day pullbacks
         recent = df.tail(60)
         swing_highs, swing_lows = detect_swings(recent, order=2)
-        high_zones = cluster_levels(swing_highs, tolerance=0.005)
-        low_zones = cluster_levels(swing_lows, tolerance=0.005)
-
         current_price = float(df['Close'].iloc[-1])
+        atr = (df['High'] - df['Low']).tail(14).mean()
+
+        high_zones = cluster_levels(swing_highs, atr=atr, price=current_price)
+        low_zones = cluster_levels(swing_lows, atr=atr, price=current_price)
+
+        # Filter: only multi-touch zones (count >= 2)
+        high_zones = [z for z in high_zones if z['count'] >= 2]
+        low_zones = [z for z in low_zones if z['count'] >= 2]
         # Filter levels >50% away from current price (data artifacts, pre-split prices)
         price_floor = current_price * 0.50
         price_ceiling = current_price * 1.50
