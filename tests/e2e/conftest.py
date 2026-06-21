@@ -7,6 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import sqlite3
+import threading
 from flask import Flask
 from data.db import Database
 from api.server import app as create_app
@@ -14,14 +15,34 @@ from api.server import app as create_app
 
 @pytest.fixture
 def in_memory_db(monkeypatch):
-    """Provide a Database that uses a singleton :memory: SQLite connection."""
-    db = Database()
-    conn = sqlite3.connect(':memory:', check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
+    """Provide a Database that uses a temp file so concurrent thread reads are safe.
 
-    monkeypatch.setattr(db, 'get_connection', lambda: conn)
-    return db
+    SQLite :memory: connections cannot safely serve concurrent thread reads even
+    with check_same_thread=False — the underlying SQLite engine returns SQLITE_MISUSE
+    under concurrent access. A file-backed database with per-thread connections
+    avoids this race entirely.
+    """
+    import tempfile
+    from pathlib import Path
+    db = Database()
+    tmp_file = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
+    tmp_path = tmp_file.name
+    tmp_file.close()
+
+    _local = threading.local()
+
+    def _get_connection():
+        if not hasattr(_local, 'conn') or _local.conn is None:
+            c = sqlite3.connect(tmp_path, check_same_thread=False)
+            c.row_factory = sqlite3.Row
+            c.execute("PRAGMA journal_mode=WAL")
+            _local.conn = c
+        return _local.conn
+
+    monkeypatch.setattr(db, 'get_connection', _get_connection)
+    yield db
+    # Cleanup temp file
+    Path(tmp_path).unlink(missing_ok=True)
 
 
 @pytest.fixture
