@@ -182,6 +182,37 @@ function drawCandles(canvasId,data,supports,resistances,sym){
 }
 </script>"""
 
+KEYBOARD_JS = """<script>
+document.addEventListener("keydown", function (e) {
+  if (e.target.tagName === "INPUT") return;
+  var cards = document.querySelectorAll(".tag-card");
+  var visible = Array.from(cards).filter(function (c) {
+    return c.style.display !== "none";
+  });
+  var currentIdx = visible.indexOf(document.activeElement);
+
+  if (e.key === "j" || e.key === "ArrowDown") {
+    e.preventDefault();
+    var next = visible[Math.min(currentIdx + 1, visible.length - 1)];
+    if (next) {
+      next.focus();
+      next.scrollIntoView({ behavior: "smooth" });
+    }
+  } else if (e.key === "k" || e.key === "ArrowUp") {
+    e.preventDefault();
+    var prev = visible[Math.max(currentIdx - 1, 0)];
+    if (prev) {
+      prev.focus();
+      prev.scrollIntoView({ behavior: "smooth" });
+    }
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    var toggle = document.activeElement?.querySelector(".fold-toggle");
+    if (toggle) toggle.click();
+  }
+});
+</script>"""
+
 BAR_CHART_HTML = """<div class="bar-chart-wrap"><div class="bar-chart">{bars}</div></div>"""
 
 STATS_STRIP = """<div class="stats-strip"><span class="stats-item"><b>SPY</b> ${spy_price:.2f} <span class="{spy_cls}">{spy_5d:+.2f}% 5d</span></span><span class="stats-item"><b>VIX</b> {vix:.1f}</span><span class="stats-item">{regime}</span></div>"""
@@ -197,7 +228,7 @@ SECTOR_CARD = """<div class="card tag-card" id="tag-{anchor}" style="display:non
 <div class="chart-inline" id="chart-{anchor}"></div>
 </div></div>"""
 
-HIGHLIGHT_ROW = """<tr><td class="sym sym-link" onclick="showChart('{symbol}','{tag_name}')">{symbol}</td><td class="name">{name}</td><td class="num">${price:.2f}</td><td><span class="badge {reason_cls}">{reason}</span></td><td class="num">${entry:.2f}</td><td class="num {dist_cls}">{entry_dist}</td><td class="num">${stop:.2f}</td><td class="num">${target:.2f}</td><td class="num">{rr}</td><td class="num">{size}</td><td class="num">${cost}</td><td class="num">${risk_dollars}</td><td><span class="badge badge-neutral">{horizon}</span></td></tr>"""
+HIGHLIGHT_ROW = """<tr><td class="sym sym-link" onclick="showChart('{symbol}','{tag_name}')">{symbol}</td><td class="name">{name}</td><td class="num">${price:.2f}</td><td><span class="badge {reason_cls}">{reason}</span></td><td class="num">${entry:.2f}</td><td class="num {dist_cls}">{entry_dist}</td><td class="num">${stop:.2f}</td><td class="num">${target:.2f}</td><td class="num">{rr}</td><td class="num">{size}</td><td class="num">${cost}</td><td class="num">${risk_dollars}</td><td><span class="badge {horizon_cls}">{horizon}</span></td></tr>"""
 
 
 class ReportGenerator:
@@ -242,12 +273,18 @@ class ReportGenerator:
     def _build_html(self, market, sectors, focus, timestamp, scan_date=None) -> str:
         parts = ['<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>TradeScanner &middot; ', market.date, '</title><style>', STYLE, '</style></head><body>']
 
+        try:
+            ts = datetime.fromisoformat(timestamp)
+            formatted_ts = ts.strftime('%a, %b %d, %Y %I:%M %p ET')
+        except (ValueError, TypeError):
+            formatted_ts = timestamp[:16]
+
         total_stocks = len(set(h.symbol for s in sectors for h in s.highlights))
         all_highlights = [h for s in sectors for h in s.highlights]
         parts.append(f'<div class="header"><div><h1>TradeScanner</h1><div class="header-meta">{market.date} &middot; {len(sectors)} tags &middot; {total_stocks} picks</div>')
         if scan_date:
             parts.append(self._compute_diff(all_highlights, scan_date))
-        parts.append('</div><div class="header-meta" style="text-align:right;font-size:10px">' + timestamp[:16] + '</div></div>')
+        parts.append('</div><div class="header-meta" style="text-align:right;font-size:10px">' + formatted_ts + '</div></div>')
 
         # Bar Chart (horizontal)
         max_chg = max(abs(s.daily_change) for s in sectors if s.daily_change is not None) or 1
@@ -261,6 +298,7 @@ class ReportGenerator:
             bars.append(f'<div class="bar-item" onclick="showTag(\'{s.name}\')" title="{s.name}: {sign}{chg:.2f}%"><span class="bar-label">{s.name}</span><div class="bar-fill" style="width:{width_pct:.0f}%;background:{bg}"></div><span class="bar-pct" style="color:{pct_clr}">{sign}{chg:.1f}%</span></div>')
         parts.append(BAR_CHART_HTML.format(bars=''.join(bars)))
         parts.append(BAR_CHART_JS)
+        parts.append(KEYBOARD_JS)
 
         # Stats Strip
         spy_cls = 'up' if market.spy_change_5d >= 0 else 'down'
@@ -325,6 +363,10 @@ class ReportGenerator:
 
         # Tag Details
         parts.append('<h2>Tag Details</h2>')
+        parts.append('<div style="margin-bottom:8px;display:flex;gap:6px">')
+        parts.append('<button onclick="document.querySelectorAll(\'.fold-toggle\').forEach(function(el){el.classList.remove(\'collapsed\');el.nextElementSibling.classList.remove(\'hidden\')})" style="background:var(--paper);color:var(--frost);border:1px solid var(--divider);border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Expand All</button>')
+        parts.append('<button onclick="document.querySelectorAll(\'.fold-toggle\').forEach(function(el){el.classList.add(\'collapsed\');el.nextElementSibling.classList.add(\'hidden\')})" style="background:var(--paper);color:var(--frost);border:1px solid var(--divider);border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer">Collapse All</button>')
+        parts.append('</div>')
         parts.append('<div id="tag-hint" style="color:var(--ash);font-size:12px;margin-bottom:12px">Click a bar above to see tag details</div>')
         reason_map = {'Near Resistance': 'badge-neutral', 'Near Support': 'badge-neutral', 'Breakout': 'badge-up', 'Strong Momentum': 'badge-up', 'Good R/R': 'badge-up'}
         for s in sectors:
@@ -360,6 +402,12 @@ class ReportGenerator:
                     cost_str = f"{getattr(h, 'position_cost', 0):,.0f}"
                     risk_str = f"{getattr(h, 'risk_dollars', 0):,.0f}"
                     horizon_str = getattr(h, 'time_horizon', '--')
+                    horizon_cls_map = {
+                        'Short (3-10d)': 'badge-up',
+                        'Swing (5-20d)': 'badge-neutral',
+                        'Position (10-40d)': 'badge-neutral',
+                    }
+                    horizon_cls = horizon_cls_map.get(horizon_str, 'badge-neutral')
                     dist_pct = getattr(h, 'entry_distance_pct', 0)
                     dist_str = f"{dist_pct:.0f}%" if dist_pct > 0.5 else "now"
                     dist_cls = 'up' if dist_pct <= 2 else ('dim' if dist_pct <= 5 else 'down')
@@ -368,7 +416,7 @@ class ReportGenerator:
                         reason=reason_display, reason_cls=reason_map.get(h.reason, 'badge-neutral'),
                         entry=h.entry, entry_dist=dist_str, dist_cls=dist_cls,
                         stop=h.stop, target=h.target, rr=rr_str,
-                        size=size_str, cost=cost_str, risk_dollars=risk_str, horizon=horizon_str)
+                        size=size_str, cost=cost_str, risk_dollars=risk_str, horizon=horizon_str, horizon_cls=horizon_cls)
 
                 active_threshold = 0.05  # matches portfolio_config.yaml active_entry_threshold
                 active = [h for h in s.highlights if getattr(h, 'entry_distance_pct', 0) <= active_threshold * 100]
@@ -400,7 +448,7 @@ class ReportGenerator:
         ai_errors = sum(1 for s in sectors if 'unavailable' in (s.outlook or ''))
         ai_status = f"AI: {len(sectors) - ai_errors}/{len(sectors)} sectors OK"
         # Add cost total from audit log
-        parts.append(f'<div class="footer">TradeScanner &middot; {timestamp[:16]} &middot; {ai_status}</div>')
+        parts.append(f'<div class="footer">TradeScanner &middot; {formatted_ts} &middot; {ai_status}</div>')
 
         # Embed OHLC data for offline chart rendering
         all_ohlc = {}
