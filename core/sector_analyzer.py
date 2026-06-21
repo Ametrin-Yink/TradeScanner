@@ -678,6 +678,27 @@ class SectorAnalyzer:
 
             sector.highlights = _select_diverse(all_candidates, max_picks=3)
 
+            # Persist highlights as active recommendations
+            now_str = datetime.now().strftime('%Y-%m-%d')
+            for h in sector.highlights:
+                self.db.save_recommendation({
+                    'trade_date': now_str,
+                    'symbol': h.symbol,
+                    'sector': sector.name,
+                    'setup_type': h.reason,
+                    'entry_price': h.entry,
+                    'stop_price': h.stop,
+                    'target_price': h.target,
+                    'rr': h.rr,
+                    'composite_score': _composite_score(h),
+                    'position_size': h.position_size,
+                    'position_cost': h.position_cost,
+                    'risk_dollars': h.risk_dollars,
+                    'current_price': h.price,
+                    'entry_distance_pct': getattr(h, 'entry_distance_pct', 0.0),
+                    'max_days': 20 if 'Swing' in (h.time_horizon or '') else 40,
+                })
+
     # ------------------------------------------------------------------
     # Step 4: Focus Summary
     # ------------------------------------------------------------------

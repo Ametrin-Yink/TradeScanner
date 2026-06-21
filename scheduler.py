@@ -61,6 +61,11 @@ def run_sector_scan(test_symbols=None):
             })
             return None
 
+        # Reconcile previous recommendations before new analysis
+        from core.reconciler import reconcile_recommendations
+        reconciled = reconcile_recommendations(db)
+        logger.info(f"Reconciled {reconciled} prior recommendations")
+
         analyzer = SectorAnalyzer(db=Database())
         result = analyzer.analyze()
         report_path = ReportGenerator().generate_report(result)

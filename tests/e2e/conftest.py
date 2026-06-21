@@ -108,6 +108,22 @@ def seeded_db(in_memory_db):
             error_message TEXT, status_data TEXT
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS recommendations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trade_date TEXT NOT NULL, symbol TEXT NOT NULL,
+            sector TEXT NOT NULL, setup_type TEXT NOT NULL,
+            entry_price REAL NOT NULL, stop_price REAL NOT NULL,
+            target_price REAL NOT NULL, rr REAL,
+            composite_score REAL, position_size INTEGER,
+            position_cost REAL, risk_dollars REAL,
+            current_price REAL, entry_distance_pct REAL,
+            status TEXT DEFAULT 'active', outcome TEXT,
+            pnl_pct REAL, days_held INTEGER, resolved_date TEXT,
+            max_days INTEGER DEFAULT 20,
+            created_at TEXT DEFAULT (datetime('now'))
+        )
+    """)
 
     # Seed stocks
     for sym, name, cap in [
