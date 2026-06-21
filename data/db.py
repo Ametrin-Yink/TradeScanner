@@ -1062,6 +1062,20 @@ class Database:
         cursor = conn.execute(query, params)
         return [dict(row) for row in cursor.fetchall()]
 
+    def update_tier1_field(self, symbol: str, field: str, value: Any):
+        """Update a single field in tier1_cache for a symbol.
+
+        Args:
+            symbol: Stock symbol
+            field: Column name to update
+            value: Value to set
+        """
+        with self.get_connection() as conn:
+            conn.execute(
+                f"UPDATE tier1_cache SET {field} = ?, cache_date = date('now') WHERE symbol = ?",
+                (value, symbol)
+            )
+
     def get_all_rs_raw_values(self) -> List[Dict[str, Any]]:
         """Get all rs_raw values from tier1_cache for universe-wide RS percentile calculation.
 

@@ -326,6 +326,75 @@ class DataFetcher:
         except Exception as e:
             logger.error(f"Error saving {symbol} to database: {e}")
 
+    def _compute_tier1_cache_for_symbol(self, symbol: str, df: pd.DataFrame):
+        """Compute tier1 cache metrics (current_price, RS_raw, etc.) and save.
+
+        Args:
+            symbol: Stock symbol
+            df: DataFrame with OHLCV data
+        """
+        if df is None or df.empty:
+            return
+
+        cache_data = {}
+
+        # Current price
+        current_price = float(df['close'].iloc[-1])
+        cache_data['current_price'] = current_price
+
+        # RS_raw: 3-month relative strength
+        rs_raw = None
+        if len(df) >= 63:
+            price_63d_ago = float(df['close'].iloc[-63])
+            if price_63d_ago > 0:
+                rs_raw = (current_price / price_63d_ago - 1) * 100
+        cache_data['rs_raw'] = rs_raw
+
+        # Save to tier1_cache
+        self.db.save_tier1_cache(symbol, cache_data)
+
+    def _update_rs_percentiles(self, symbols: List[str]):
+        """Rank all cached symbols by rs_raw, assign percentiles, track streaks.
+
+        Args:
+            symbols: List of symbols to update
+        """
+        rs_values = []
+        for sym in symbols:
+            cache = self.db.get_tier1_cache(sym)
+            if isinstance(cache, dict) and cache.get('rs_raw') is not None:
+                rs_values.append((sym, cache['rs_raw']))
+
+        if not rs_values:
+            return
+
+        rs_values.sort(key=lambda x: x[1])
+        n = len(rs_values)
+
+        # Assign percentiles
+        for rank, (sym, rs_raw) in enumerate(rs_values):
+            percentile = int(rank / (n - 1) * 99) if n > 1 else 50
+            self.db.update_rs_percentile(sym, percentile)
+
+        min_rs = rs_values[0][1]
+        max_rs = rs_values[-1][1]
+        logger.info(f"RS percentile range: {min_rs:.1f}–{max_rs:.1f}, stocks ranked: {n}")
+
+        # Track consecutive days >= 80th percentile
+        for sym, rs_raw in rs_values:
+            cache = self.db.get_tier1_cache(sym)
+            if not isinstance(cache, dict):
+                continue
+            rs_pct = cache.get('rs_percentile', 0) or 0
+            prev_streak = cache.get('rs_consecutive_days_80', 0) or 0
+            if rs_pct >= 80:
+                new_streak = prev_streak + 1
+            elif rs_pct < 50:
+                new_streak = 0
+            else:
+                new_streak = prev_streak  # hold steady between 50-79
+            self.db.update_tier1_field(sym, 'rs_consecutive_days_80', new_streak)
+
     def fetch_multiple(
         self,
         symbols: List[str],
@@ -337,6 +406,8 @@ class DataFetcher:
 
         All symbols are fetched via yf.download() batch calls (50 per batch).
         Results are merged with DB history and truncated to 280 trading days.
+        Also computes and caches tier1 metrics (current_price, RS_raw, etc.)
+        and ranks RS percentiles for all fetched symbols.
 
         Args:
             symbols: List of stock symbols
@@ -366,12 +437,17 @@ class DataFetcher:
                     # Merge with DB history
                     merged = self._merge_batch_with_db_cache(sym, df)
                     self._save_to_db(sym, merged, incremental=False)
+                    # Compute and cache tier1 metrics
+                    self._compute_tier1_cache_for_symbol(sym, merged)
                     results[sym] = df  # Return fresh data, not merged
                 else:
                     failed_symbols.append(sym)
 
             if i + batch_size < len(symbols):
                 time.sleep(self.request_delay)
+
+        # Post-batch RS percentile ranking
+        self._update_rs_percentiles(list(results.keys()))
 
         logger.info(f"Successfully fetched {len(results)} symbols, {len(failed_symbols)} failed")
         if failed_symbols:
