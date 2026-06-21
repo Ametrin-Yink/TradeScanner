@@ -248,6 +248,44 @@ def compute_volume_profile(df, num_levels=15):
     }
 
 
+def psychological_levels(price):
+    """Round-number levels within 5% of price."""
+    levels = []
+    for base in [100, 50, 10]:
+        near = round(price / base) * base
+        for offset in [-base, 0, base]:
+            lvl = near + offset
+            if lvl > 0 and abs(lvl - price) / price < 0.05:
+                levels.append({'level': float(lvl), 'count': 2, 'type': f'psych_{base}'})
+    return levels
+
+
+def gap_fill_levels(cache, price):
+    """Unfilled gap as price magnet."""
+    gap_pct = cache.get('gap_1d_pct')
+    if gap_pct and abs(gap_pct) > 0.01:
+        gap_price = price / (1 + gap_pct)
+        if abs(gap_price - price) / price < 0.15:
+            return [{'level': round(gap_price, 2), 'count': 2, 'type': 'gap_fill'}]
+    return []
+
+
+def session_levels(df):
+    """Weekly pivot, prior week high/low."""
+    recent = df.tail(5)
+    if len(recent) < 5:
+        return []
+    h = float(recent['High'].max())
+    l = float(recent['Low'].min())
+    c = float(recent['Close'].iloc[-1])
+    pivot = (h + l + c) / 3
+    return [
+        {'level': round(pivot, 2), 'count': 3, 'type': 'weekly_pivot'},
+        {'level': h, 'count': 1, 'type': 'prior_week_high'},
+        {'level': l, 'count': 1, 'type': 'prior_week_low'},
+    ]
+
+
 def compute_sr_for_symbol(db, symbol: str) -> tuple:
     """Compute support/resistance levels from recent (60-bar) and full-range OHLC.
     Returns (supports: List[float], resistances: List[float]).
@@ -323,8 +361,19 @@ def compute_sr_for_symbol(db, symbol: str) -> tuple:
             else:
                 resistances.append(vp['poc'])
 
-        # Cache in tier1_cache
+        # Psychological levels, gap fills, session levels
         import json
+        cache = db.get_tier1_cache(symbol) or {}
+        psych = psychological_levels(current_price)
+        gaps = gap_fill_levels(cache, current_price)
+        sessions = session_levels(df)
+        for lvl_dict in psych + gaps + sessions:
+            if lvl_dict['level'] < current_price:
+                supports.append(lvl_dict['level'])
+            elif lvl_dict['level'] > current_price:
+                resistances.append(lvl_dict['level'])
+
+        # Cache in tier1_cache
         cache = db.get_tier1_cache(symbol)
         if cache:
             conn.execute(

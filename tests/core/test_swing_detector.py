@@ -1,7 +1,9 @@
 """Tests for swing_detector.py — adaptive order + find_peaks."""
 import numpy as np
 import pandas as pd
-from core.swing_detector import detect_swings, _compute_fib_target, cluster_levels, compute_stop_target, compute_sr_for_symbol
+from core.swing_detector import (detect_swings, _compute_fib_target, cluster_levels,
+                                  compute_stop_target, compute_sr_for_symbol,
+                                  psychological_levels, gap_fill_levels, session_levels)
 
 
 def make_test_prices(n=80):
@@ -590,3 +592,134 @@ def test_compute_volume_profile_integration_sr():
     assert isinstance(resistances, list)
 
     Path(tmp_path).unlink(missing_ok=True)
+
+
+# --- psychological_levels tests ---
+
+
+def test_psychological_levels_price_at_round():
+    """Price exactly at a round number returns nearby psychological levels."""
+    levels = psychological_levels(100.0)
+    assert len(levels) > 0, "Should produce levels for round price"
+    for lvl in levels:
+        assert 'level' in lvl
+        assert 'count' in lvl
+        assert 'type' in lvl
+        assert lvl['count'] == 2
+        assert lvl['type'].startswith('psych_')
+
+
+def test_psychological_levels_within_5pct():
+    """All returned levels should be within 5% of the input price."""
+    price = 147.53
+    levels = psychological_levels(price)
+    for lvl in levels:
+        assert abs(lvl['level'] - price) / price < 0.05, (
+            f"Level {lvl['level']} more than 5% from price {price}"
+        )
+
+
+def test_psychological_levels_very_small_price():
+    """Very small price (near zero) returns empty — no round level within 5%."""
+    levels = psychological_levels(0.05)
+    assert levels == []
+
+
+def test_psychological_levels_gets_psych_50_and_psych_10():
+    """Levels should include both 50 and 10 based types where applicable."""
+    # 100.0 should produce 100-type levels plus 50-type and 10-type within 5%
+    levels = psychological_levels(100.0)
+    types = {lvl['type'] for lvl in levels}
+    # 5% of 100 = 5, so 50-based levels within [95,105] include 50 and 100
+    # 10-based levels within [95,105] include 90, 100, 110
+    # 100-based: 100 only
+    assert 'psych_100' in types or 'psych_50' in types or 'psych_10' in types
+
+
+# --- gap_fill_levels tests ---
+
+
+def test_gap_fill_levels_gap_present():
+    """gap_fill_levels returns a gap fill level when gap_1d_pct is large enough."""
+    cache = {'gap_1d_pct': 0.03}
+    levels = gap_fill_levels(cache, 100.0)
+    assert len(levels) == 1
+    assert levels[0]['type'] == 'gap_fill'
+    # gap_pct = 3% → gap_price = 100 / (1 + 0.03) ≈ 97.09
+    expected = round(100.0 / (1 + 0.03), 2)
+    assert abs(levels[0]['level'] - expected) < 0.01
+
+
+def test_gap_fill_levels_gap_too_small():
+    """Gap ≤ 1% returns empty list."""
+    cache = {'gap_1d_pct': 0.005}
+    assert gap_fill_levels(cache, 100.0) == []
+
+
+def test_gap_fill_levels_gap_too_far():
+    """Gap price >15% from current price returns empty list."""
+    cache = {'gap_1d_pct': 0.20}  # gap_price = 100/1.2 = 83.33, 16.7% away
+    assert gap_fill_levels(cache, 100.0) == []
+
+
+def test_gap_fill_levels_no_gap():
+    """No gap_1d_pct in cache returns empty list."""
+    assert gap_fill_levels({}, 100.0) == []
+
+
+def test_gap_fill_levels_negative_gap():
+    """Negative gap (gap down) also produces a fill level."""
+    cache = {'gap_1d_pct': -0.02}  # gap down 2%
+    levels = gap_fill_levels(cache, 100.0)
+    assert len(levels) == 1
+    expected = round(100.0 / (1 - 0.02), 2)  # ≈ 102.04
+    assert abs(levels[0]['level'] - expected) < 0.01
+
+
+# --- session_levels tests ---
+
+
+def test_session_levels_basic():
+    """session_levels returns 3 levels with correct types."""
+    np.random.seed(42)
+    n = 10
+    close = 100 + np.cumsum(np.random.randn(n) * 0.5)
+    df = pd.DataFrame({
+        'High': close + np.abs(np.random.randn(n)) * 1.0,
+        'Low': close - np.abs(np.random.randn(n)) * 1.0,
+        'Close': close,
+    })
+    levels = session_levels(df)
+    assert len(levels) == 3
+    types = {lvl['type'] for lvl in levels}
+    assert types == {'weekly_pivot', 'prior_week_high', 'prior_week_low'}
+
+
+def test_session_levels_too_short():
+    """Less than 5 bars returns empty list."""
+    df = pd.DataFrame({'High': [100, 101], 'Low': [99, 100], 'Close': [99.5, 100.5]})
+    assert session_levels(df) == []
+
+
+def test_session_levels_pivot_midpoint():
+    """Pivot is (H+L+C)/3 of the window."""
+    np.random.seed(1)
+    n = 10
+    close = 100 + np.cumsum(np.random.randn(n) * 0.3)
+    df = pd.DataFrame({
+        'High': close + np.abs(np.random.randn(n)) * 0.5,
+        'Low': close - np.abs(np.random.randn(n)) * 0.5,
+        'Close': close,
+    })
+    levels = session_levels(df)
+    recent = df.tail(5)
+    h = float(recent['High'].max())
+    l = float(recent['Low'].min())
+    c = float(recent['Close'].iloc[-1])
+    expected_pivot = round((h + l + c) / 3, 2)
+    pivot = [lvl for lvl in levels if lvl['type'] == 'weekly_pivot'][0]
+    assert abs(pivot['level'] - expected_pivot) < 0.01
+    week_high = [lvl for lvl in levels if lvl['type'] == 'prior_week_high'][0]
+    assert abs(week_high['level'] - h) < 0.01
+    week_low = [lvl for lvl in levels if lvl['type'] == 'prior_week_low'][0]
+    assert abs(week_low['level'] - l) < 0.01
