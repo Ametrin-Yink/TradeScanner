@@ -28,7 +28,7 @@ class StockHighlight:
     name: str
     price: float
     market_cap: float
-    reason: str  # Near Resistance, Near Support, Breakout, Strong Momentum, Good R/R
+    reason: str  # Resistance Test, Near Support, Breakout, Strong Momentum, Good R/R
     detail: str  # one-line setup description
     entry: float = 0.0
     stop: float = 0.0
@@ -423,6 +423,7 @@ class SectorAnalyzer:
 
                 price = cache['current_price']
                 atr_pct = cache.get('atr_pct', 0.03) or 0.03
+
                 atr = price * atr_pct
                 rs_percentile = cache.get('rs_percentile', 0) or 0
                 ema21 = cache.get('ema21')
@@ -455,11 +456,6 @@ class SectorAnalyzer:
                     reason = 'Breakout'
                     detail = f"Broke 60d high ${high_60d:.2f}, {volume_ratio:.1f}x vol"
                     time_horizon = 'swing'
-                elif high_60d and price < high_60d and (high_60d - price) / price <= 0.02:
-                    reason = 'Near Resistance'
-                    dist = (high_60d - price) / price * 100
-                    detail = f"{dist:.1f}% below 60d high ${high_60d:.2f}"
-                    time_horizon = 'swing'
                 elif low_60d and price > low_60d and (price - low_60d) / low_60d <= 0.02:
                     reason = 'Near Support'
                     dist = (price - low_60d) / low_60d * 100
@@ -484,6 +480,22 @@ class SectorAnalyzer:
                         if rr >= 2.0:
                             reason = 'Good R/R'
                             detail = f"Stop at ${stop_level:.0f}, target ${target_level:.0f}"
+                            time_horizon = 'swing'
+
+                # Resistance Test (standalone if, not elif -- Good R/R's broad
+                # `elif low_60d and high_60d` would shadow it in the chain)
+                if reason is None and high_60d and price < high_60d:
+                    near_threshold = max(0.01, atr_pct * 0.8)
+                    if (high_60d - price) / price <= near_threshold:
+                        # Require ALL confirmations
+                        ema_ok = (ema50 and price > ema50) or False
+                        vol_ok = volume_ratio > 1.0
+                        trend_ok = sector.trend == 'uptrend'
+                        rs_ok = rs_percentile >= 50
+
+                        if ema_ok and vol_ok and trend_ok and rs_ok:
+                            reason = 'Resistance Test'
+                            detail = f"Testing 60d high ${high_60d:.2f}, {(high_60d - price)/price*100:.1f}% below, {volume_ratio:.1f}x vol"
                             time_horizon = 'swing'
 
                 if reason is None:
@@ -563,7 +575,7 @@ class SectorAnalyzer:
                 # Set time horizon display
                 horizon_map = {
                     'Breakout': 'Swing (5-20d)',
-                    'Near Resistance': 'Swing (5-20d)',
+                    'Resistance Test': 'Swing (5-20d)',
                     'Near Support': 'Swing (5-20d)',
                     'Strong Momentum': 'Position (10-40d)',
                     'Good R/R': 'Swing (5-20d)',
@@ -575,7 +587,7 @@ class SectorAnalyzer:
 
             # Multi-factor composite scoring
             setup_bonus = {'Breakout': 1.0, 'Strong Momentum': 0.9, 'Near Support': 0.7,
-                           'Near Resistance': 0.5, 'Good R/R': 0.5}
+                           'Resistance Test': 0.80, 'Good R/R': 0.5}
             all_candidates.sort(key=lambda c: _composite_score(c, setup_bonus), reverse=True)
 
             selected = []
