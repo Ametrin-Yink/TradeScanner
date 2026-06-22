@@ -287,6 +287,7 @@ class SectorAnalyzer:
                 system=system_prompt,
                 enable_search=True,
                 search_query=f"US stock market today macro news {datetime.now().strftime('%B %Y')}",
+                call_type='macro',
             )
             if result:
                 parsed = json.loads(result)
@@ -395,6 +396,8 @@ class SectorAnalyzer:
                 system=system_prompt,
                 enable_search=True,
                 search_query=f"{sector_name} sector stocks news {datetime.now().strftime('%B %Y')}",
+                call_type='sector',
+                sector_name=sector_name,
             )
             if result:
                 parsed = json.loads(result)
@@ -833,6 +836,7 @@ class SectorAnalyzer:
                 messages=[{"role": "user", "content": data_str}],
                 system=system_prompt,
                 enable_search=False,
+                call_type='focus',
             )
             if result:
                 parsed = json.loads(result)
