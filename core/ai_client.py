@@ -1,4 +1,4 @@
-"""AI client for DeepSeek API with native web search tool calling."""
+"""AI client for DeepSeek API with web search via DuckDuckGo pre-search."""
 import json
 import hashlib
 import logging
@@ -18,6 +18,22 @@ MODEL = settings.get_secret("dashscope.model") or "deepseek-v4-pro"
 
 # In-memory cache: (call_type, sector_name, date) -> result
 _ai_cache = {}
+
+
+def _execute_search(query: str) -> str:
+    """Execute a DuckDuckGo web search and return formatted results."""
+    try:
+        from ddgs import DDGS
+        results = []
+        with DDGS() as ddgs:
+            for r in ddgs.text(query, max_results=5):
+                results.append(f"Title: {r.get('title', '')}\nURL: {r.get('href', '')}\nSnippet: {r.get('body', '')}")
+        if not results:
+            return f"No results found for: {query}"
+        return "\n\n".join(results)
+    except Exception as e:
+        logger.warning(f"Search failed for '{query}': {e}")
+        return f"Search failed: {e}"
 
 
 def chat(
@@ -58,17 +74,21 @@ def chat(
     msgs = []
     if system:
         msgs.append({"role": "system", "content": system})
-    msgs.extend(messages)
 
-    tools = None
+    # Pre-search: execute web search and inject results into the prompt
     if enable_search:
-        tools = [{
-            "type": "web_search",
-            "web_search": {
-                "search_query": search_query or messages[-1]["content"],
-                "search_result_format": "text"
-            }
-        }]
+        query = search_query or (messages[-1]["content"] if messages else "")
+        search_results = _execute_search(query)
+        search_block = (
+            f"\n\n[WEB SEARCH RESULTS for: \"{query}\"]\n"
+            f"{search_results}\n"
+            f"[/WEB SEARCH RESULTS]\n\n"
+            f"Based on the search results above, answer the user's question."
+        )
+        augmented = messages[-1]["content"] + search_block
+        msgs.append({"role": "user", "content": augmented})
+    else:
+        msgs.extend(messages)
 
     payload = {
         "model": MODEL,
@@ -78,8 +98,6 @@ def chat(
         "seed": seed,
         "response_format": {"type": "json_object"},
     }
-    if tools:
-        payload["tools"] = tools
 
     prompt_text = json.dumps(msgs, sort_keys=True)
     prompt_hash = hashlib.sha256(prompt_text.encode()).hexdigest()[:16]
