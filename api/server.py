@@ -89,9 +89,10 @@ def trigger_scan():
                 return jsonify({**_last_scan_result, 'cached': True})
 
         logger.info("Starting sector analysis scan...")
+        scan_db = Database()
         analyzer = SectorAnalyzer(db=Database())
         result = analyzer.analyze()
-        report_path = ReportGenerator().generate_report(result)
+        report_path = ReportGenerator(db=scan_db).generate_report(result)
 
         sectors_count = len(result['sectors'])
         total_stocks = sum(s.stock_count for s in result['sectors'])
