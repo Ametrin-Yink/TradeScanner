@@ -433,7 +433,7 @@ function exportHighlightsCSV() {
             parts.append('<div class="card"><div class="card-header fold-toggle collapsed" ')
             parts.append('onclick="this.classList.toggle(\'collapsed\');')
             parts.append('this.nextElementSibling.classList.toggle(\'hidden\')">')
-            parts.append(f'<h3>Prior Picks Recap ({len(deduped)} unique, {len(prior_recs)} raw)</h3></div>')
+            parts.append(f'<h3>Prior Picks Recap ({len(deduped)})</h3></div>')
             parts.append('<div class="fold-body hidden">')
 
             # Performance Summary Header
