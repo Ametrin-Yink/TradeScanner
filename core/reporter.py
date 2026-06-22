@@ -103,7 +103,8 @@ async function showChart(sym,tagName){
   container.innerHTML='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px"><span style="color:var(--gold);font-weight:600;font-size:13px">'+sym+'</span><span style="color:var(--ash);font-size:10px">loading...</span></div><canvas id="'+anchor+'-canvas" style="width:100%;height:400px"></canvas>';
   // Try embedded data first
   if(window._EMBEDDED_OHLC&&window._EMBEDDED_OHLC[sym]){
-    drawCandles(anchor+'-canvas',window._EMBEDDED_OHLC[sym],[],[],sym);
+    var sr=window._EMBEDDED_SR&&window._EMBEDDED_SR[sym]||{s:[],r:[]};
+    drawCandles(anchor+'-canvas',window._EMBEDDED_OHLC[sym],sr.s||[],sr.r||[],sym);
     return;
   }
   try{
@@ -420,7 +421,11 @@ function exportHighlightsCSV() {
             prior_recs = []
 
         if prior_recs:
-            parts.append('<h2>Prior Picks Recap</h2>')
+            parts.append('<div class="card"><div class="card-header fold-toggle collapsed" ')
+            parts.append('onclick="this.classList.toggle(\'collapsed\');')
+            parts.append('this.nextElementSibling.classList.toggle(\'hidden\')">')
+            parts.append(f'<h3>Prior Picks Recap ({len(prior_recs)})</h3></div>')
+            parts.append('<div class="fold-body hidden">')
 
             # Performance Summary Header
             perf = generate_performance_summary(self.db, 30)
@@ -440,7 +445,16 @@ function exportHighlightsCSV() {
             parts.append('<table><thead><tr><th>Symbol</th><th>Date</th><th>Setup</th>'
                          '<th>Entry</th><th>Stop</th><th>Target</th><th>Status</th><th>P&amp;L</th></tr></thead><tbody>')
 
-            for r in prior_recs[:30]:
+            # Dedup: same symbol+date kept only once
+            seen = set()
+            deduped = []
+            for r in prior_recs:
+                key = (r['symbol'], r['trade_date'])
+                if key not in seen:
+                    seen.add(key)
+                    deduped.append(r)
+
+            for r in deduped[:30]:
                 status_icon = {
                     'active': '<span class="badge-up">▲ Active</span>',
                     'target_hit': '<span class="badge-up">✓ Hit</span>',
@@ -459,6 +473,7 @@ function exportHighlightsCSV() {
                              f'<td class="num">{pnl_str}</td></tr>')
 
             parts.append('</tbody></table>')
+            parts.append('</div></div>')  # close fold-body and card
 
         # Tag Details
         parts.append('<h2>Tag Details</h2>')
@@ -608,6 +623,25 @@ function exportHighlightsCSV() {
 
         parts.append('<script>window._EMBEDDED_OHLC = ')
         parts.append(json.dumps(all_ohlc))
+        parts.append(';</script>')
+
+        # Embed S/R levels for offline chart rendering
+        all_sr = {}
+        if self.db:
+            for sector in sectors:
+                for h in sector.highlights:
+                    if h.symbol not in all_sr:
+                        cache = self.db.get_tier1_cache(h.symbol)
+                        if cache:
+                            try:
+                                s = json.loads(cache.get('supports', '[]') or '[]')
+                                r = json.loads(cache.get('resistances', '[]') or '[]')
+                                if s or r:
+                                    all_sr[h.symbol] = {'s': s, 'r': r}
+                            except (json.JSONDecodeError, TypeError):
+                                pass
+        parts.append('<script>window._EMBEDDED_SR = ')
+        parts.append(json.dumps(all_sr))
         parts.append(';</script>')
         parts.append('<script src="../js/table-utils.js"></script>')
         parts.append('</body></html>')
