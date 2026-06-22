@@ -319,6 +319,10 @@ def compute_sr_for_symbol(db, symbol: str) -> tuple:
     Updates tier1_cache with the results.
     """
     try:
+        from config.portfolio_config import load_config
+        cfg = load_config()
+        lookback = cfg.get('sr', {}).get('lookback_bars', 120)
+
         import pandas as pd
         conn = db.get_connection()
         rows = conn.execute(
@@ -326,13 +330,13 @@ def compute_sr_for_symbol(db, symbol: str) -> tuple:
             "WHERE symbol = ? ORDER BY date ASC",
             (symbol,)
         ).fetchall()
-        if len(rows) < 30:
+        if len(rows) < lookback:
             return [], []
         df = pd.DataFrame(rows, columns=['date', 'open', 'high', 'low', 'close', 'volume'])
         df.columns = ['date', 'Open', 'High', 'Low', 'Close', 'Volume']
 
-        # Use recent 60 bars with order=2 to catch 2-day pullbacks
-        recent = df.tail(60)
+        # Use recent N bars with order=2 to catch 2-day pullbacks
+        recent = df.tail(lookback)
         swing_highs, swing_lows = detect_swings(recent)
         current_price = float(df['Close'].iloc[-1])
         atr = (df['High'] - df['Low']).tail(14).mean()
@@ -341,7 +345,7 @@ def compute_sr_for_symbol(db, symbol: str) -> tuple:
         low_zones = cluster_levels(swing_lows, atr=atr, price=current_price)
 
         # Weekly S/R: resample to weekly, last 24 weeks (confluence bonus)
-        if len(df) >= 60:
+        if len(df) >= lookback:
             try:
                 dates = pd.to_datetime(df['date'], errors='coerce')
                 if dates.notna().sum() >= 60:

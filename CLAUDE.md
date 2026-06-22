@@ -91,7 +91,7 @@ web/
 
 ## Gotchas
 
-- S/R levels use only the last 60 bars with `order=2` (catches 2-day pullbacks). Levels >50% away from current price are filtered as artifacts.
+- S/R levels use a configurable lookback (default 120 bars, `sr.lookback_bars` in portfolio_config.yaml) with `order=2` (catches 2-day pullbacks). Levels >50% away from current price are filtered as artifacts.
 - Entry prices are proximity-capped: if computed entry is >10% from current price, entry defaults to current price (`max_entry_distance_pct` in portfolio_config.yaml).
 - Breakout and Strong Momentum setups always use current price as entry (they're trend-following, not pullback trades).
 - Highlights are diversity-gated per sector: max 3 picks, preferring different reason types (Breakout, Near Support, Strong Momentum, etc.).

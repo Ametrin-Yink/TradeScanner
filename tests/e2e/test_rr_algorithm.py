@@ -80,7 +80,7 @@ def test_compute_stop_target_fallback_atr():
 def test_compute_sr_for_symbol_dynamic_price_filter(seeded_db):
     """ATR-based dynamic filter rejects levels beyond ~10% from current price."""
     conn = seeded_db.get_connection()
-    n = 60
+    n = 130
     close = np.full(n, 100.0)
     # Two dips to 88 (bars 5-14, 25-34) — creates swing lows near ~87.25
     close[5:15] = [100, 95, 92, 90, 88, 89, 91, 93, 96, 100]
@@ -88,15 +88,19 @@ def test_compute_sr_for_symbol_dynamic_price_filter(seeded_db):
     # Two spikes to 112 (bars 15-24, 35-44) — creates swing highs near ~112.75
     close[15:25] = [100, 104, 107, 110, 112, 111, 109, 106, 103, 100]
     close[35:45] = [100, 104, 107, 110, 112, 111, 109, 106, 103, 100]
-    # Near-100 swings (bars 45-59) — creates swing levels near ~97.25 and ~102.75
-    close[45:60] = [100, 102, 98, 101, 99, 100, 102, 98, 101, 99, 100, 101, 99, 100, 100]
+    # Near-100 swings (bars 45-129) — creates swing levels near ~97.25 and ~102.75
+    for i in range(45, n):
+        close[i] = 100 + (i % 6 - 3) * 0.5
 
+    from datetime import datetime, timedelta
+    start = datetime(2026, 1, 1)
     for i in range(n):
         cp = close[i]
+        date = (start + timedelta(days=i)).strftime('%Y-%m-%d')
         conn.execute(
             "INSERT INTO market_data (symbol, date, open, high, low, close, volume) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            ('TEST', f'2026-01-{i+1:02d}', cp, cp + 0.75, cp - 0.75, cp, 1000000)
+            ('TEST', date, cp, cp + 0.75, cp - 0.75, cp, 1000000)
         )
     conn.commit()
 
