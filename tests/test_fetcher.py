@@ -266,3 +266,84 @@ def test_validate_cache_freshness_handles_db_error():
 
     with pytest.raises(RuntimeError, match="error checking"):
         validate_cache_freshness(mock_db)
+
+
+def test_avg_volume_20d_populated():
+    """After _compute_tier1_cache_for_symbol, the cache should have avg_volume_20d."""
+    mock_db = Mock()
+    dates = pd.date_range('2024-01-01', periods=30, freq='D')
+    volumes = np.arange(1_000_000, 31_000_000, 1_000_000)  # 1M to 30M with step
+    df = pd.DataFrame({
+        'open': np.random.randn(30) * 2 + 100,
+        'high': np.random.randn(30) * 2 + 102,
+        'low': np.random.randn(30) * 2 + 98,
+        'close': np.random.randn(30) * 2 + 100,
+        'volume': volumes,
+    }, index=dates)
+
+    fetcher = DataFetcher(db=mock_db)
+    fetcher._compute_tier1_cache_for_symbol('TEST', df)
+
+    mock_db.save_tier1_cache.assert_called_once()
+    call_args = mock_db.save_tier1_cache.call_args
+    symbol, data = call_args[0]
+    assert symbol == 'TEST'
+    assert 'avg_volume_20d' in data
+    expected_avg = float(df['volume'].tail(20).mean())
+    assert data['avg_volume_20d'] == pytest.approx(expected_avg)
+
+
+def test_volume_warning_flagged():
+    """Position >2% of avg daily volume should get a liquidity_warning."""
+    from core.sector_analyzer import SectorAnalyzer
+    from core.sector_analyzer import SectorAnalysis
+    import json
+    from unittest.mock import patch
+
+    mock_db = MagicMock()
+
+    # With account=50000, risk_per_trade=1%, entry=100, stop=95,
+    # position_size = int(500 / 5) = 100 shares.
+    # vol_pct = 100 / avg_volume * 100.
+    # For warning (>2%): avg_volume < 5_000 (100/5000*100=2%).
+    # For skip (>5%): avg_volume < 2_000 (100/2000*100=5%).
+    # Use avg_volume = 3_000 => vol_pct = 3.33% (>2% warning, <5% kept).
+    mock_db.get_tier1_cache.return_value = {
+        'current_price': 100.0,
+        'atr_pct': 0.03,
+        'rs_percentile': 85,
+        'volume_ratio': 2.0,
+        'avg_volume_20d': 3_000,  # 3.33% of daily vol: warning but not skipped
+        'high_60d': 150.0,
+        'low_60d': 80.0,
+        'ema21': 95.0,
+        'ema50': 90.0,
+        'ret_5d': 3.0,
+        'rs_consecutive_days_80': 5,
+        'supports': json.dumps([75.0, 82.0]),
+        'resistances': json.dumps([145.0, 155.0]),
+        'open': 99.0,
+        'close': 100.0,
+        'high': 101.0,
+        'low': 98.5,
+    }
+    mock_db.get_market_data_df.return_value = None
+    mock_db.get_stock_earnings_date.return_value = None
+    mock_db.save_recommendation = MagicMock()
+
+    analyzer = SectorAnalyzer(db=mock_db)
+    sector = SectorAnalysis(
+        name='Technology', etf='XLK', stock_count=10,
+        daily_change=1.0, ret_3m=8.0, rs_percentile=75,
+        trend='uptrend', above_ema50=True, outlook='Bullish',
+    )
+    sector.highlights = []
+    stocks = [{'symbol': 'TEST', 'name': 'Test Co.', 'market_cap': 1_000_000_000}]
+
+    with patch.object(analyzer.tag_manager, 'get_tag_stocks', return_value=stocks):
+        analyzer._find_stock_highlights([sector])
+
+    assert len(sector.highlights) == 1
+    h = sector.highlights[0]
+    assert h.liquidity_warning is not None
+    assert '% of daily vol' in h.liquidity_warning

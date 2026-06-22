@@ -373,6 +373,12 @@ class DataFetcher:
                 rs_raw = (current_price / price_63d_ago - 1) * 100
         cache_data['rs_raw'] = rs_raw
 
+        # Average volume over 20 days
+        if len(df) >= 20:
+            cache_data['avg_volume_20d'] = float(df['volume'].tail(20).mean())
+        else:
+            cache_data['avg_volume_20d'] = float(df['volume'].mean())
+
         # Save to tier1_cache
         self.db.save_tier1_cache(symbol, cache_data)
 
