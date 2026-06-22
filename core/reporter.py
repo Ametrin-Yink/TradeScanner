@@ -6,6 +6,7 @@ from pathlib import Path
 from datetime import datetime, timedelta
 
 from config.settings import settings, REPORTS_DIR
+from core.reconciler import generate_performance_summary
 
 logger = logging.getLogger(__name__)
 
@@ -228,7 +229,7 @@ SECTOR_CARD = """<div class="card tag-card" id="tag-{anchor}" style="display:non
 <div class="chart-inline" id="chart-{anchor}"></div>
 </div></div>"""
 
-HIGHLIGHT_ROW = """<tr><td class="sym sym-link" onclick="showChart('{symbol}','{tag_name}')">{symbol}</td><td class="name">{name}</td><td class="num">${price:.2f}</td><td><span class="badge {reason_cls}">{reason}</span></td><td class="num">${entry:.2f}</td><td class="num {dist_cls}">{entry_dist}</td><td class="num">${stop:.2f}</td><td class="num">${target:.2f}</td><td class="num">{rr}</td><td class="num">{size}</td><td class="num">${cost}</td><td class="num">${risk_dollars}</td><td><span class="badge {horizon_cls}">{horizon}</span></td></tr>"""
+HIGHLIGHT_ROW = """<tr><td class="sym sym-link" onclick="showChart('{symbol}','{tag_name}')">{symbol}</td><td class="num">${price:.2f}</td><td><span class="badge {reason_cls}" title="{horizon}">{reason}</span></td><td class="num">{rs_percentile}</td><td class="num {dist_cls}">{entry_str}</td><td class="num {stop_cls}">{stop_display}</td><td class="num">${target:.2f}</td><td class="num">{rr}</td><td class="num">${risk_dollars}</td></tr>"""
 
 
 class ReportGenerator:
@@ -302,24 +303,23 @@ class ReportGenerator:
         parts.append("""<script>
 function exportHighlightsCSV() {
   var rows = [
-    ["Symbol","Sector","Reason","Entry","Stop","Target","R/R","Size","Cost","Risk$"],
+    ["Symbol","Sector","Setup","RS","Entry+Dist","Stop","Target","R:R","Risk$"],
   ];
   document.querySelectorAll(".tag-card").forEach(function(card) {
     var sector = card.querySelector("h3").textContent.trim();
     card.querySelectorAll("tbody tr").forEach(function(tr) {
       var cells = tr.querySelectorAll("td");
-      if (cells.length >= 12) {
+      if (cells.length >= 9) {
         rows.push([
           cells[0].textContent,
           sector,
+          cells[2].textContent,
           cells[3].textContent,
           cells[4].textContent,
+          cells[5].textContent,
           cells[6].textContent,
           cells[7].textContent,
           cells[8].textContent,
-          cells[9].textContent,
-          cells[10].textContent,
-          cells[11].textContent,
         ]);
       }
     });
@@ -371,6 +371,22 @@ function exportHighlightsCSV() {
 
         if prior_recs:
             parts.append('<h2>Prior Picks Recap</h2>')
+
+            # Performance Summary Header
+            perf = generate_performance_summary(self.db, 30)
+            if perf['total_trades'] > 0:
+                pnl_cls = 'up' if perf['total_pnl_pct'] >= 0 else 'down'
+                pf = perf['profit_factor']
+                pf_str = f'{pf:.2f}x' if pf is not None else '--'
+                parts.append(
+                    f'<div class="card" style="margin-bottom:12px;padding:10px 14px;font-size:12px">'
+                    f'<b>Performance (30d):</b> {perf["total_trades"]} trades &middot; '
+                    f'<span class="{pnl_cls}">{perf["win_rate"]:.1f}% win rate</span> &middot; '
+                    f'<span class="{pnl_cls}">P&L {perf["total_pnl_pct"]:+.1f}%</span> &middot; '
+                    f'profit factor {pf_str}'
+                    f'</div>'
+                )
+
             parts.append('<table><thead><tr><th>Symbol</th><th>Date</th><th>Setup</th>'
                          '<th>Entry</th><th>Stop</th><th>Target</th><th>Status</th><th>P&amp;L</th></tr></thead><tbody>')
 
@@ -421,36 +437,53 @@ function exportHighlightsCSV() {
             highlights_html = ''
             if s.highlights:
                 def build_row(h):
-                    if h.reason == 'Strong Momentum':
+                        reason_display = h.reason
+                        rr_str = f"{h.rr:.1f}x" if h.rr > 0 else "--"
+                        risk_str = f"{getattr(h, 'risk_dollars', 0):,.0f}"
+                        horizon_str = getattr(h, 'time_horizon', '--')
+                        # RS percentile column
                         rs_val = getattr(h, 'rs_percentile', None)
                         if rs_val is not None:
                             n = int(rs_val)
                             sfx = 'th' if 10 <= n % 100 <= 20 else {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')
-                            reason_display = f"Strong Momentum (RS {n}{sfx})"
+                            rs_display = f"{n}{sfx}"
                         else:
-                            reason_display = h.reason
-                    else:
-                        reason_display = h.reason
-                    rr_str = f"{h.rr:.1f}x" if h.rr > 0 else "--"
-                    size_str = str(getattr(h, 'position_size', 0))
-                    cost_str = f"{getattr(h, 'position_cost', 0):,.0f}"
-                    risk_str = f"{getattr(h, 'risk_dollars', 0):,.0f}"
-                    horizon_str = getattr(h, 'time_horizon', '--')
-                    horizon_cls_map = {
-                        'Short (3-10d)': 'badge-up',
-                        'Swing (5-20d)': 'badge-neutral',
-                        'Position (10-40d)': 'badge-neutral',
-                    }
-                    horizon_cls = horizon_cls_map.get(horizon_str, 'badge-neutral')
-                    dist_pct = getattr(h, 'entry_distance_pct', 0)
-                    dist_str = f"{dist_pct:.0f}%" if dist_pct > 0.5 else "now"
-                    dist_cls = 'up' if dist_pct <= 2 else ('dim' if dist_pct <= 5 else 'down')
-                    return HIGHLIGHT_ROW.format(
-                        symbol=h.symbol, tag_name=s.name, name=h.name or h.symbol, price=h.price,
-                        reason=reason_display, reason_cls=reason_map.get(h.reason, 'badge-neutral'),
-                        entry=h.entry, entry_dist=dist_str, dist_cls=dist_cls,
-                        stop=h.stop, target=h.target, rr=rr_str,
-                        size=size_str, cost=cost_str, risk_dollars=risk_str, horizon=horizon_str, horizon_cls=horizon_cls)
+                            rs_display = "--"
+                        dist_pct = getattr(h, 'entry_distance_pct', 0)
+                        dist_str = f"{dist_pct:.0f}%" if dist_pct > 0.5 else "now"
+                        dist_cls = 'up' if dist_pct <= 2 else ('dim' if dist_pct <= 5 else 'down')
+                        entry_type = getattr(h, 'entry_type', 'market')
+                        entry_price = f"${h.entry:.2f}"
+                        if entry_type == 'limit':
+                            entry_str = f"{entry_price} (Limit)"
+                        elif entry_type == 'stop-limit':
+                            entry_str = f"{entry_price} (Stop)"
+                        else:
+                            entry_str = f"{entry_price} now"
+                        # Append distance to entry when not "now" or not market
+                        if dist_str != 'now' and entry_type == 'market':
+                            entry_str = f"{entry_price} {dist_str}"
+                        elif dist_str != 'now':
+                            entry_str = f"{entry_str} {dist_str}"
+                        atr = getattr(h, 'atr', 0) or 0
+                        atr_multiple = (h.entry - h.stop) / max(atr, 0.01) if h.entry > h.stop else 0
+                        if atr_multiple < 1.5:
+                            stop_cls = 'down'
+                        elif atr_multiple > 4.0:
+                            stop_cls = 'dim'
+                        else:
+                            stop_cls = 'up'
+                        if atr_multiple > 0:
+                            stop_display = f"${h.stop:.2f} ({atr_multiple:.1f}x ATR)"
+                        else:
+                            stop_display = f"${h.stop:.2f}"
+                        return HIGHLIGHT_ROW.format(
+                            symbol=h.symbol, tag_name=s.name, price=h.price,
+                            reason=reason_display, reason_cls=reason_map.get(h.reason, 'badge-neutral'),
+                            entry_str=entry_str, dist_cls=dist_cls,
+                            stop_display=stop_display, stop_cls=stop_cls, target=h.target, rr=rr_str,
+                            risk_dollars=risk_str, horizon=horizon_str,
+                            rs_percentile=rs_display)
 
                 active_threshold = 0.05  # matches portfolio_config.yaml active_entry_threshold
                 active = [h for h in s.highlights if getattr(h, 'entry_distance_pct', 0) <= active_threshold * 100]
