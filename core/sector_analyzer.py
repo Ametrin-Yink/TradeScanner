@@ -41,6 +41,7 @@ class StockHighlight:
     position_cost: float = 0.0
     risk_dollars: float = 0.0
     time_horizon: str = ''
+    entry_type: str = 'market'
     earnings_warning: Optional[str] = None
     correlation_warning: Optional[str] = None
 
@@ -678,6 +679,14 @@ class SectorAnalyzer:
                     reason=reason, detail=detail,
                     entry=round(entry, 2), stop=stop, target=target, rr=rr,
                 )
+
+                # Set order type based on setup reason
+                if reason in ('Near Support', 'MA Bounce'):
+                    highlight.entry_type = 'limit'
+                elif reason in ('Breakout', 'Resistance Test'):
+                    highlight.entry_type = 'stop-limit'
+                else:
+                    highlight.entry_type = 'market'
 
                 # Store metadata for composite scoring
                 highlight.rs_percentile = rs_percentile
