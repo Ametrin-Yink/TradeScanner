@@ -166,6 +166,45 @@ def _select_diverse(candidates, max_picks=3):
     return selected
 
 
+def _enforce_setup_diversity(sectors):
+    """Report-level diversity cap: if any setup type >60% of total picks,
+    remove lowest-scored excess until within the cap.
+
+    Modifies sectors in-place by removing highlights from their lists.
+    """
+    pcfg = _load_portfolio_config()
+    max_pct = pcfg.get('scoring', {}).get('max_pct_from_single_setup', 0.60)
+
+    # Collect all picks with their sector reference
+    all_picks = []
+    for sector in sectors:
+        for h in sector.highlights:
+            all_picks.append((sector, h))
+
+    if not all_picks:
+        return
+
+    total = len(all_picks)
+
+    # Count by reason
+    reason_counts = {}
+    for _, h in all_picks:
+        reason_counts[h.reason] = reason_counts.get(h.reason, 0) + 1
+
+    for reason, count in reason_counts.items():
+        max_allowed = int(total * max_pct)
+        if count > max_allowed:
+            to_remove = count - max_allowed
+            # Find picks of this reason, sorted by score ascending
+            candidates = [(s, h) for s, h in all_picks if h.reason == reason]
+            candidates.sort(key=lambda x: _composite_score(x[1]))
+
+            for i in range(to_remove):
+                sector, h = candidates[i]
+                if h in sector.highlights:
+                    sector.highlights.remove(h)
+
+
 def _compute_adx(df, period=14):
     """Compute ADX trend strength indicator."""
     if len(df) < period * 2:
@@ -220,6 +259,7 @@ class SectorAnalyzer:
         sectors = self._analyze_all_sectors(market)
         self._refresh_sr_levels()
         self._find_stock_highlights(sectors)
+        _enforce_setup_diversity(sectors)
         focus = self._generate_focus_summary(market, sectors)
 
         return {
@@ -391,9 +431,16 @@ class SectorAnalyzer:
             "If no specific catalysts exist, use the best available information. "
             "No other text."
         )
+        # Collect stock symbols so AI writes about the actual stocks in this sector
+        stock_symbols = [s['symbol'] for s in self.tag_manager.get_tag_stocks(sector_name, self.db)]
+        user_msg = f"What is the outlook for the {sector_name} sector today?"
+        if stock_symbols:
+            symbols_str = ", ".join(stock_symbols[:20])
+            user_msg += f" Stocks in this sector: {symbols_str}."
+
         try:
             result = chat(
-                messages=[{"role": "user", "content": f"What is the outlook for the {sector_name} sector today?"}],
+                messages=[{"role": "user", "content": user_msg}],
                 system=system_prompt,
                 enable_search=True,
                 search_query=f"{sector_name} sector stocks news {datetime.now().strftime('%B %Y')}",
@@ -538,14 +585,14 @@ class SectorAnalyzer:
                 detail = None
                 time_horizon = 'swing'
 
-                if high_60d and price > high_60d and volume_ratio > 1.5:
+                if high_60d and price > high_60d and volume_ratio > 1.0:
                     reason = 'Breakout'
                     detail = f"Broke 60d high ${high_60d:.2f}, {volume_ratio:.1f}x vol"
                     time_horizon = 'swing'
                 elif low_60d and price > low_60d and (price - low_60d) / low_60d <= near_threshold:
                     reason = 'Near Support'
                     # Selling pressure should be fading at support
-                    if volume_ratio >= 1.0:
+                    if volume_ratio >= 1.5:
                         continue  # skip — elevated volume at support = risk of breakdown
                     dist = (price - low_60d) / low_60d * 100
                     detail = f"{dist:.1f}% above 60d low ${low_60d:.2f}"

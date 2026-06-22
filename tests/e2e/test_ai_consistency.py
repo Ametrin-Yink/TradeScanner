@@ -64,6 +64,36 @@ def test_consistency_check_no_conflict(seeded_db, mock_ai):
     assert 'AI/quantitative divergence' not in result.outlook
 
 
+def test_ai_prompt_contains_stock_symbols(seeded_db, mock_ai, monkeypatch):
+    """AI sector analysis prompt includes stock symbols for the analyzed sector."""
+    captured_messages = []
+
+    def capturing_chat(**kwargs):
+        captured_messages.extend(kwargs.get('messages', []))
+        import json
+        return json.dumps({
+            'outlook': 'Positive outlook driven by AI infrastructure spending.',
+            'drivers': [{'text': 'AI data center expansion driving demand.', 'catalyst_date': None}],
+            'risks': [{'text': 'Supply chain constraints could limit growth.', 'catalyst_date': 'Q3 2026'}],
+        })
+
+    monkeypatch.setattr('core.sector_analyzer.chat', capturing_chat)
+
+    analyzer = SectorAnalyzer(db=seeded_db)
+    market = analyzer._analyze_market()
+    sector_info = {'name': 'Semiconductors', 'stock_count': 1}
+    result = analyzer._analyze_sector(sector_info, market)
+
+    user_msgs = [m['content'] for m in captured_messages if m.get('role') == 'user']
+    sector_msgs = [m for m in user_msgs if 'Stocks in this sector:' in m]
+    assert len(sector_msgs) > 0, (
+        f"No user message contains 'Stocks in this sector:'. Messages: {user_msgs}"
+    )
+    assert 'NVDA' in sector_msgs[0], (
+        f"Expected NVDA in sector message but got: {sector_msgs[0]}"
+    )
+
+
 def test_report_footer_shows_ai_status(tmp_path, seeded_db, mock_ai):
     """Report footer includes AI sector coverage status."""
     analyzer = SectorAnalyzer(db=seeded_db)
