@@ -9,13 +9,14 @@ active_entry_threshold: 0.05 # entries within 5% are "active", beyond are "pullb
 stop_target:
   max_stop_distance_atr: 2.5 # max stop distance in ATR units
   max_stop_distance_pct: 0.05 # max stop distance as fraction of price
-  min_rr_swing: 1.5 # minimum risk:reward for swing trades
+  min_rr_swing: 2.5 # minimum risk:reward for swing trades
   min_rr_position: 2.0 # minimum risk:reward for position trades
   fib_extension_default: 1.618 # Fibonacci extension multiplier
   atr_multiplier_swing: 1.5 # ATR multiplier for stop fallback
 
 # S/R detection parameters
 sr:
+  lookback_bars: 120
   swing_order_min: 3
   swing_order_max: 8
   cluster_method: complete

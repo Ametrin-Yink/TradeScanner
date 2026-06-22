@@ -251,17 +251,18 @@ def test_compute_stop_target_target_iterates_resistances():
     """Target iterates resistance zones ascending, picks first with R:R >= min_rr."""
     entry_price = 100.0
     supports = [{'level': 96.0, 'count': 2, 'range': (95.5, 96.5)}]
-    # risk = 4.0, need rr >= 1.5 → target >= entry + 6.0 = 106.0
+    # risk = 4.0, need rr >= 2.5 → target >= 110.0
     resistances = [
         {'level': 103.0, 'count': 2, 'range': (102.5, 103.5)},   # rr=0.75, too low
         {'level': 105.0, 'count': 2, 'range': (104.5, 105.5)},   # rr=1.25, too low
-        {'level': 108.0, 'count': 2, 'range': (107.5, 108.5)},   # rr=2.0, passes
+        {'level': 108.0, 'count': 2, 'range': (107.5, 108.5)},   # rr=2.0, too low
+        {'level': 115.0, 'count': 2, 'range': (114.5, 115.5)},   # rr=3.75, passes
     ]
     stop, target, method = compute_stop_target(
         entry_price, 2.0, supports, resistances, pd.DataFrame(), time_horizon='swing',
         ema21=0.0, ema50=0.0
     )
-    assert abs(target - 108.0) < 0.01, f"Expected target ~108.0, got {target}"
+    assert abs(target - 115.0) < 0.01, f"Expected target ~115.0, got {target}"
     assert 'resistance(x2)' in method
 
 
@@ -312,17 +313,30 @@ def test_compute_stop_target_risk_multiple_fallback():
     atr = 2.0
     # Support must be within min(2.5*atr, 5% of price) = min(5.0, 5.0) = 5.0
     supports = [{'level': 95.0, 'count': 2, 'range': (94.5, 95.5)}]
-    # risk = 5.0, atr=2.0 → 3*atr = 6.0, rr = 6/5 = 1.2 < 1.5 → ATR 3x fails
-    # risk multiple: target = 100 + 1.5 * 5.0 = 107.5
+    # risk = 5.0, atr=2.0 → 3*atr = 6.0, rr = 6/5 = 1.2 < 2.5 → ATR 3x fails
+    # risk multiple: target = 100 + 2.5 * 5.0 = 112.5
     stop, target, method = compute_stop_target(
         entry_price, 2.0, supports, [], pd.DataFrame(), time_horizon='swing',
         ema21=0.0, ema50=0.0
     )
-    expected_target = entry_price + 1.5 * (entry_price - stop)
+    expected_target = entry_price + 2.5 * (entry_price - stop)
     assert abs(target - expected_target) < 0.01, (
         f"Expected target ~{expected_target}, got {target}"
     )
     assert 'risk_' in method, f"Expected risk_ method, got {method}"
+
+
+def test_min_rr_swing_25():
+    """With min_rr_swing=2.5 config, computed R:R must be >= 2.5."""
+    entry_price = 100.0
+    atr = 2.0
+    supports = [{'level': 96.0, 'count': 2, 'range': (95.5, 96.5)}]
+    stop, target, method = compute_stop_target(
+        entry_price, 2.0, supports, [], pd.DataFrame(), time_horizon='swing',
+        ema21=0.0, ema50=0.0
+    )
+    rr = (target - entry_price) / (entry_price - stop)
+    assert rr >= 2.5, f"R:R {rr:.2f} should be >= 2.5, got {method}"
 
 
 def test_compute_stop_target_no_ema_values():
@@ -386,10 +400,11 @@ def test_compute_fib_target_extension_param():
         )
 
 
-# --- compute_sr_for_symbol with weekly S/R ---
+# --- Lookback-based S/R tests ---
 
-def test_compute_sr_for_symbol_weekly_confluence():
-    """60+ bars triggers weekly S/R; supports/resistances returned with weekly boost."""
+
+def test_sr_lookback_120_bars_default():
+    """90 bars is less than default 120-bar lookback -- returns empty."""
     import numpy as np
     import tempfile
     from pathlib import Path
@@ -402,10 +417,106 @@ def test_compute_sr_for_symbol_weekly_confluence():
     db = Database(Path(tmp_path))
     conn = db.get_connection()
 
-    # 80 days of trending random walk to produce natural swing points
+    np.random.seed(1)
+    n = 90
+    close = 100 + np.cumsum(np.random.randn(n) * 0.5)
+    high = close + np.abs(np.random.randn(n)) * 1.0
+    low = close - np.abs(np.random.randn(n)) * 1.0
+
+    from datetime import datetime, timedelta
+    start = datetime(2026, 3, 1)
+    for i in range(n):
+        date = (start + timedelta(days=i)).strftime('%Y-%m-%d')
+        conn.execute(
+            "INSERT INTO market_data (symbol, date, open, high, low, close, volume) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ('LOOKTEST', date, float(close[i]), float(high[i]), float(low[i]), float(close[i]), 1000000)
+        )
+
+    current_price = float(close[-1])
+    conn.execute(
+        "INSERT INTO tier1_cache (symbol, current_price, high_60d, low_60d, atr_pct, rs_percentile, ema21, ema50, volume_ratio, supports, resistances, ret_5d) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1.0, ?, ?, ?)",
+        ('LOOKTEST', current_price, float(close.max()), float(close.min()), 0.02, 50.0, current_price * 0.95, current_price * 0.90, '[]', '[]', 0.0)
+    )
+    conn.commit()
+
+    supports, resistances = compute_sr_for_symbol(db, 'LOOKTEST')
+    assert supports == [], f"Expected empty supports for 90 bars, got {supports}"
+    assert resistances == [], f"Expected empty resistances for 90 bars, got {resistances}"
+
+    Path(tmp_path).unlink(missing_ok=True)
+
+
+# --- compute_sr_for_symbol with weekly S/R ---
+
+def test_compute_sr_for_symbol_weekly_confluence():
+    """120+ bars triggers weekly S/R; supports/resistances returned with weekly boost."""
+    import numpy as np
+    import tempfile
+    from pathlib import Path
+    from data.db import Database
+    from core.swing_detector import compute_sr_for_symbol
+
+    tmp = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
+    tmp_path = tmp.name
+    tmp.close()
+    db = Database(Path(tmp_path))
+    conn = db.get_connection()
+
+    # 130 days of trending random walk to produce natural swing points
     np.random.seed(42)
-    n = 80
+    n = 130
     close = 100 + np.cumsum(np.random.randn(n) * 0.8)
+    high = close + np.abs(np.random.randn(n)) * 1.0
+    low = close - np.abs(np.random.randn(n)) * 1.0
+
+    from datetime import datetime, timedelta
+    start = datetime(2026, 2, 1)
+    for i in range(n):
+        date = (start + timedelta(days=i)).strftime('%Y-%m-%d')
+        conn.execute(
+            "INSERT INTO market_data (symbol, date, open, high, low, close, volume) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ('TEST', date, float(close[i]), float(high[i]), float(low[i]), float(close[i]), 1000000)
+        )
+
+    current_price = float(close[-1])
+    conn.execute(
+        "INSERT INTO tier1_cache (symbol, current_price, high_60d, low_60d, atr_pct, rs_percentile, ema21, ema50, volume_ratio, supports, resistances, ret_5d) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1.0, ?, ?, ?)",
+        ('TEST', current_price, float(close.max()), float(close.min()), 0.02, 50.0, current_price * 0.95, current_price * 0.90, '[]', '[]', 0.0)
+    )
+    conn.commit()
+
+    supports, resistances = compute_sr_for_symbol(db, 'TEST')
+
+    assert isinstance(supports, list), "supports should be a list"
+    assert isinstance(resistances, list), "resistances should be a list"
+    # 130 bars of oscillating data should produce both supports and resistances
+    assert len(supports) > 0, f"Expected >0 supports, got {supports}"
+    assert len(resistances) > 0, f"Expected >0 resistances, got {resistances}"
+    for s in supports:
+        assert s < current_price, f"Support {s} should be below price {current_price}"
+    for r in resistances:
+        assert r > current_price, f"Resistance {r} should be above price {current_price}"
+
+    Path(tmp_path).unlink(missing_ok=True)
+
+
+def test_compute_sr_for_symbol_weekly_insufficient_bars():
+    """110 bars (less than 120 lookback) returns empty S/R."""
+    import numpy as np
+    import tempfile
+    from pathlib import Path
+    from data.db import Database
+    from core.swing_detector import compute_sr_for_symbol
+
+    tmp = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
+    tmp_path = tmp.name
+    tmp.close()
+    db = Database(Path(tmp_path))
+    conn = db.get_connection()
+
+    np.random.seed(1)
+    n = 110
+    close = 100 + np.cumsum(np.random.randn(n) * 0.5)
     high = close + np.abs(np.random.randn(n)) * 1.0
     low = close - np.abs(np.random.randn(n)) * 1.0
 
@@ -426,60 +537,8 @@ def test_compute_sr_for_symbol_weekly_confluence():
     conn.commit()
 
     supports, resistances = compute_sr_for_symbol(db, 'TEST')
-
-    assert isinstance(supports, list), "supports should be a list"
-    assert isinstance(resistances, list), "resistances should be a list"
-    # 80 bars of oscillating data should produce both supports and resistances
-    assert len(supports) > 0, f"Expected >0 supports, got {supports}"
-    assert len(resistances) > 0, f"Expected >0 resistances, got {resistances}"
-    for s in supports:
-        assert s < current_price, f"Support {s} should be below price {current_price}"
-    for r in resistances:
-        assert r > current_price, f"Resistance {r} should be above price {current_price}"
-
-    Path(tmp_path).unlink(missing_ok=True)
-
-
-def test_compute_sr_for_symbol_weekly_insufficient_bars():
-    """40 bars runs daily-only S/R without weekly; still produces levels."""
-    import numpy as np
-    import tempfile
-    from pathlib import Path
-    from data.db import Database
-    from core.swing_detector import compute_sr_for_symbol
-
-    tmp = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
-    tmp_path = tmp.name
-    tmp.close()
-    db = Database(Path(tmp_path))
-    conn = db.get_connection()
-
-    np.random.seed(1)
-    n = 40
-    close = 100 + np.cumsum(np.random.randn(n) * 0.5)
-    high = close + np.abs(np.random.randn(n)) * 1.0
-    low = close - np.abs(np.random.randn(n)) * 1.0
-
-    from datetime import datetime, timedelta
-    start = datetime(2026, 5, 1)
-    for i in range(n):
-        date = (start + timedelta(days=i)).strftime('%Y-%m-%d')
-        conn.execute(
-            "INSERT INTO market_data (symbol, date, open, high, low, close, volume) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            ('TEST', date, float(close[i]), float(high[i]), float(low[i]), float(close[i]), 1000000)
-        )
-
-    current_price = float(close[-1])
-    conn.execute(
-        "INSERT INTO tier1_cache (symbol, current_price, high_60d, low_60d, atr_pct, rs_percentile, ema21, ema50, volume_ratio, supports, resistances, ret_5d) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1.0, ?, ?, ?)",
-        ('TEST', current_price, float(close.max()), float(close.min()), 0.02, 50.0, current_price * 0.95, current_price * 0.90, '[]', '[]', 0.0)
-    )
-    conn.commit()
-
-    supports, resistances = compute_sr_for_symbol(db, 'TEST')
-    assert isinstance(supports, list)
-    assert isinstance(resistances, list)
-    # 40 bars without weekly should still work (daily-only S/R)
+    assert supports == [], f"Expected empty supports for 110 bars, got {supports}"
+    assert resistances == [], f"Expected empty resistances for 110 bars, got {resistances}"
 
     Path(tmp_path).unlink(missing_ok=True)
 
@@ -565,13 +624,13 @@ def test_compute_volume_profile_integration_sr():
     conn = db.get_connection()
 
     np.random.seed(42)
-    n = 80
+    n = 130
     close = 200 + np.cumsum(np.random.randn(n) * 0.8)
     high = close + np.abs(np.random.randn(n)) * 1.5
     low = close - np.abs(np.random.randn(n)) * 1.5
 
     from datetime import datetime, timedelta
-    start = datetime(2026, 3, 1)
+    start = datetime(2026, 2, 1)
     for i in range(n):
         date = (start + timedelta(days=i)).strftime('%Y-%m-%d')
         conn.execute(
@@ -929,9 +988,9 @@ def test_anchored_vwap_integration_compute_sr():
         ('TESTVWAP', earnings_date)
     )
 
-    # Slow downtrend from 110 to 100 over 80 days — AVWAP will be ~101.9
-    n = 80
-    close = [110.0 - i * (10.0 / 79) for i in range(n)]
+    # Slow downtrend from 110 to 100 over 130 days — AVWAP will be ~101.9
+    n = 130
+    close = [110.0 - i * (10.0 / 129) for i in range(n)]
     high = [c + 1.0 for c in close]
     low = [c - 1.0 for c in close]
     volume = [1000000] * n
