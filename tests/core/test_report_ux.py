@@ -201,6 +201,36 @@ def test_confidence_dot_unavailable(tmp_path):
     assert 'title="AI unavailable"' in content
 
 
+def test_atr_multiple_in_stop_column(tmp_path):
+    """Stop column shows ATR multiple: $XX.XX (N.Nx ATR) with color coding."""
+    market = MarketOverview(
+        date='2026-06-19', regime='bull_moderate', confidence=70,
+        reasoning='Market is steady.', spy_price=525.0, spy_change_5d=1.2,
+        vix=14.5, vix_status='low',
+    )
+    h = StockHighlight('AAPL', 'Apple', 100, 2.5e12, 'Breakout',
+                       'Broke 60d high', entry=100, stop=96, target=110, rr=2.5,
+                       time_horizon='Swing (5-20d)')
+    h.atr = 2.0  # dollar ATR
+    sectors = [
+        SectorAnalysis(
+            name='Tech', etf='XLK', stock_count=1,
+            daily_change=1.5, ret_3m=10.0, rs_percentile=80.0,
+            trend='uptrend', above_ema50=True,
+            outlook='Good sector.',
+            highlights=[h],
+        ),
+    ]
+    result = {
+        'market': market, 'sectors': sectors, 'focus_summary': None,
+        'timestamp': '2026-06-19T22:00',
+    }
+    gen = ReportGenerator(reports_dir=tmp_path)
+    content = open(gen.generate_report(result)).read()
+    # ATR multiple = (100 - 96) / 2.0 = 2.0x
+    assert '2.0x ATR' in content
+
+
 def test_prior_picks_shows_performance_summary(tmp_path):
     """Performance summary header with win rate should appear in Prior Picks section."""
     from data.db import Database

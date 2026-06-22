@@ -437,59 +437,59 @@ function exportHighlightsCSV() {
             highlights_html = ''
             if s.highlights:
                 def build_row(h):
-                        reason_display = h.reason
-                        rr_str = f"{h.rr:.1f}x" if h.rr > 0 else "--"
-                        risk_str = f"{getattr(h, 'risk_dollars', 0):,.0f}"
-                        horizon_str = getattr(h, 'time_horizon', '--')
-                        # RS percentile column
-                        rs_val = getattr(h, 'rs_percentile', None)
-                        if rs_val is not None:
-                            n = int(rs_val)
-                            sfx = 'th' if 10 <= n % 100 <= 20 else {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')
-                            rs_display = f"{n}{sfx}"
-                        else:
-                            rs_display = "--"
-                        dist_pct = getattr(h, 'entry_distance_pct', 0)
-                        dist_str = f"{dist_pct:.0f}%" if dist_pct > 0.5 else "now"
-                        dist_cls = 'up' if dist_pct <= 2 else ('dim' if dist_pct <= 5 else 'down')
-                        entry_type = getattr(h, 'entry_type', 'market')
-                        entry_price = f"${h.entry:.2f}"
-                        if entry_type == 'limit':
-                            entry_str = f"{entry_price} (Limit)"
-                        elif entry_type == 'stop-limit':
-                            entry_str = f"{entry_price} (Stop)"
-                        else:
-                            entry_str = f"{entry_price} now"
-                        # Append distance to entry when not "now" or not market
-                        if dist_str != 'now' and entry_type == 'market':
-                            entry_str = f"{entry_price} {dist_str}"
-                        elif dist_str != 'now':
-                            entry_str = f"{entry_str} {dist_str}"
-                        atr = getattr(h, 'atr', 0) or 0
-                        atr_multiple = (h.entry - h.stop) / max(atr, 0.01) if h.entry > h.stop else 0
-                        if atr_multiple < 1.5:
-                            stop_cls = 'down'
-                        elif atr_multiple > 4.0:
-                            stop_cls = 'dim'
-                        else:
-                            stop_cls = 'up'
-                        if atr_multiple > 0:
-                            stop_display = f"${h.stop:.2f} ({atr_multiple:.1f}x ATR)"
-                        else:
-                            stop_display = f"${h.stop:.2f}"
-                        return HIGHLIGHT_ROW.format(
-                            symbol=h.symbol, tag_name=s.name, price=h.price,
-                            reason=reason_display, reason_cls=reason_map.get(h.reason, 'badge-neutral'),
-                            entry_str=entry_str, dist_cls=dist_cls,
-                            stop_display=stop_display, stop_cls=stop_cls, target=h.target, rr=rr_str,
-                            risk_dollars=risk_str, horizon=horizon_str,
-                            rs_percentile=rs_display)
+                    reason_display = h.reason
+                    rr_str = f"{h.rr:.1f}x" if h.rr > 0 else "--"
+                    risk_str = f"{getattr(h, 'risk_dollars', 0):,.0f}"
+                    horizon_str = getattr(h, 'time_horizon', '--')
+                    # RS percentile column
+                    rs_val = getattr(h, 'rs_percentile', None)
+                    if rs_val is not None:
+                        n = int(rs_val)
+                        sfx = 'th' if 10 <= n % 100 <= 20 else {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')
+                        rs_display = f"{n}{sfx}"
+                    else:
+                        rs_display = "--"
+                    dist_pct = getattr(h, 'entry_distance_pct', 0)
+                    dist_str = f"{dist_pct:.0f}%" if dist_pct > 0.5 else "now"
+                    dist_cls = 'up' if dist_pct <= 2 else ('dim' if dist_pct <= 5 else 'down')
+                    entry_type = getattr(h, 'entry_type', 'market')
+                    entry_price = f"${h.entry:.2f}"
+                    if entry_type == 'limit':
+                        entry_str = f"{entry_price} (Limit)"
+                    elif entry_type == 'stop-limit':
+                        entry_str = f"{entry_price} (Stop)"
+                    else:
+                        entry_str = f"{entry_price} now"
+                    # Append distance to entry when not "now" or not market
+                    if dist_str != 'now' and entry_type == 'market':
+                        entry_str = f"{entry_price} {dist_str}"
+                    elif dist_str != 'now':
+                        entry_str = f"{entry_str} {dist_str}"
+                    atr = getattr(h, 'atr', 0) or 0
+                    atr_multiple = (h.entry - h.stop) / max(atr, 0.01) if h.entry > h.stop else 0
+                    if atr_multiple < 1.5:
+                        stop_cls = 'down'
+                    elif atr_multiple > 4.0:
+                        stop_cls = 'dim'
+                    else:
+                        stop_cls = 'up'
+                    if atr_multiple > 0:
+                        stop_display = f"${h.stop:.2f} ({atr_multiple:.1f}x ATR)"
+                    else:
+                        stop_display = f"${h.stop:.2f}"
+                    return HIGHLIGHT_ROW.format(
+                        symbol=h.symbol, tag_name=s.name, price=h.price,
+                        reason=reason_display, reason_cls=reason_map.get(h.reason, 'badge-neutral'),
+                        entry_str=entry_str, dist_cls=dist_cls,
+                        stop_display=stop_display, stop_cls=stop_cls, target=h.target, rr=rr_str,
+                        risk_dollars=risk_str, horizon=horizon_str,
+                        rs_percentile=rs_display)
 
                 active_threshold = 0.05  # matches portfolio_config.yaml active_entry_threshold
                 active = [h for h in s.highlights if getattr(h, 'entry_distance_pct', 0) <= active_threshold * 100]
                 watch = [h for h in s.highlights if getattr(h, 'entry_distance_pct', 0) > active_threshold * 100]
 
-                table_header = '<table style="margin-top:8px"><thead><tr><th>Symbol</th><th>Name</th><th>Price</th><th>Reason</th><th>Entry</th><th>Dist</th><th>Stop</th><th>Target</th><th>R/R</th><th>Size</th><th>Cost</th><th>Risk</th><th>Horizon</th></tr></thead><tbody>'
+                table_header = '<table style="margin-top:8px"><thead><tr><th>Symbol</th><th>Price</th><th>Setup</th><th>RS</th><th>Entry+Dist</th><th>Stop</th><th>Target</th><th>R:R</th><th>Risk$</th></tr></thead><tbody>'
 
                 parts_html = []
                 if active:
