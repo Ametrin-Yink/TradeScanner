@@ -44,6 +44,7 @@ class StockHighlight:
     entry_type: str = 'market'
     earnings_warning: Optional[str] = None
     correlation_warning: Optional[str] = None
+    liquidity_warning: Optional[str] = None
 
 
 @dataclass
@@ -205,6 +206,37 @@ def _enforce_setup_diversity(sectors):
                     sector.highlights.remove(h)
 
 
+def _deduplicate_across_sectors(sectors):
+    """Cross-sector dedup: same symbol in multiple sectors kept only in
+    highest-scored sector. Removes duplicates from lower-scored sectors
+    and adds '(also in X)' note to the kept pick's detail.
+
+    Modifies sectors in-place.
+    """
+    # Collect all (sector, highlight) pairs grouped by symbol
+    by_symbol = {}
+    for sector in sectors:
+        for h in sector.highlights:
+            by_symbol.setdefault(h.symbol, []).append((sector, h))
+
+    for symbol, picks in by_symbol.items():
+        if len(picks) < 2:
+            continue
+
+        # Keep in highest-scored sector, remove from others
+        picks.sort(key=lambda x: _composite_score(x[1]), reverse=True)
+        best_sector, best_h = picks[0]
+        removed_names = []
+
+        for sector, h in picks[1:]:
+            if h in sector.highlights:
+                sector.highlights.remove(h)
+                removed_names.append(sector.name)
+
+        if removed_names:
+            best_h.detail += " (also in " + ", ".join(removed_names) + ")"
+
+
 def _compute_adx(df, period=14):
     """Compute ADX trend strength indicator."""
     if len(df) < period * 2:
@@ -259,6 +291,7 @@ class SectorAnalyzer:
         sectors = self._analyze_all_sectors(market)
         self._refresh_sr_levels()
         self._find_stock_highlights(sectors)
+        _deduplicate_across_sectors(sectors)
         _enforce_setup_diversity(sectors)
         focus = self._generate_focus_summary(market, sectors)
 
@@ -766,6 +799,12 @@ class SectorAnalyzer:
                 avg_volume = cache.get('avg_volume_20d', 0)
                 if avg_volume > 0 and position_size / avg_volume > 0.05:
                     continue  # too illiquid for position size
+
+                # Liquidity warning: flag if position > 2% of daily volume
+                if avg_volume > 0:
+                    vol_pct = position_size / avg_volume * 100
+                    if vol_pct > 2.0:
+                        highlight.liquidity_warning = f"Position is {vol_pct:.1f}% of daily vol"
 
                 # Earnings proximity check
                 earnings_date = None
