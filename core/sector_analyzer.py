@@ -743,6 +743,7 @@ class SectorAnalyzer:
                 highlight.ema_above = (ema50 and price > ema50) or False
                 highlight.ema21 = ema21 or 0
                 highlight.ema50 = ema50 or 0
+                highlight.atr = atr
                 highlight.atr_pct = atr_pct
                 highlight.entry_distance_pct = abs(entry - price) / price * 100
 
@@ -865,7 +866,16 @@ class SectorAnalyzer:
 
         scored.sort(key=lambda x: x[0], reverse=True)
         focus = [s[1] for s in scored[:3]]
-        avoid = [s[1] for s in scored[-3:]]
+
+        # Don't put sectors with stock picks in the avoid list
+        sectors_with_picks = {s.name for s in sectors if s.highlights}
+        avoid = [s[1] for s in scored[-3:] if s[1] not in sectors_with_picks]
+        if not avoid:
+            # Fallback: lowest-scoring non-focus sector
+            for s in reversed(scored):
+                if s[1] not in focus:
+                    avoid = [s[1]]
+                    break
 
         reasoning = self._ai_focus_reasoning(market, focus, avoid, scored[:5])
         return FocusSummary(focus_sectors=focus, avoid_sectors=avoid, reasoning=reasoning)

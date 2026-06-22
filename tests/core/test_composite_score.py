@@ -186,3 +186,55 @@ def test_diversity_cap_60pct():
     remaining_symbols = {h.symbol for h in all_remaining}
     assert 'BO4' not in remaining_symbols, \
         "Lowest-scored Breakout (BO4) should have been removed"
+
+
+# ------------------------------------------------------------------
+# Focus summary: avoid list excludes sectors with picks
+# ------------------------------------------------------------------
+
+
+def test_sector_with_picks_not_in_avoid(monkeypatch):
+    """Sectors with stock picks are excluded from the avoid list."""
+    from core.sector_analyzer import (
+        SectorAnalyzer, SectorAnalysis, MarketOverview, StockHighlight,
+    )
+
+    monkeypatch.setattr(
+        SectorAnalyzer, '_ai_focus_reasoning',
+        lambda self, market, focus, avoid, top5: "Mock reasoning"
+    )
+
+    market = MarketOverview(
+        date='2026-06-21', regime='neutral', confidence=50,
+        reasoning='Test', spy_price=500.0, spy_change_5d=0.0,
+        vix=15.0, vix_status='low',
+    )
+
+    # 6 sectors with descending daily_change => descending scores
+    # Same ret_3m makes ret_norm=0 for all
+    # Focus: S_0, S_1, S_2.  Avoid: S_3, S_4, S_5
+    sectors = []
+    for i, daily in enumerate([10.0, 8.0, 6.0, 4.0, 2.0, 0.0]):
+        name = f'S_{i}'
+        s = SectorAnalysis(
+            name=name, etf='', stock_count=10,
+            daily_change=daily, ret_3m=10.0, rs_percentile=50.0,
+            trend='uptrend', above_ema50=True, outlook='Positive',
+        )
+        if i == 3:  # 3rd-worst sector has picks
+            h = StockHighlight(
+                symbol='TEST', name='Test', price=100.0,
+                market_cap=1_000_000_000, reason='Breakout', detail='Test',
+            )
+            s.highlights.append(h)
+        sectors.append(s)
+
+    analyzer = SectorAnalyzer(db=object())
+    result = analyzer._generate_focus_summary(market, sectors)
+
+    # S_3 (with picks) must NOT be in avoid list
+    assert 'S_3' not in result.avoid_sectors, \
+        f"Sector with picks (S_3) should not be in avoid: {result.avoid_sectors}"
+
+    # Top 3 should still be focus
+    assert result.focus_sectors == ['S_0', 'S_1', 'S_2']
