@@ -63,3 +63,40 @@ def test_detect_stale_stocks(tmp_path):
     assert len(stale) == 1
 
     db.close()
+
+
+def test_stale_stocks_flagged_in_scheduler(tmp_path, caplog):
+    """Scheduler warns about and deactivates stale stocks via detect_stale_stocks."""
+    import logging
+    from unittest.mock import patch
+
+    caplog.set_level(logging.WARNING)
+
+    # Import scheduler module so module-level attributes exist for patching
+    from scheduler import run_sector_scan
+
+    with patch('scheduler.detect_stale_stocks', return_value=["DEAD"]) as mock_detect, \
+         patch('scheduler.Database') as MockDB, \
+         patch('scheduler.validate_cache_freshness'), \
+         patch('core.reconciler.reconcile_recommendations', return_value=0), \
+         patch('scheduler.SectorAnalyzer') as MockSA, \
+         patch('scheduler.ReportGenerator') as MockRG:
+
+        mock_db = MockDB.return_value
+        MockSA.return_value.analyze.return_value = {'sectors': []}
+        MockRG.return_value.generate_report.return_value = "/tmp/report.html"
+
+        run_sector_scan(test_symbols=[])
+
+        # detect_stale_stocks was called once
+        mock_detect.assert_called_once()
+
+        # DEAD was deactivated via SQL update on the db connection
+        # Note: Python 3.13 MagicMock.__enter__() returns a different mock
+        conn_mock = mock_db.get_connection.return_value
+        conn_mock.__enter__.return_value.execute.assert_any_call(
+            "UPDATE stocks SET is_active = 0 WHERE symbol = ?", ("DEAD",)
+        )
+
+        # Warning about DEAD was logged
+        assert any("DEAD" in msg for msg in caplog.messages)

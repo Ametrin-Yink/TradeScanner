@@ -5,7 +5,7 @@ import sys
 from datetime import datetime
 
 from config.settings import settings
-from data.db import Database
+from data.db import Database, detect_stale_stocks
 from core.sector_analyzer import SectorAnalyzer
 from core.reporter import ReportGenerator
 from core.fetcher import validate_cache_freshness
@@ -64,6 +64,13 @@ def run_sector_scan(test_symbols=None):
         from core.reconciler import reconcile_recommendations
         reconciled = reconcile_recommendations(db)
         logger.info(f"Reconciled {reconciled} prior recommendations")
+
+        # Detect and deactivate stale stocks (flatlined price data)
+        stale = detect_stale_stocks(db)
+        for symbol in stale:
+            with db.get_connection() as conn:
+                conn.execute("UPDATE stocks SET is_active = 0 WHERE symbol = ?", (symbol,))
+            logger.warning("Deactivated stale stock: %s", symbol)
 
         analyzer = SectorAnalyzer(db=Database())
         result = analyzer.analyze()
