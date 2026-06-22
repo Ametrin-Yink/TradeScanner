@@ -1223,6 +1223,16 @@ class Database:
                 created_at TEXT DEFAULT (datetime('now'))
             )
         """)
+        # Remove duplicate rows before adding unique constraint
+        conn.execute("""
+            DELETE FROM recommendations WHERE id NOT IN (
+                SELECT MAX(id) FROM recommendations GROUP BY trade_date, symbol, sector
+            )
+        """)
+        conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_rec_unique
+            ON recommendations(trade_date, symbol, sector)
+        """)
         conn.commit()
 
     def save_recommendation(self, rec: dict):
@@ -1235,12 +1245,25 @@ class Database:
                  current_price, entry_distance_pct, max_days.
         """
         conn = self.get_connection()
+        # Upsert: same symbol + date + sector = update existing row
         conn.execute("""
             INSERT INTO recommendations (trade_date, symbol, sector, setup_type,
                 entry_price, stop_price, target_price, rr, composite_score,
                 position_size, position_cost, risk_dollars, current_price,
                 entry_distance_pct, max_days)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(trade_date, symbol, sector) DO UPDATE SET
+                setup_type=excluded.setup_type,
+                entry_price=excluded.entry_price,
+                stop_price=excluded.stop_price,
+                target_price=excluded.target_price,
+                rr=excluded.rr,
+                composite_score=excluded.composite_score,
+                position_size=excluded.position_size,
+                position_cost=excluded.position_cost,
+                risk_dollars=excluded.risk_dollars,
+                current_price=excluded.current_price,
+                entry_distance_pct=excluded.entry_distance_pct
         """, (
             rec['trade_date'], rec['symbol'], rec['sector'], rec['setup_type'],
             rec['entry_price'], rec['stop_price'], rec['target_price'],

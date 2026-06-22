@@ -124,6 +124,10 @@ def seeded_db(in_memory_db):
             created_at TEXT DEFAULT (datetime('now'))
         )
     """)
+    conn.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_rec_unique
+        ON recommendations(trade_date, symbol, sector)
+    """)
 
     # Seed stocks
     for sym, name, cap in [
