@@ -214,7 +214,54 @@ document.addEventListener("keydown", function (e) {
 });
 </script>"""
 
-BAR_CHART_HTML = """<div class="bar-chart-wrap"><div class="bar-chart">{bars}</div></div>"""
+BAR_CHART_HTML = """<div class="bar-chart-wrap"><div style="margin-bottom:6px;display:flex;gap:4px">
+<button onclick="setBarSort('change')" id="bar-toggle-change" style="background:var(--gold-dim);color:var(--gold);border:1px solid var(--gold);border-radius:4px;padding:3px 10px;font-size:10px;cursor:pointer">By Change %</button>
+<button onclick="setBarSort('rr')" id="bar-toggle-rr" style="background:var(--paper);color:var(--frost);border:1px solid var(--divider);border-radius:4px;padding:3px 10px;font-size:10px;cursor:pointer">By Avg R:R</button>
+</div><div class="bar-chart">{bars}</div></div>"""
+
+BAR_SORT_JS = """<script>
+function setBarSort(mode) {
+  var wrap = document.querySelector('.bar-chart');
+  if (!wrap) return;
+  var items = Array.from(wrap.querySelectorAll('.bar-item'));
+  var isChange = mode === 'change';
+  var btnChange = document.getElementById('bar-toggle-change');
+  var btnRr = document.getElementById('bar-toggle-rr');
+  if (btnChange) {
+    btnChange.style.background = isChange ? 'var(--gold-dim)' : 'var(--paper)';
+    btnChange.style.color = isChange ? 'var(--gold)' : 'var(--frost)';
+    btnChange.style.borderColor = isChange ? 'var(--gold)' : 'var(--divider)';
+  }
+  if (btnRr) {
+    btnRr.style.background = isChange ? 'var(--paper)' : 'var(--gold-dim)';
+    btnRr.style.color = isChange ? 'var(--frost)' : 'var(--gold)';
+    btnRr.style.borderColor = isChange ? 'var(--divider)' : 'var(--gold)';
+  }
+  var attr = isChange ? 'data-change' : 'data-rr';
+  items.sort(function(a, b) {
+    return parseFloat(b.getAttribute(attr)) - parseFloat(a.getAttribute(attr));
+  });
+  items.forEach(function(item) { wrap.appendChild(item); });
+  var vals = items.map(function(item) { return Math.abs(parseFloat(item.getAttribute(attr))); });
+  var maxVal = Math.max.apply(null, vals);
+  maxVal = Math.max(maxVal, 0.01);
+  items.forEach(function(item) {
+    var val = parseFloat(item.getAttribute(attr));
+    var absVal = Math.abs(val);
+    var widthPct = Math.max(absVal / maxVal * 100, 3);
+    var fill = item.querySelector('.bar-fill');
+    var pct = item.querySelector('.bar-pct');
+    if (fill) {
+      fill.style.width = widthPct + '%';
+      fill.style.background = isChange ? (val >= 0 ? 'var(--volt)' : 'var(--ember)') : 'var(--volt)';
+    }
+    if (pct) {
+      pct.textContent = isChange ? (val >= 0 ? '+' : '') + val.toFixed(1) + '%' : val.toFixed(2) + 'x';
+      pct.style.color = isChange ? (val >= 0 ? 'var(--volt)' : 'var(--ember)') : 'var(--volt)';
+    }
+  });
+}
+</script>"""
 
 STATS_STRIP = """<div class="stats-strip"><span class="stats-item"><b>SPY</b> ${spy_price:.2f} <span class="{spy_cls}">{spy_5d:+.2f}% 5d</span></span><span class="stats-item"><b>VIX</b> {vix:.1f}</span><span class="stats-item">{regime}</span></div>"""
 
@@ -229,7 +276,7 @@ SECTOR_CARD = """<div class="card tag-card" id="tag-{anchor}" style="display:non
 <div class="chart-inline" id="chart-{anchor}"></div>
 </div></div>"""
 
-HIGHLIGHT_ROW = """<tr><td class="sym sym-link" onclick="showChart('{symbol}','{tag_name}')">{symbol}</td><td class="num">${price:.2f}</td><td><span class="badge {reason_cls}" title="{horizon}">{reason}</span></td><td class="num">{rs_percentile}</td><td class="num {dist_cls}">{entry_str}</td><td class="num {stop_cls}">{stop_display}</td><td class="num">${target:.2f}</td><td class="num">{rr}</td><td class="num">${risk_dollars}</td></tr>"""
+HIGHLIGHT_ROW = """<tr><td class="sym sym-link" onclick="showChart('{symbol}','{tag_name}')" title="{liquidity_warning}">{symbol}</td><td class="num">${price:.2f}</td><td><span class="badge {reason_cls}" title="{horizon}">{reason}</span></td><td class="num">{rs_percentile}</td><td class="num {dist_cls}">{entry_str}</td><td class="num {stop_cls}">{stop_display}</td><td class="num">${target:.2f}</td><td class="num">{rr}</td><td class="num">${risk_dollars}</td></tr>"""
 
 
 class ReportGenerator:
@@ -296,9 +343,12 @@ class ReportGenerator:
             bg = "var(--volt)" if chg >= 0 else "var(--ember)"
             pct_clr = "var(--volt)" if chg >= 0 else "var(--ember)"
             sign = '+' if chg >= 0 else ''
-            bars.append(f'<div class="bar-item" onclick="showTag(\'{s.name}\')" title="{s.name}: {sign}{chg:.2f}%"><span class="bar-label">{s.name}</span><div class="bar-fill" style="width:{width_pct:.0f}%;background:{bg}"></div><span class="bar-pct" style="color:{pct_clr}">{sign}{chg:.1f}%</span></div>')
+            rr_vals = [h.rr for h in s.highlights if h.rr > 0]
+            avg_rr = round(sum(rr_vals) / len(rr_vals), 2) if rr_vals else 0
+            bars.append(f'<div class="bar-item" onclick="showTag(\'{s.name}\')" title="{s.name}: {sign}{chg:.2f}%" data-change="{chg}" data-rr="{avg_rr}"><span class="bar-label">{s.name}</span><div class="bar-fill" style="width:{width_pct:.0f}%;background:{bg}"></div><span class="bar-pct" style="color:{pct_clr}">{sign}{chg:.1f}%</span></div>')
         parts.append(BAR_CHART_HTML.format(bars=''.join(bars)))
         parts.append(BAR_CHART_JS)
+        parts.append(BAR_SORT_JS)
         parts.append(KEYBOARD_JS)
         parts.append("""<script>
 function exportHighlightsCSV() {
@@ -477,13 +527,15 @@ function exportHighlightsCSV() {
                         stop_display = f"${h.stop:.2f} ({atr_multiple:.1f}x ATR)"
                     else:
                         stop_display = f"${h.stop:.2f}"
+                    liquidity_warning = getattr(h, 'liquidity_warning', None) or ''
                     return HIGHLIGHT_ROW.format(
                         symbol=h.symbol, tag_name=s.name, price=h.price,
                         reason=reason_display, reason_cls=reason_map.get(h.reason, 'badge-neutral'),
                         entry_str=entry_str, dist_cls=dist_cls,
                         stop_display=stop_display, stop_cls=stop_cls, target=h.target, rr=rr_str,
                         risk_dollars=risk_str, horizon=horizon_str,
-                        rs_percentile=rs_display)
+                        rs_percentile=rs_display,
+                        liquidity_warning=liquidity_warning)
 
                 active_threshold = 0.05  # matches portfolio_config.yaml active_entry_threshold
                 active = [h for h in s.highlights if getattr(h, 'entry_distance_pct', 0) <= active_threshold * 100]

@@ -312,6 +312,60 @@ def test_csv_export_button(tmp_path):
     assert 'text/csv' in content
 
 
+def test_bar_chart_has_rr_toggle(tmp_path):
+    """Bar chart should have 'By Avg R:R' toggle button and data-rr attributes on bar items."""
+    market = MarketOverview(
+        date='2026-06-19', regime='bull_moderate', confidence=70,
+        reasoning='Market is steady.', spy_price=525.0, spy_change_5d=1.2,
+        vix=14.5, vix_status='low',
+    )
+    sectors = [
+        SectorAnalysis(
+            name='Semiconductors', etf='SMH', stock_count=2,
+            daily_change=2.5, ret_3m=15.0, rs_percentile=85.0,
+            trend='uptrend', above_ema50=True,
+            outlook='Strong demand from AI.',
+            key_drivers=[{'text': 'AI boom'}], risks=[{'text': 'Supply chain'}],
+            highlights=[
+                StockHighlight('NVDA', 'NVIDIA', 950, 2.5e12, 'Breakout',
+                               'Broke 60d high', 950, 900, 1100, 3.0,
+                               time_horizon='Short (3-10d)'),
+                StockHighlight('AMD', 'AMD', 150, 1.5e11, 'Near Support',
+                               'At support', 148, 142, 160, 2.0,
+                               time_horizon='Swing (5-20d)'),
+            ],
+        ),
+        SectorAnalysis(
+            name='Energy', etf='XLE', stock_count=1,
+            daily_change=-1.5, ret_3m=5.0, rs_percentile=40.0,
+            trend='downtrend', above_ema50=False,
+            outlook='Weak oil demand.',
+            highlights=[
+                StockHighlight('XOM', 'Exxon', 110, 4e11, 'Near Support',
+                               'At support', 109, 105, 115, 2.5,
+                               time_horizon='Swing (5-20d)'),
+            ],
+        ),
+    ]
+    result = {
+        'market': market, 'sectors': sectors, 'focus_summary': None,
+        'timestamp': '2026-06-19T22:00',
+    }
+    gen = ReportGenerator(reports_dir=tmp_path)
+    content = open(gen.generate_report(result)).read()
+    # Toggle buttons exist
+    assert 'By Change %' in content
+    assert 'By Avg R:R' in content
+    # data-rr attributes exist on bar items (avg of highlights R:R)
+    # Semiconductors: (3.0 + 2.0) / 2 = 2.5; Energy: 2.5 / 1 = 2.5
+    assert 'data-rr="2.5"' in content or 'data-rr="2.50"' in content
+    # data-change attributes exist
+    assert 'data-change="2.5"' in content or 'data-change="2.50"' in content
+    # setBarSort function exists
+    assert 'setBarSort' in content
+    assert 'function setBarSort' in content or 'setBarSort=function' in content
+
+
 def test_entry_type_rendered_in_report(tmp_path):
     """Entry column should show order type: market='now', limit='(Limit)', stop-limit='(Stop)'."""
     market = MarketOverview(
