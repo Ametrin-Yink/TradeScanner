@@ -67,7 +67,7 @@ def run_sector_scan(test_symbols=None):
 
         analyzer = SectorAnalyzer(db=Database())
         result = analyzer.analyze()
-        report_path = ReportGenerator().generate_report(result)
+        report_path = ReportGenerator(db=db).generate_report(result)
 
         sectors_count = len(result['sectors'])
         total_stocks = sum(s.stock_count for s in result['sectors'])

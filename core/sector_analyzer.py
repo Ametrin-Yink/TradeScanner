@@ -214,51 +214,12 @@ class SectorAnalyzer:
             focus_summary (FocusSummary), timestamp
         """
         today = datetime.now().strftime('%Y-%m-%d')
-        status = self.db.load_workflow_status(today) or {}
 
-        # Step 1: Market Overview (skip if done today)
-        if 'market_overview_done' not in status:
-            market = self._analyze_market()
-            status['market_overview_done'] = True
-            self.db.save_workflow_status({'run_date': today, 'status_data': json.dumps(status)})
-        else:
-            market = self._analyze_market()  # fast enough to re-run without AI
-
-        # Step 2: Sector Analysis (skip if done today)
-        if 'sector_analysis_done' not in status:
-            sectors = self._analyze_all_sectors(market)
-            status['sector_analysis_done'] = True
-            self.db.save_workflow_status({'run_date': today, 'status_data': json.dumps(status)})
-        else:
-            sectors = self._load_sector_analyses(today)
-            if sectors is None:
-                sectors = self._analyze_all_sectors(market)
-                status['sector_analysis_done'] = True
-                self.db.save_workflow_status({'run_date': today, 'status_data': json.dumps(status)})
-
-        # Step 2b: S/R Refresh (skip if done today)
-        if 'sr_refresh_done' not in status:
-            self._refresh_sr_levels()
-            status['sr_refresh_done'] = True
-            self.db.save_workflow_status({'run_date': today, 'status_data': json.dumps(status)})
-
-        # Step 3: Highlights (skip if done today)
-        if 'highlights_done' not in status:
-            self._find_stock_highlights(sectors)
-            status['highlights_done'] = True
-            self.db.save_workflow_status({'run_date': today, 'status_data': json.dumps(status)})
-
-        # Step 4: Focus Summary (skip if done today)
-        if 'focus_summary_done' not in status:
-            focus = self._generate_focus_summary(market, sectors)
-            status['focus_summary_done'] = True
-            self.db.save_workflow_status({'run_date': today, 'status_data': json.dumps(status)})
-        else:
-            focus = self._load_focus_summary(today)
-            if focus is None:
-                focus = self._generate_focus_summary(market, sectors)
-                status['focus_summary_done'] = True
-                self.db.save_workflow_status({'run_date': today, 'status_data': json.dumps(status)})
+        market = self._analyze_market()
+        sectors = self._analyze_all_sectors(market)
+        self._refresh_sr_levels()
+        self._find_stock_highlights(sectors)
+        focus = self._generate_focus_summary(market, sectors)
 
         return {
             'market': market, 'sectors': sectors,
@@ -891,14 +852,3 @@ class SectorAnalyzer:
 
     # ------------------------------------------------------------------
     # Checkpoint stubs (task 2.2) — called from analyze() when a
-    # pipeline step was completed in a previous run.  TODO implement DB
-    # persistence so these return real cached data instead of empty stubs.
-    # ------------------------------------------------------------------
-
-    def _load_sector_analyses(self, today: str) -> List[SectorAnalysis]:
-        """Load sector analyses from persisted cache. Returns None if not cached."""
-        return None  # caller falls back to re-running
-
-    def _load_focus_summary(self, today: str) -> FocusSummary:
-        """Load focus summary from persisted cache. Returns None if not cached."""
-        return None  # caller falls back to re-running
