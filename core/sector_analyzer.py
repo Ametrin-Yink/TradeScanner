@@ -37,9 +37,6 @@ class StockHighlight:
     stop: float = 0.0
     target: float = 0.0
     rr: float = 0.0
-    position_size: int = 0
-    position_cost: float = 0.0
-    risk_dollars: float = 0.0
     time_horizon: str = ''
     entry_type: str = 'market'
     earnings_warning: Optional[str] = None
@@ -168,42 +165,42 @@ def _select_diverse(candidates, max_picks=3):
 
 
 def _enforce_setup_diversity(sectors):
-    """Report-level diversity cap: if any setup type >60% of total picks,
-    remove lowest-scored excess until within the cap.
+    """Report-level diversity cap: no single setup type may exceed max_pct
+    of the final pick count. Uses the closed-form solution:
+        R >= (count - total * max_pct) / (1 - max_pct)
+    where R is the number to remove from the overrepresented type.
 
     Modifies sectors in-place by removing highlights from their lists.
     """
+    import math
     pcfg = _load_portfolio_config()
-    max_pct = pcfg.get('scoring', {}).get('max_pct_from_single_setup', 0.60)
+    max_pct = pcfg.get('scoring', {}).get('max_pct_from_single_setup', 0.50)
 
-    # Collect all picks with their sector reference
-    all_picks = []
-    for sector in sectors:
-        for h in sector.highlights:
-            all_picks.append((sector, h))
-
+    all_picks = [(s, h) for s in sectors for h in s.highlights]
     if not all_picks:
         return
 
     total = len(all_picks)
-
-    # Count by reason
     reason_counts = {}
     for _, h in all_picks:
         reason_counts[h.reason] = reason_counts.get(h.reason, 0) + 1
 
-    for reason, count in reason_counts.items():
-        max_allowed = int(total * max_pct)
-        if count > max_allowed:
-            to_remove = count - max_allowed
-            # Find picks of this reason, sorted by score ascending
-            candidates = [(s, h) for s, h in all_picks if h.reason == reason]
-            candidates.sort(key=lambda x: _composite_score(x[1]))
-
-            for i in range(to_remove):
-                sector, h = candidates[i]
-                if h in sector.highlights:
-                    sector.highlights.remove(h)
+    # Process reasons from most overrepresented to least
+    sorted_reasons = sorted(reason_counts.items(), key=lambda x: x[1], reverse=True)
+    for reason, count in sorted_reasons:
+        # Account for picks already removed in prior iterations
+        current_total = sum(len(s.highlights) for s in sectors)
+        current_count = sum(1 for s in sectors for h in s.highlights if h.reason == reason)
+        excess = current_count - current_total * max_pct
+        if excess <= 0:
+            continue
+        to_remove = math.ceil(excess / (1 - max_pct))
+        candidates = [(s, h) for s in sectors for h in s.highlights if h.reason == reason]
+        candidates.sort(key=lambda x: _composite_score(x[1]))
+        for i in range(min(to_remove, len(candidates))):
+            sector, h = candidates[i]
+            if h in sector.highlights:
+                sector.highlights.remove(h)
 
 
 def _deduplicate_across_sectors(sectors):
@@ -578,22 +575,37 @@ class SectorAnalyzer:
                     continue
 
                 price = cache['current_price']
+                market_cap = stock.get('market_cap', 0) or 0
+
+                # Filter penny stocks and micro-caps
+                if price < 5.00 or market_cap < 500_000_000:
+                    continue
+
                 atr_pct = cache.get('atr_pct', 0.03) or 0.03
 
                 atr = price * atr_pct
                 rs_percentile = cache.get('rs_percentile', 0) or 0
                 ema21 = cache.get('ema21')
                 ema50 = cache.get('ema50')
-                market_cap = stock.get('market_cap', 0) or 0
                 name = stock.get('name', symbol) or symbol
 
-                # Parse supports/resistances from cache
-                try:
-                    support_levels = json.loads(cache.get('supports', '[]') or '[]')
-                    resistance_levels = json.loads(cache.get('resistances', '[]') or '[]')
-                except (json.JSONDecodeError, TypeError):
-                    support_levels = []
-                    resistance_levels = []
+                # Parse supports/resistances from cache (may already be parsed)
+                supports_raw = cache.get('supports', []) or []
+                resistances_raw = cache.get('resistances', []) or []
+                if isinstance(supports_raw, str):
+                    try:
+                        support_levels = json.loads(supports_raw)
+                    except (json.JSONDecodeError, TypeError):
+                        support_levels = []
+                else:
+                    support_levels = supports_raw
+                if isinstance(resistances_raw, str):
+                    try:
+                        resistance_levels = json.loads(resistances_raw)
+                    except (json.JSONDecodeError, TypeError):
+                        resistance_levels = []
+                else:
+                    resistance_levels = resistances_raw
 
                 # Cluster raw levels into zones
                 support_zones = cluster_levels(support_levels, tolerance=0.005)
@@ -603,7 +615,7 @@ class SectorAnalyzer:
                 high_60d = cache.get('high_60d')
                 low_60d = cache.get('low_60d')
                 volume_ratio = cache.get('volume_ratio', 1.0) or 1.0
-                near_threshold = max(0.01, atr_pct * 0.8)
+                near_threshold = max(0.015, atr_pct * 1.5)
                 ret_5d = cache.get('ret_5d', 0) or 0
 
                 # Fetch OHLC data for measured-move/fib target and setup detection
@@ -618,15 +630,18 @@ class SectorAnalyzer:
                 detail = None
                 time_horizon = 'swing'
 
-                if high_60d and price > high_60d and volume_ratio > 1.0:
+                if high_60d and price > high_60d and volume_ratio > 0.8:
                     reason = 'Breakout'
                     detail = f"Broke 60d high ${high_60d:.2f}, {volume_ratio:.1f}x vol"
                     time_horizon = 'swing'
+                elif high_60d and price > high_60d * 0.98 and price <= high_60d and volume_ratio > 1.0 and rs_percentile >= 80:
+                    reason = 'Breakout'
+                    detail = f"Near 60d high ${high_60d:.2f} ({((price/high_60d)-1)*100:.1f}%), {volume_ratio:.1f}x vol"
+                    time_horizon = 'swing'
                 elif low_60d and price > low_60d and (price - low_60d) / low_60d <= near_threshold:
                     reason = 'Near Support'
-                    # Selling pressure should be fading at support
-                    if volume_ratio >= 1.5:
-                        continue  # skip — elevated volume at support = risk of breakdown
+                    if volume_ratio >= 2.0:
+                        continue  # skip — extreme volume at support = breakdown risk
                     dist = (price - low_60d) / low_60d * 100
                     detail = f"{dist:.1f}% above 60d low ${low_60d:.2f}"
                     time_horizon = 'swing'
@@ -750,8 +765,31 @@ class SectorAnalyzer:
                 if stop is None:
                     continue  # skip -- no valid stop/target combo
 
+                # Skip if stop==entry (computation failure)
+                if stop >= entry:
+                    continue
+
+                # Require minimum stop distance: 1.0x ATR for position trades, 0.7x for swing
+                stop_atr_multiple = (entry - stop) / max(atr, 0.01)
+                is_position = reason in ('Strong Momentum', 'ADX Trend')
+                min_atr = 1.0 if is_position else 0.7
+                if stop_atr_multiple < min_atr:
+                    # Widen stop to 1.5x ATR if chart S/R produced too-tight level
+                    atr_stop = entry - atr * 1.5
+                    if atr_stop < entry:
+                        stop = round(atr_stop, 2)
+                    else:
+                        continue  # can't set valid stop
+
                 rr = round((target - entry) / max(entry - stop, 0.01), 1)
                 rr = min(rr, 20.0)
+
+                # Enforce minimum R:R from config
+                pconfig = _load_portfolio_config()
+                scoring_cfg = pconfig.get('scoring', {})
+                min_rr = scoring_cfg.get('min_rr_position', 2.0) if is_position else scoring_cfg.get('min_rr_swing', 2.5)
+                if rr < min_rr:
+                    continue  # skip — R:R below minimum threshold
 
                 highlight = StockHighlight(
                     symbol=symbol, name=name, price=price,
@@ -780,33 +818,7 @@ class SectorAnalyzer:
                 highlight.atr_pct = atr_pct
                 highlight.entry_distance_pct = abs(entry - price) / price * 100
 
-                # Per-trade position sizing (based on actual entry, not current price)
-                pconfig = _load_portfolio_config()
-                risk_per_share = highlight.entry - highlight.stop
-                max_risk_dollars = pconfig['account_value'] * pconfig['risk_per_trade_pct']
-                position_size = int(max_risk_dollars / risk_per_share) if risk_per_share > 0 else 0
-                position_cost = position_size * highlight.entry
-                max_cost = pconfig['account_value'] * pconfig['max_position_pct']
-                if position_cost > max_cost:
-                    position_size = int(max_cost / highlight.entry)
-                    position_cost = position_size * highlight.entry
-
-                highlight.position_size = position_size
-                highlight.position_cost = position_cost
-                highlight.risk_dollars = position_size * risk_per_share
-
-                # Liquidity check: position must be < 5% of average daily volume
-                avg_volume = cache.get('avg_volume_20d', 0)
-                if avg_volume > 0 and position_size / avg_volume > 0.05:
-                    continue  # too illiquid for position size
-
-                # Liquidity warning: flag if position > 2% of daily volume
-                if avg_volume > 0:
-                    vol_pct = position_size / avg_volume * 100
-                    if vol_pct > 2.0:
-                        highlight.liquidity_warning = f"Position is {vol_pct:.1f}% of daily vol"
-
-                # Earnings proximity check
+                # Earnings proximity warning (informational only, no position adjustment)
                 earnings_date = None
                 try:
                     earnings_date = self.db.get_stock_earnings_date(symbol)
@@ -815,13 +827,7 @@ class SectorAnalyzer:
                 if earnings_date:
                     days_to_earnings = (datetime.strptime(earnings_date, '%Y-%m-%d').date() - datetime.now().date()).days
                     if 0 <= days_to_earnings <= 5:
-                        position_size = int(position_size * 0.5)
-                        position_cost = position_size * entry
-                        risk_dollars = position_size * risk_per_share
-                        highlight.position_size = position_size
-                        highlight.position_cost = position_cost
-                        highlight.risk_dollars = risk_dollars
-                        highlight.earnings_warning = f"Earnings in {days_to_earnings}d -- halved position"
+                        highlight.earnings_warning = f"Earnings in {days_to_earnings}d"
 
                 # Set time horizon display
                 horizon_map = {
@@ -870,9 +876,9 @@ class SectorAnalyzer:
                     'target_price': h.target,
                     'rr': h.rr,
                     'composite_score': _composite_score(h),
-                    'position_size': h.position_size,
-                    'position_cost': h.position_cost,
-                    'risk_dollars': h.risk_dollars,
+                    'position_size': 0,
+                    'position_cost': 0,
+                    'risk_dollars': 0,
                     'current_price': h.price,
                     'entry_distance_pct': getattr(h, 'entry_distance_pct', 0.0),
                     'max_days': 20 if 'Swing' in (h.time_horizon or '') else 40,

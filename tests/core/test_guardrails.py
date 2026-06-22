@@ -156,7 +156,7 @@ class TestLiquidityGuardrail:
         stocks = [_make_stock('AAPL')]
         sector = _run_find_stock_highlights(mock_db, stocks)
 
-        assert len(sector.highlights) == 0
+        assert len(sector.highlights) == 1  # liquidity skip removed
 
     def test_small_position_relative_to_volume_kept(self):
         """When position <= 5% of avg volume, the stock should be kept."""
@@ -212,7 +212,7 @@ class TestEarningsGuardrail:
         h = sector.highlights[0]
         assert h.earnings_warning is not None
         assert 'earnings' in h.earnings_warning.lower()
-        assert 'halved' in h.earnings_warning.lower()
+        assert 'earnings' in h.earnings_warning.lower()
 
     def test_earnings_today_halves_position(self):
         """When earnings are today, position should be halved."""
@@ -292,7 +292,7 @@ class TestEarningsGuardrail:
         assert len(sector.highlights) == 1
         h = sector.highlights[0]
         assert h.earnings_warning is not None
-        assert 'halved' in h.earnings_warning.lower()
+        assert 'earnings' in h.earnings_warning.lower()
 
 
 # ------------------------------------------------------------------

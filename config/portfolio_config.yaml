@@ -1,9 +1,4 @@
 # config/portfolio_config.yaml
-account_value: 50000
-risk_per_trade_pct: 0.01 # 1% of account per trade
-max_position_pct: 0.20 # no single position > 20% of account
-max_entry_distance_pct: 0.10 # entry must be within 10% of current price, else defaults to price
-active_entry_threshold: 0.05 # entries within 5% are "active", beyond are "pullback watch"
 
 # Stop/target computation parameters
 stop_target:

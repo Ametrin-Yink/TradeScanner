@@ -82,8 +82,8 @@ def trigger_scan():
     try:
         data = request.get_json(silent=True) or {}
 
-        # Check cache
-        if _last_scan_result and _last_scan_time:
+        # Check cache (skip if force=true)
+        if not data.get('force') and _last_scan_result and _last_scan_time:
             age = (datetime.now() - _last_scan_time).total_seconds()
             if age < _SCAN_CACHE_SECONDS:
                 return jsonify({**_last_scan_result, 'cached': True})
@@ -361,8 +361,6 @@ def get_settings():
     cfg = _load_app_config()
     return jsonify({'settings': {
         'scan_time': cfg.get('scan_time', '06:00'),
-        'account_value': cfg.get('account_value', 50000),
-        'risk_per_trade_pct': cfg.get('risk_per_trade_pct', 1.0),
         'ai_api_key': cfg.get('ai_api_key', ''),
         'ai_model': cfg.get('ai_model', 'deepseek-chat'),
     }})

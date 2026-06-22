@@ -293,27 +293,20 @@ def test_avg_volume_20d_populated():
     assert data['avg_volume_20d'] == pytest.approx(expected_avg)
 
 
-def test_volume_warning_flagged():
-    """Position >2% of avg daily volume should get a liquidity_warning."""
+def test_volume_data_present():
+    """Stock with normal avg_volume_20d should still be highlighted (liquidity skip removed)."""
     from core.sector_analyzer import SectorAnalyzer
     from core.sector_analyzer import SectorAnalysis
     import json
     from unittest.mock import patch
 
     mock_db = MagicMock()
-
-    # With account=50000, risk_per_trade=1%, entry=100, stop=95,
-    # position_size = int(500 / 5) = 100 shares.
-    # vol_pct = 100 / avg_volume * 100.
-    # For warning (>2%): avg_volume < 5_000 (100/5000*100=2%).
-    # For skip (>5%): avg_volume < 2_000 (100/2000*100=5%).
-    # Use avg_volume = 3_000 => vol_pct = 3.33% (>2% warning, <5% kept).
     mock_db.get_tier1_cache.return_value = {
         'current_price': 100.0,
         'atr_pct': 0.03,
         'rs_percentile': 85,
         'volume_ratio': 2.0,
-        'avg_volume_20d': 3_000,  # 3.33% of daily vol: warning but not skipped
+        'avg_volume_20d': 3_000,
         'high_60d': 150.0,
         'low_60d': 80.0,
         'ema21': 95.0,
@@ -345,5 +338,4 @@ def test_volume_warning_flagged():
 
     assert len(sector.highlights) == 1
     h = sector.highlights[0]
-    assert h.liquidity_warning is not None
-    assert '% of daily vol' in h.liquidity_warning
+    assert h.symbol == 'TEST'

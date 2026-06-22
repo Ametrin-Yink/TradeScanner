@@ -52,7 +52,7 @@ class TagManager:
     def get_tag_stocks(self, tag_name: str, db: Database) -> List[Dict]:
         conn = db.get_connection()
         rows = conn.execute("""
-            SELECT s.symbol,
+            SELECT s.symbol, s.name, COALESCE(s.market_cap, 0),
                    COALESCE(t1.ret_5d, 0) as ret_5d,
                    COALESCE(t1.volume_ratio, 1.0) as vol_ratio
             FROM stocks s
@@ -65,7 +65,8 @@ class TagManager:
         symbols = [r[0] for r in rows]
         daily_changes = self._get_daily_changes(symbols, db)
         return [
-            {'symbol': r[0], 'ret_5d': r[1], 'vol_ratio': r[2],
+            {'symbol': r[0], 'name': r[1], 'market_cap': r[2],
+             'ret_5d': r[3], 'vol_ratio': r[4],
              'daily_change': daily_changes.get(r[0])}
             for r in rows
         ]

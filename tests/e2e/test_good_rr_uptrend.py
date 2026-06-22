@@ -134,17 +134,15 @@ def test_near_support_atr_threshold_wider_than_2pct(seeded_db, mock_ai):
     conn.execute("INSERT INTO stock_tags (symbol, tag_id) VALUES ('ATRSUP', 3)")
 
     # low_60d=100, atr_pct=0.04
-    # near_threshold = max(0.01, 0.04*0.8) = max(0.01, 0.032) = 0.032 = 3.2%
-    # price=102.5 -> (102.5-100)/100 = 0.025 = 2.5%
-    # 2.5% <= 3.2% -> within ATR threshold
-    # 2.5% > 2% -> would fail old hardcoded 0.02 check
-    # volume_ratio=0.8 < 1.0 -> passes volume check
+    # near_threshold = max(0.015, 0.04*1.5) = 0.06 = 6%
+    # price=102.5 -> (102.5-100)/100 = 0.025 = 2.5% <= 6% -> within threshold
+    # high_60d=160 gives enough room for R:R > 2.5 after stop computation
     conn.execute("""
         INSERT INTO tier1_cache
         (symbol, current_price, high_60d, low_60d, atr_pct, rs_percentile,
          ema21, ema50, volume_ratio, supports, resistances, ret_5d)
-        VALUES ('ATRSUP', 102.5, 120.0, 100.0, 0.04, 50.0,
-                105.0, 100.0, 0.8, '[100.0]', '[120.0]', 1.0)
+        VALUES ('ATRSUP', 102.5, 160.0, 100.0, 0.04, 50.0,
+                105.0, 100.0, 0.8, '[100.0]', '[160.0]', 1.0)
     """)
     conn.execute("""
         INSERT INTO market_data (symbol, date, open, high, low, close, volume)
@@ -177,15 +175,15 @@ def test_near_support_skips_elevated_volume(seeded_db, mock_ai):
     conn.execute("INSERT INTO stock_tags (symbol, tag_id) VALUES ('VOLSUP', 3)")
 
     # low_60d=100, atr_pct=0.025
-    # near_threshold = max(0.01, 0.025*0.8) = max(0.01, 0.02) = 0.02 = 2%
-    # price=101.5 -> (101.5-100)/100 = 0.015 = 1.5% <= 2% -> within threshold
-    # volume_ratio=1.5 >= 1.0 -> SKIP
+    # near_threshold = max(0.015, 0.025*1.5) = 0.0375 = 3.75%
+    # price=101.5 -> (101.5-100)/100 = 0.015 = 1.5% <= 3.75% -> within threshold
+    # volume_ratio=2.5 >= 2.0 -> SKIP (extreme volume at support)
     conn.execute("""
         INSERT INTO tier1_cache
         (symbol, current_price, high_60d, low_60d, atr_pct, rs_percentile,
          ema21, ema50, volume_ratio, supports, resistances, ret_5d)
         VALUES ('VOLSUP', 101.5, 120.0, 100.0, 0.025, 50.0,
-                105.0, 100.0, 1.5, '[100.0]', '[120.0]', 1.0)
+                105.0, 100.0, 2.5, '[100.0]', '[120.0]', 1.0)
     """)
     conn.execute("""
         INSERT INTO market_data (symbol, date, open, high, low, close, volume)
@@ -215,15 +213,16 @@ def test_near_support_passes_low_volume(seeded_db, mock_ai):
     conn.execute("INSERT INTO stock_tags (symbol, tag_id) VALUES ('LOWVOL', 3)")
 
     # low_60d=100, atr_pct=0.02
-    # near_threshold = max(0.01, 0.02*0.8) = max(0.01, 0.016) = 0.016 = 1.6%
-    # price=101.2 -> (101.2-100)/100 = 0.012 = 1.2% <= 1.6% -> within threshold
-    # volume_ratio=0.7 < 1.0 -> passes volume check
+    # near_threshold = max(0.015, 0.02*1.5) = 0.03 = 3%
+    # price=101.2 -> (101.2-100)/100 = 0.012 = 1.2% <= 3% -> within threshold
+    # volume_ratio=0.7 < 2.0 -> passes volume check
+    # high_60d=160 gives enough room for R:R > 2.5 after stop computation
     conn.execute("""
         INSERT INTO tier1_cache
         (symbol, current_price, high_60d, low_60d, atr_pct, rs_percentile,
          ema21, ema50, volume_ratio, supports, resistances, ret_5d)
-        VALUES ('LOWVOL', 101.2, 120.0, 100.0, 0.02, 50.0,
-                105.0, 100.0, 0.7, '[100.0]', '[120.0]', 1.0)
+        VALUES ('LOWVOL', 101.2, 160.0, 100.0, 0.02, 50.0,
+                105.0, 100.0, 0.7, '[100.0]', '[160.0]', 1.0)
     """)
     conn.execute("""
         INSERT INTO market_data (symbol, date, open, high, low, close, volume)

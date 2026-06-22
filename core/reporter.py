@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 STYLE = """
 :root{--ink:#0b1019;--paper:#141c26;--divider:#1c2738;--gold:#d4a853;--gold-dim:rgba(212,168,83,.12);--frost:#a8b9d1;--ash:#5d6d80;--ember:#e0553d;--volt:#7ecb5a;--radius:6px}
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:var(--ink);color:var(--frost);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:24px;max-width:1100px;margin:0 auto;line-height:1.5}
+body{background:var(--ink);color:var(--frost);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:24px;max-width:1100px;margin:0 auto;line-height:1.5;font-size:13px}
 h1{font-size:20px;font-weight:600;letter-spacing:-.01em;margin-bottom:2px}
 h2{font-size:15px;font-weight:600;margin:28px 0 10px;color:var(--gold)}
 h3{font-size:13px;font-weight:600;margin:0}
@@ -37,10 +37,10 @@ th{text-align:left;color:var(--ash);font-weight:500;padding:4px 8px;border-botto
 td{padding:4px 8px;border-bottom:1px solid rgba(28,39,56,.5);font-family:'JetBrains Mono','Cascadia Code','Consolas',monospace;font-size:10px}
 td.num{text-align:right}
 td.name{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
-tr:hover{background:rgba(212,168,83,.03)}
+tr:hover{background:rgba(212,168,83,.08)}
 .up{color:var(--volt)}.down{color:var(--ember)}.dim{color:var(--ash)}
 .footer{text-align:center;font-size:10px;color:var(--ash);margin-top:32px;padding:16px 0;border-top:1px solid var(--divider)}
-.detail-row{margin:3px 0;font-size:11px;line-height:1.5}
+.detail-row{margin:3px 0;font-size:13px;line-height:1.5}
 .detail-label{color:var(--ash);font-size:9px;text-transform:uppercase;letter-spacing:.06em;margin-right:6px}
 .driver,.risk{display:block;font-size:11px;line-height:1.5;padding:3px 0 3px 10px;margin:1px 0;border-left:2px solid}
 .driver{border-left-color:rgba(212,168,83,.4)}.risk{border-left-color:rgba(224,85,61,.4)}
@@ -277,7 +277,7 @@ SECTOR_CARD = """<div class="card tag-card" id="tag-{anchor}" style="display:non
 <div class="chart-inline" id="chart-{anchor}"></div>
 </div></div>"""
 
-HIGHLIGHT_ROW = """<tr><td class="sym sym-link" onclick="showChart('{symbol}','{tag_name}')" title="{liquidity_warning}">{symbol}</td><td class="num">${price:.2f}</td><td><span class="badge {reason_cls}" title="{horizon}">{reason}</span></td><td class="num">{rs_percentile}</td><td class="num {dist_cls}">{entry_str}</td><td class="num {stop_cls}">{stop_display}</td><td class="num">${target:.2f}</td><td class="num">{rr}</td><td class="num">${risk_dollars}</td></tr>"""
+HIGHLIGHT_ROW = """<tr><td class="sym sym-link" onclick="showChart('{symbol}','{tag_name}')" title="{liquidity_warning}">{symbol}</td><td class="num">${price:.2f}</td><td><span class="badge {reason_cls}" title="{horizon}">{reason}</span></td><td class="num">{rs_percentile}</td><td class="num {dist_cls}">{entry_str}</td><td class="num {stop_cls}">{stop_display}</td><td class="num">${target:.2f}</td><td class="num">{rr}</td></tr>"""
 
 
 class ReportGenerator:
@@ -354,13 +354,13 @@ class ReportGenerator:
         parts.append("""<script>
 function exportHighlightsCSV() {
   var rows = [
-    ["Symbol","Sector","Setup","RS","Entry+Dist","Stop","Target","R:R","Risk$"],
+    ["Symbol","Sector","Setup","RS","Entry+Dist","Stop","Target","R:R"],
   ];
   document.querySelectorAll(".tag-card").forEach(function(card) {
     var sector = card.querySelector("h3").textContent.trim();
     card.querySelectorAll("tbody tr").forEach(function(tr) {
       var cells = tr.querySelectorAll("td");
-      if (cells.length >= 9) {
+      if (cells.length >= 8) {
         rows.push([
           cells[0].textContent,
           sector,
@@ -370,7 +370,6 @@ function exportHighlightsCSV() {
           cells[5].textContent,
           cells[6].textContent,
           cells[7].textContent,
-          cells[8].textContent,
         ]);
       }
     });
@@ -504,7 +503,6 @@ function exportHighlightsCSV() {
                 def build_row(h):
                     reason_display = h.reason
                     rr_str = f"{h.rr:.1f}x" if h.rr > 0 else "--"
-                    risk_str = f"{getattr(h, 'risk_dollars', 0):,.0f}"
                     horizon_str = getattr(h, 'time_horizon', '--')
                     # RS percentile column
                     rs_val = getattr(h, 'rs_percentile', None)
@@ -548,15 +546,14 @@ function exportHighlightsCSV() {
                         reason=reason_display, reason_cls=reason_map.get(h.reason, 'badge-neutral'),
                         entry_str=entry_str, dist_cls=dist_cls,
                         stop_display=stop_display, stop_cls=stop_cls, target=h.target, rr=rr_str,
-                        risk_dollars=risk_str, horizon=horizon_str,
-                        rs_percentile=rs_display,
+                        horizon=horizon_str, rs_percentile=rs_display,
                         liquidity_warning=liquidity_warning)
 
-                active_threshold = 0.05  # matches portfolio_config.yaml active_entry_threshold
+                active_threshold = 0.05
                 active = [h for h in s.highlights if getattr(h, 'entry_distance_pct', 0) <= active_threshold * 100]
                 watch = [h for h in s.highlights if getattr(h, 'entry_distance_pct', 0) > active_threshold * 100]
 
-                table_header = '<table style="margin-top:8px"><thead><tr><th>Symbol</th><th>Price</th><th>Setup</th><th>RS</th><th>Entry+Dist</th><th>Stop</th><th>Target</th><th>R:R</th><th>Risk$</th></tr></thead><tbody>'
+                table_header = '<table style="margin-top:8px"><thead><tr><th>Symbol</th><th>Price</th><th>Setup</th><th>RS</th><th>Entry+Dist</th><th>Stop</th><th>Target</th><th>R:R</th></tr></thead><tbody>'
 
                 parts_html = []
                 if active:
@@ -599,7 +596,8 @@ function exportHighlightsCSV() {
             except Exception:
                 pass
         ai_status = f"AI: {len(sectors) - ai_errors}/{len(sectors)} sectors OK, ${ai_cost:.2f}"
-        parts.append(f'<div class="footer">TradeScanner &middot; {formatted_ts} &middot; {ai_status}</div>')
+        short_ts = datetime.now().strftime('%I:%M %p ET')
+        parts.append(f'<div class="footer">TradeScanner &middot; {ai_status} &middot; Generated {short_ts}</div>')
 
         # Embed OHLC data for offline chart rendering
         all_ohlc = {}

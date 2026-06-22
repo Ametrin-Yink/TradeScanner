@@ -41,8 +41,8 @@ def test_horizon_badge_colors(tmp_path):
     assert 'title="Position (10-40d)' in content
 
 
-def test_table_has_9_columns(tmp_path):
-    """Active Setups table should have exactly 9 columns: Sym, Price, Setup, RS, Entry+Dist, Stop, Target, R:R, Risk$."""
+def test_table_has_8_columns(tmp_path):
+    """Active Setups table should have exactly 8 columns: Sym, Price, Setup, RS, Entry+Dist, Stop, Target, R:R."""
     market = MarketOverview(
         date='2026-06-19', regime='bull_moderate', confidence=70,
         reasoning='Market is steady.', spy_price=525.0, spy_change_5d=1.2,
@@ -68,13 +68,14 @@ def test_table_has_9_columns(tmp_path):
     }
     gen = ReportGenerator(reports_dir=tmp_path)
     content = open(gen.generate_report(result)).read()
-    table_header = '<th>Symbol</th><th>Price</th><th>Setup</th><th>RS</th><th>Entry+Dist</th><th>Stop</th><th>Target</th><th>R:R</th><th>Risk$</th>'
-    assert table_header in content, "Table header should have exactly 9 columns"
+    table_header = '<th>Symbol</th><th>Price</th><th>Setup</th><th>RS</th><th>Entry+Dist</th><th>Stop</th><th>Target</th><th>R:R</th>'
+    assert table_header in content, "Table header should have exactly 8 columns"
     # Verify old column headers are absent
     assert '<th>Name</th>' not in content
     assert '<th>Horizon</th>' not in content
     assert '<th>Size</th>' not in content
     assert '<th>Cost</th>' not in content
+    assert '<th>Risk$</th>' not in content
 
 
 def test_human_readable_timestamp(tmp_path):
