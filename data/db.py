@@ -58,6 +58,7 @@ class Database:
         self.create_recommendations_table()
         self._add_performance_indexes()
         self._cleanup_legacy_tables()
+        self._fix_sndk_inactive()
 
     def _cleanup_legacy_tables(self):
         """Drop legacy tables that are no longer used."""
@@ -67,6 +68,12 @@ class Database:
             conn.execute(f"DROP TABLE IF EXISTS {table}")
         conn.commit()
         logger.info("Cleaned up legacy tables: %s", legacy)
+
+    def _fix_sndk_inactive(self):
+        """Mark SNDK as inactive -- the stock is delisted/no longer traded."""
+        with self.get_connection() as conn:
+            conn.execute("UPDATE stocks SET is_active = 0 WHERE symbol = 'SNDK'")
+            conn.commit()
 
     def _add_performance_indexes(self):
         conn = sqlite3.connect(self.db_path)
@@ -1540,3 +1547,39 @@ CREATE TABLE IF NOT EXISTS ai_confidence_outcomes (
 """
 
 db = Database()
+
+
+def detect_stale_stocks(db: Database, days_unchanged: int = 30) -> list:
+    """Detect stocks with stale (flat) prices.
+
+    Queries market_data for symbols with <= 2 unique close prices
+    in the last N trading days. Logs a warning for each detected stock.
+
+    Args:
+        db: Database instance.
+        days_unchanged: Lookback window in days.
+
+    Returns:
+        List of stale stock symbols.
+    """
+    from datetime import datetime, timedelta
+
+    cutoff = (datetime.now() - timedelta(days=days_unchanged)).strftime('%Y-%m-%d')
+    stale: list = []
+
+    with db.get_connection() as conn:
+        rows = conn.execute("""
+            SELECT symbol, COUNT(DISTINCT close) as unique_closes
+            FROM market_data
+            WHERE date >= ?
+            GROUP BY symbol
+            HAVING unique_closes <= 2
+        """, (cutoff,)).fetchall()
+
+        for row in rows:
+            symbol = row[0]
+            stale.append(symbol)
+            logger.warning("Stale price data detected for %s: only %d unique closes in last %d days",
+                          symbol, row[1], days_unchanged)
+
+    return stale
