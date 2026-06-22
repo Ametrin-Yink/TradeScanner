@@ -421,10 +421,19 @@ function exportHighlightsCSV() {
             prior_recs = []
 
         if prior_recs:
+            # Dedup: same symbol+date kept only once
+            seen = set()
+            deduped = []
+            for r in prior_recs:
+                key = (r['symbol'], r['trade_date'])
+                if key not in seen:
+                    seen.add(key)
+                    deduped.append(r)
+
             parts.append('<div class="card"><div class="card-header fold-toggle collapsed" ')
             parts.append('onclick="this.classList.toggle(\'collapsed\');')
             parts.append('this.nextElementSibling.classList.toggle(\'hidden\')">')
-            parts.append(f'<h3>Prior Picks Recap ({len(prior_recs)})</h3></div>')
+            parts.append(f'<h3>Prior Picks Recap ({len(deduped)} unique, {len(prior_recs)} raw)</h3></div>')
             parts.append('<div class="fold-body hidden">')
 
             # Performance Summary Header
@@ -444,15 +453,6 @@ function exportHighlightsCSV() {
 
             parts.append('<table><thead><tr><th>Symbol</th><th>Date</th><th>Setup</th>'
                          '<th>Entry</th><th>Stop</th><th>Target</th><th>Status</th><th>P&amp;L</th></tr></thead><tbody>')
-
-            # Dedup: same symbol+date kept only once
-            seen = set()
-            deduped = []
-            for r in prior_recs:
-                key = (r['symbol'], r['trade_date'])
-                if key not in seen:
-                    seen.add(key)
-                    deduped.append(r)
 
             for r in deduped[:30]:
                 status_icon = {
