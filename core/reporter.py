@@ -486,10 +486,19 @@ function exportHighlightsCSV() {
                 risks=risks_html or '<span class="dim">--</span>',
                 highlights_html=highlights_html))
 
-        # Track AI status
+        # Track AI status and cost
         ai_errors = sum(1 for s in sectors if 'unavailable' in (s.outlook or ''))
-        ai_status = f"AI: {len(sectors) - ai_errors}/{len(sectors)} sectors OK"
-        # Add cost total from audit log
+        ai_cost = 0.0
+        if self.db:
+            try:
+                row = self.db.get_connection().execute(
+                    "SELECT SUM(cost_estimate) FROM ai_audit_log WHERE DATE(created_at) = DATE('now')"
+                ).fetchone()
+                if row and row[0]:
+                    ai_cost = row[0]
+            except Exception:
+                pass
+        ai_status = f"AI: {len(sectors) - ai_errors}/{len(sectors)} sectors OK, ${ai_cost:.2f}"
         parts.append(f'<div class="footer">TradeScanner &middot; {formatted_ts} &middot; {ai_status}</div>')
 
         # Embed OHLC data for offline chart rendering

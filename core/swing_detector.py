@@ -29,7 +29,7 @@ def detect_swings(df, order: int = None, atr: float = None):
     if atr is None:
         atr = (df['High'] - df['Low']).mean()
 
-    prominence = atr * 0.5
+    prominence = atr
 
     high_idx, _ = find_peaks(df['High'].values, distance=order, prominence=prominence)
     low_idx, _ = find_peaks(-df['Low'].values, distance=order, prominence=prominence)
@@ -333,7 +333,7 @@ def compute_sr_for_symbol(db, symbol: str) -> tuple:
 
         # Use recent 60 bars with order=2 to catch 2-day pullbacks
         recent = df.tail(60)
-        swing_highs, swing_lows = detect_swings(recent, order=2)
+        swing_highs, swing_lows = detect_swings(recent)
         current_price = float(df['Close'].iloc[-1])
         atr = (df['High'] - df['Low']).tail(14).mean()
 

@@ -285,9 +285,8 @@ class SectorAnalyzer:
             result = chat(
                 messages=[{"role": "user", "content": "Summarize the key macro drivers and risks for the US stock market today."}],
                 system=system_prompt,
-                enable_search=False,
+                enable_search=True,
                 search_query=f"US stock market today macro news {datetime.now().strftime('%B %Y')}",
-                temperature=0.3,
             )
             if result:
                 parsed = json.loads(result)
@@ -394,9 +393,8 @@ class SectorAnalyzer:
             result = chat(
                 messages=[{"role": "user", "content": f"What is the outlook for the {sector_name} sector today?"}],
                 system=system_prompt,
-                enable_search=False,
+                enable_search=True,
                 search_query=f"{sector_name} sector stocks news {datetime.now().strftime('%B %Y')}",
-                temperature=0.3,
             )
             if result:
                 parsed = json.loads(result)
@@ -559,6 +557,13 @@ class SectorAnalyzer:
                         detail = f"RS {_ord(int(rs_percentile))} percentile, above EMAs"
                         time_horizon = 'position'
 
+                elif ohlc_df is not None and len(ohlc_df) >= 28:
+                    adx, plus_di, minus_di = _compute_adx(ohlc_df)
+                    if adx and adx > 20 and plus_di > minus_di and ema21 and price > ema21:
+                        reason = 'ADX Trend'
+                        detail = f"ADX {adx:.0f}, +DI > -DI, strong uptrend"
+                        time_horizon = 'position'
+
                 elif low_60d and high_60d:
                     # Good R/R check — only if no other reason matched
                     # Uptrend filter: require at least one confirmation
@@ -613,14 +618,6 @@ class SectorAnalyzer:
                     reason = 'Bull Flag'
                     detail = f"{ret_5d:.1f}% 5d surge, low-vol consolidation"
                     time_horizon = 'swing'
-
-                # ADX Trend: strong trend with directional bias
-                if reason is None and ohlc_df is not None and len(ohlc_df) >= 28:
-                    adx, plus_di, minus_di = _compute_adx(ohlc_df)
-                    if adx and adx > 20 and plus_di > minus_di and ema21 and price > ema21:
-                        reason = 'ADX Trend'
-                        detail = f"ADX {adx:.0f}, +DI > -DI, strong uptrend"
-                        time_horizon = 'position'
 
                 # Resistance Test (standalone if, not elif -- Good R/R's broad
                 # `elif low_60d and high_60d` would shadow it in the chain)
@@ -722,6 +719,9 @@ class SectorAnalyzer:
                         position_size = int(position_size * 0.5)
                         position_cost = position_size * entry
                         risk_dollars = position_size * risk_per_share
+                        highlight.position_size = position_size
+                        highlight.position_cost = position_cost
+                        highlight.risk_dollars = risk_dollars
                         highlight.earnings_warning = f"Earnings in {days_to_earnings}d -- halved position"
 
                 # Set time horizon display
@@ -833,7 +833,6 @@ class SectorAnalyzer:
                 messages=[{"role": "user", "content": data_str}],
                 system=system_prompt,
                 enable_search=False,
-                temperature=0.3,
             )
             if result:
                 parsed = json.loads(result)

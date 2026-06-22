@@ -36,4 +36,8 @@ scoring:
     Near Support: 0.85
     Resistance Test: 0.80
     Good R/R: 0.75
+    MA Bounce: 0.85
+    Inside Day Breakout: 0.90
+    Bull Flag: 0.80
+    ADX Trend: 0.90
   diversity_soft_threshold: 0.70

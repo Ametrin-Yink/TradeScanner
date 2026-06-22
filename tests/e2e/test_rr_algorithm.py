@@ -13,13 +13,14 @@ def make_test_data():
     trend = np.linspace(0, 20, n)
     noise = np.random.randn(n) * 0.5
     close = base + trend + noise
-    high = close + np.abs(np.random.randn(n)) * 1.5
-    low = close - np.abs(np.random.randn(n)) * 1.5
+    # Small high/low noise so ATR stays moderate
+    high = close + np.abs(np.random.randn(n)) * 0.7
+    low = close - np.abs(np.random.randn(n)) * 0.7
     # Force clear swing highs at index 20 and 40
-    high[20] = base + 18.0
-    high[40] = base + 28.0
-    # Force clear swing lows at index 30
-    low[30] = base + 8.0
+    high[20] = 120.0
+    high[40] = 130.0
+    # Force clear swing low at index 30 (deep enough for prominence=ATR)
+    low[30] = 104.0
     df = pd.DataFrame({'Open': close - 0.3, 'High': high, 'Low': low, 'Close': close})
     return df
 
@@ -46,8 +47,8 @@ def test_cluster_levels_merges_nearby():
 def test_compute_stop_target_uses_swing_low():
     """Nearest quality support below entry becomes stop. Target from nearest resistance or fallback."""
     df = make_test_data()
-    # Use lower entry so forced swing low (~108) is within max_stop_distance
-    entry_price = 112.0
+    # Use lower entry so forced swing low (~104) is within max_stop_distance
+    entry_price = 107.0
     atr = 2.5
     highs, lows = detect_swings(df, order=5)
     low_zones = cluster_levels(lows, tolerance=0.005)
