@@ -42,3 +42,4 @@ scoring:
     Bull Flag: 0.80
     ADX Trend: 0.90
   diversity_soft_threshold: 0.70
+  max_pct_from_single_setup: 0.60

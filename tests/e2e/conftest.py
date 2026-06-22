@@ -204,7 +204,7 @@ def seeded_db(in_memory_db):
 def mock_ai(monkeypatch):
     """Patch core.ai_client.chat to return deterministic responses."""
     def _mock_chat(messages=None, system=None, enable_search=False,
-                   search_query=None, temperature=0.3):
+                   search_query=None, temperature=0.3, **kwargs):
         if 'macro' in (system or '').lower() or 'US stock market' in str(messages):
             import json
             return json.dumps({

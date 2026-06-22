@@ -129,3 +129,60 @@ def test_soft_diversity_max_three():
     candidates = [_make_highlight(symbol=f'S{i}', reason=f'R{i}') for i in range(5)]
     result = _select_diverse(candidates, max_picks=3)
     assert len(result) == 3
+
+
+def test_diversity_cap_60pct():
+    """Excess picks of a single setup type are culled when >60% of total."""
+    from core.sector_analyzer import _enforce_setup_diversity, SectorAnalysis
+
+    # Create 2 sectors with total 8 picks: 5 Breakout (62.5%), 3 Near Support (37.5%)
+    # 5/8 = 62.5% > 60% => remove lowest-scored Breakout
+    sectors = [
+        SectorAnalysis(
+            name='Tech', etf='XLK', stock_count=5,
+            daily_change=1.0, ret_3m=10.0, rs_percentile=70.0,
+            trend='uptrend', above_ema50=True,
+            outlook='Positive',
+        ),
+        SectorAnalysis(
+            name='Energy', etf='XLE', stock_count=3,
+            daily_change=-0.5, ret_3m=5.0, rs_percentile=30.0,
+            trend='neutral', above_ema50=False,
+            outlook='Mixed',
+        ),
+    ]
+
+    # 5 Breakout picks in Tech (with varied scores)
+    for i in range(5):
+        h = _make_highlight(
+            symbol=f'BO{i}', reason='Breakout',
+            rs_percentile=90 - i * 15,  # descending scores
+            volume_ratio=2.0, rr=3.0,
+        )
+        sectors[0].highlights.append(h)
+
+    # 3 Near Support picks in Energy
+    for i in range(3):
+        h = _make_highlight(
+            symbol=f'NS{i}', reason='Near Support',
+            rs_percentile=50 - i * 5,
+            volume_ratio=0.8, rr=2.0,
+        )
+        sectors[1].highlights.append(h)
+
+    _enforce_setup_diversity(sectors)
+
+    # Collect all remaining picks
+    all_remaining = sectors[0].highlights + sectors[1].highlights
+    total = len(all_remaining)
+    breakout_count = sum(1 for h in all_remaining if h.reason == 'Breakout')
+
+    # Breakout must be <= 60% of total
+    assert breakout_count / total <= 0.60, \
+        f"Breakout {breakout_count}/{total} = {breakout_count/total:.0%} exceeds 60% cap"
+
+    # The lowest-scored Breakout should have been removed
+    # BO4 has rs_percentile=30 (lowest). Check it's gone
+    remaining_symbols = {h.symbol for h in all_remaining}
+    assert 'BO4' not in remaining_symbols, \
+        "Lowest-scored Breakout (BO4) should have been removed"
