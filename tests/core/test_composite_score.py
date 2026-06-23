@@ -73,14 +73,15 @@ def test_volatility_penalty_clamped():
 
 
 def test_data_completeness_gate():
-    """Stocks missing both rs_percentile and volume_ratio get -999."""
-    h = _make_highlight(rs_percentile=0, volume_ratio=0)
+    """Stocks missing both rs_percentile and volume_ratio get -999.
+    Only None (not 0) counts as missing — 0 is a legitimate value."""
+    h = _make_highlight(rs_percentile=None, volume_ratio=None)
     assert _composite_score(h) == -999
 
 
 def test_data_completeness_one_missing_ok():
-    """Missing only one field should still score normally."""
-    h = _make_highlight(rs_percentile=0, volume_ratio=1.5)
+    """Missing only one field (None) should still score normally."""
+    h = _make_highlight(rs_percentile=None, volume_ratio=1.5)
     # Should not return -999 since only 1 field missing
     assert _composite_score(h) != -999
     assert _composite_score(h) > 0

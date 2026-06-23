@@ -16,7 +16,7 @@ def test_consistency_check_uptrend_bearish_outlook(seeded_db, mock_ai, monkeypat
     analyzer = SectorAnalyzer(db=seeded_db)
 
     original_ai = analyzer._ai_sector_analysis
-    def mock_ai_fn(sector_name):
+    def mock_ai_fn(sector_name, **kwargs):
         if sector_name == 'Semiconductors':
             return 'Bearish outlook for the sector due to declining demand.', [], []
         return original_ai(sector_name)
@@ -39,7 +39,7 @@ def test_consistency_check_downtrend_bullish_outlook(seeded_db, mock_ai, monkeyp
     monkeypatch.setattr(SectorAnalyzer, '_determine_trend', mock_trend)
 
     original_ai = analyzer._ai_sector_analysis
-    def mock_ai_fn(sector_name):
+    def mock_ai_fn(sector_name, **kwargs):
         if sector_name == 'Software':
             return 'Strong bullish momentum expected to continue accelerating.', [], []
         return original_ai(sector_name)

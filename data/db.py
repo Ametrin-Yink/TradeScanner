@@ -58,7 +58,7 @@ class Database:
         self.create_recommendations_table()
         self._add_performance_indexes()
         self._cleanup_legacy_tables()
-        self._fix_sndk_inactive()
+        self._cleanup_ai_cache()
 
     def _cleanup_legacy_tables(self):
         """Drop legacy tables that are no longer used."""
@@ -69,11 +69,14 @@ class Database:
         conn.commit()
         logger.info("Cleaned up legacy tables: %s", legacy)
 
-    def _fix_sndk_inactive(self):
-        """Mark SNDK as inactive -- the stock is delisted/no longer traded."""
-        with self.get_connection() as conn:
-            conn.execute("UPDATE stocks SET is_active = 0 WHERE symbol = 'SNDK'")
+    def _cleanup_ai_cache(self):
+        """Delete ai_response_cache entries older than 7 days."""
+        try:
+            conn = self.get_connection()
+            conn.execute("DELETE FROM ai_response_cache WHERE created_at < datetime('now', '-7 days')")
             conn.commit()
+        except Exception:
+            pass  # Non-critical cleanup
 
     def _add_performance_indexes(self):
         conn = sqlite3.connect(self.db_path)
@@ -239,6 +242,7 @@ class Database:
             conn = sqlite3.connect(self.db_path)
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA busy_timeout=5000")
             self._local.conn = conn
         return self._local.conn
 
@@ -1566,6 +1570,12 @@ CREATE TABLE IF NOT EXISTS ai_confidence_outcomes (
     outcome_5d_return REAL,
     outcome_10d_return REAL,
     recorded_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS ai_response_cache (
+    cache_key TEXT PRIMARY KEY,
+    response TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now'))
 );
 """
 

@@ -86,45 +86,71 @@ class FocusSummary:
     reasoning: str
 
 
+_config_error_logged = False
+
 def _load_portfolio_config():
-    """Load portfolio config -- delegates to shared module."""
-    return load_config()
+    """Load portfolio config -- delegates to shared module.
+    Wraps in try/except to prevent malformed YAML from crashing the entire pipeline."""
+    global _config_error_logged
+    try:
+        return load_config()
+    except Exception as e:
+        if not _config_error_logged:
+            logger.error(f"Failed to load portfolio_config.yaml: {e}. Using hardcoded defaults.")
+            _config_error_logged = True
+        return {}
 
 
-def _composite_score(c: StockHighlight) -> float:
+def _composite_score(c: StockHighlight, pconfig: dict = None) -> float:
     """Multi-factor composite score for ranking stock highlights.
 
     Components: Momentum (30%), Quality (30%), Structure (25%),
     Volatility penalty (5%), with data completeness gate.
+    Reads multipliers from pconfig when provided (avoids ~2000 YAML parses/scan).
     """
+    if pconfig is None:
+        pconfig = _load_portfolio_config()
+    scoring_cfg = pconfig.get('scoring', {})
+
+    rr_mult = scoring_cfg.get('quality_rr_mult', 5)
+    vol_mult = scoring_cfg.get('quality_vol_mult', 5)
+    bonus_mult = scoring_cfg.get('structure_bonus_mult', 15)
+    trend_mult = scoring_cfg.get('structure_trend_mult', 10)
+    vol_pen_mult = scoring_cfg.get('vol_penalty_mult', 0.5)
+
     # Momentum (30%): RS percentile + streak bonus
     momentum = (c.rs_percentile or 0) * 0.30
     momentum += min((getattr(c, 'rs_consecutive_days_80', 0) or 0) / 2, 10)
 
     # Quality (30%): R:R quality + volume confirmation
-    quality = min(c.rr * 5, 15) + min((c.volume_ratio or 1) * 5, 10)
+    quality = min(c.rr * rr_mult, 15) + min((c.volume_ratio or 1) * vol_mult, 10)
 
     # Structure (25%): setup type bonus + trend alignment
-    pcfg = load_config()
-    scoring_cfg = pcfg.get('scoring', {})
     setup_bonus = scoring_cfg.get('setup_bonus', {
         'Breakout': 1.0, 'Strong Momentum': 0.95,
         'Near Support': 0.85, 'Resistance Test': 0.80, 'Good R/R': 0.75,
         'MA Bounce': 0.85, 'Inside Day Breakout': 0.90,
         'Bull Flag': 0.80, 'ADX Trend': 0.90,
     })
-    trend_above = 1.0 if getattr(c, 'ema_above', False) else 0.4
-    structure = setup_bonus.get(c.reason, 0.5) * 15 + trend_above * 10
+    # Linear ramp around EMA50 instead of binary cliff (6pt penalty from 1-cent move)
+    ema50 = getattr(c, 'ema50', 0) or 0
+    atr = getattr(c, 'atr', 1) or 1
+    if ema50 > 0 and atr > 0:
+        ema_dist = (c.entry - ema50) / max(atr * 2, 0.01)
+        trend_above = max(0.4, min(1.0, 0.7 + ema_dist * 0.15))
+    else:
+        trend_above = 0.7
+    structure = setup_bonus.get(c.reason, 0.5) * bonus_mult + trend_above * trend_mult
 
     # Volatility penalty (5%): high-vol stocks penalized
     atr_pct_val = getattr(c, 'atr_pct', 0.03) or 0.03
-    vol_penalty = -min(atr_pct_val * 100, 10) * 0.5
+    vol_penalty = -min(atr_pct_val * 100, 10) * vol_pen_mult
 
-    # Data completeness gate
+    # Data completeness gate — only check for None, not 0 (0 is legitimate)
     missing = 0
     for field in ['rs_percentile', 'volume_ratio']:
         val = getattr(c, field, None)
-        if val is None or val == 0:
+        if val is None:
             missing += 1
     if missing >= 2:
         return -999
@@ -132,20 +158,28 @@ def _composite_score(c: StockHighlight) -> float:
     return momentum + quality + structure + vol_penalty
 
 
-def _select_diverse(candidates, max_picks=3):
+def _select_diverse(candidates, max_picks=3, pconfig: dict = None):
     """Soft diversity selection: prefer different reasons, allow same-reason
     high-scorers when score >= diversity_soft_threshold * top_score.
 
     Args:
         candidates: list of StockHighlight, pre-sorted by composite score descending.
         max_picks: maximum number of picks to return.
+        pconfig: pre-loaded portfolio config (avoids redundant disk reads).
 
     Returns:
         List of selected StockHighlight (max max_picks).
     """
-    pcfg = _load_portfolio_config()
-    scoring_cfg = pcfg.get('scoring', {})
+    if pconfig is None:
+        pconfig = _load_portfolio_config()
+    scoring_cfg = pconfig.get('scoring', {})
     div_threshold = scoring_cfg.get('diversity_soft_threshold', 0.70)
+
+    if not candidates:
+        return []
+
+    # Pre-compute top score from ALL candidates (not from first selected)
+    top_score = max(_composite_score(c, pconfig) for c in candidates)
 
     selected = []
     used_reasons = set()
@@ -157,14 +191,13 @@ def _select_diverse(candidates, max_picks=3):
             selected.append(c)
             used_reasons.add(c.reason)
         elif len(selected) < max_picks:
-            top_score = _composite_score(selected[0])
-            if _composite_score(c) >= top_score * div_threshold:
+            if _composite_score(c, pconfig) >= top_score * div_threshold:
                 selected.append(c)
 
     return selected
 
 
-def _enforce_setup_diversity(sectors):
+def _enforce_setup_diversity(sectors, pconfig: dict = None):
     """Report-level diversity cap: no single setup type may exceed max_pct
     of the final pick count. Uses the closed-form solution:
         R >= (count - total * max_pct) / (1 - max_pct)
@@ -173,8 +206,9 @@ def _enforce_setup_diversity(sectors):
     Modifies sectors in-place by removing highlights from their lists.
     """
     import math
-    pcfg = _load_portfolio_config()
-    max_pct = pcfg.get('scoring', {}).get('max_pct_from_single_setup', 0.50)
+    if pconfig is None:
+        pconfig = _load_portfolio_config()
+    max_pct = pconfig.get('scoring', {}).get('max_pct_from_single_setup', 0.50)
 
     all_picks = [(s, h) for s in sectors for h in s.highlights]
     if not all_picks:
@@ -196,20 +230,25 @@ def _enforce_setup_diversity(sectors):
             continue
         to_remove = math.ceil(excess / (1 - max_pct))
         candidates = [(s, h) for s in sectors for h in s.highlights if h.reason == reason]
-        candidates.sort(key=lambda x: _composite_score(x[1]))
+        candidates.sort(key=lambda x: _composite_score(x[1], pconfig))
         for i in range(min(to_remove, len(candidates))):
             sector, h = candidates[i]
+            # Guard: never remove the last pick from a sector
+            if len(sector.highlights) <= 1:
+                continue
             if h in sector.highlights:
                 sector.highlights.remove(h)
 
 
-def _deduplicate_across_sectors(sectors):
+def _deduplicate_across_sectors(sectors, pconfig: dict = None):
     """Cross-sector dedup: same symbol in multiple sectors kept only in
     highest-scored sector. Removes duplicates from lower-scored sectors
     and adds '(also in X)' note to the kept pick's detail.
 
     Modifies sectors in-place.
     """
+    if pconfig is None:
+        pconfig = _load_portfolio_config()
     # Collect all (sector, highlight) pairs grouped by symbol
     by_symbol = {}
     for sector in sectors:
@@ -221,7 +260,7 @@ def _deduplicate_across_sectors(sectors):
             continue
 
         # Keep in highest-scored sector, remove from others
-        picks.sort(key=lambda x: _composite_score(x[1]), reverse=True)
+        picks.sort(key=lambda x: _composite_score(x[1], pconfig), reverse=True)
         best_sector, best_h = picks[0]
         removed_names = []
 
@@ -286,10 +325,13 @@ class SectorAnalyzer:
 
         market = self._analyze_market()
         sectors = self._analyze_all_sectors(market)
+        pconfig = _load_portfolio_config()
         self._refresh_sr_levels()
         self._find_stock_highlights(sectors)
-        _deduplicate_across_sectors(sectors)
-        _enforce_setup_diversity(sectors)
+        # Cross-sector dedup removed — stocks naturally belong to multiple sectors.
+        # The same stock in different sectors represents different thematic exposures
+        # (e.g., AMAT is in Semiconductors, Photonics, Robot, and Quantum Computing).
+        _enforce_setup_diversity(sectors, pconfig)
         focus = self._generate_focus_summary(market, sectors)
 
         return {
@@ -423,7 +465,9 @@ class SectorAnalyzer:
                     break
 
         trend = self._determine_trend(daily_change, ret_3m, above_ema50)
-        outlook, drivers, risks = self._ai_sector_analysis(name)
+        outlook, drivers, risks = self._ai_sector_analysis(
+            name, daily_change=daily_change, ret_3m=ret_3m,
+            rs_percentile=rs_percentile, trend=trend, stock_count=stock_count)
 
         # Consistency check: AI outlook vs quantitative trend
         if outlook and trend:
@@ -449,7 +493,8 @@ class SectorAnalyzer:
             risks=risks,
         )
 
-    def _ai_sector_analysis(self, sector_name: str):
+    def _ai_sector_analysis(self, sector_name: str, daily_change=None, ret_3m=None,
+                            rs_percentile=None, trend=None, stock_count=None):
         """Call AI with web search for sector outlook. Returns (outlook, drivers, risks)."""
         system_prompt = (
             f"You are a sector analyst. Analyze search results about the {sector_name} sector. "
@@ -464,6 +509,20 @@ class SectorAnalyzer:
         # Collect stock symbols so AI writes about the actual stocks in this sector
         stock_symbols = [s['symbol'] for s in self.tag_manager.get_tag_stocks(sector_name, self.db)]
         user_msg = f"What is the outlook for the {sector_name} sector today?"
+        # Inject quantitative data so AI isn't blind to market reality
+        quant_parts = []
+        if daily_change is not None:
+            quant_parts.append(f"daily change {daily_change:+.2f}%")
+        if ret_3m is not None:
+            quant_parts.append(f"3-month return {ret_3m:+.1f}%")
+        if rs_percentile is not None:
+            quant_parts.append(f"RS {rs_percentile:.0f}th percentile")
+        if trend:
+            quant_parts.append(f"trend={trend}")
+        if stock_count:
+            quant_parts.append(f"{stock_count} stocks")
+        if quant_parts:
+            user_msg += f" Sector stats: {', '.join(quant_parts)}."
         if stock_symbols:
             symbols_str = ", ".join(stock_symbols[:20])
             user_msg += f" Stocks in this sector: {symbols_str}."
@@ -536,19 +595,32 @@ class SectorAnalyzer:
     # ------------------------------------------------------------------
 
     def _refresh_sr_levels(self):
-        """Compute fresh support/resistance levels for all pipeline stocks."""
+        """Compute fresh support/resistance levels for all pipeline stocks.
+        Parallelized with per-stock timeout to prevent single bad stock stalling scan."""
         from core.swing_detector import compute_sr_for_symbol
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
         symbols = self.tag_manager.get_pipeline_stocks(None, self.db)
         logger.info(f"Computing S/R levels for {len(symbols)} stocks...")
         updated = 0
-        for sym in symbols:
-            try:
-                s, r = compute_sr_for_symbol(self.db, sym)
-                if s or r:
-                    updated += 1
-            except Exception:
-                pass
-        logger.info(f"S/R levels updated for {updated}/{len(symbols)} stocks")
+        failed = 0
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            future_map = {executor.submit(compute_sr_for_symbol, self.db, sym): sym for sym in symbols}
+            for future in as_completed(future_map):
+                sym = future_map[future]
+                try:
+                    s, r = future.result(timeout=30)
+                    if s or r:
+                        updated += 1
+                except FutureTimeoutError:
+                    failed += 1
+                    logger.warning(f"S/R timeout for {sym} (30s)")
+                except Exception:
+                    failed += 1
+        # Kill-switch: alert if >5% of stocks fail
+        total = len(symbols)
+        if total > 0 and failed / total > 0.05:
+            logger.warning(f"S/R refresh: {failed}/{total} stocks failed (>5%% threshold)")
+        logger.info(f"S/R levels updated for {updated}/{total} stocks ({failed} failed)")
 
     # ------------------------------------------------------------------
     # Step 3: Stock Highlights
@@ -556,6 +628,10 @@ class SectorAnalyzer:
 
     def _find_stock_highlights(self, sector_analyses: List[SectorAnalysis]) -> None:
         """Apply technical rules to find stock highlights for each sector. Modifies in-place."""
+        pconfig = _load_portfolio_config()  # Load once, not ~2000x in loops
+        scoring_cfg = pconfig.get('scoring', {})
+        max_entry_gap = pconfig.get('max_entry_distance_pct', 0.10)
+        min_score = scoring_cfg.get('min_composite_score', 20)
         def _ord(n):
             if 10 <= n % 100 <= 20: return f"{n}th"
             suffix = {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')
@@ -737,8 +813,6 @@ class SectorAnalyzer:
                     continue
 
                 # Context-aware entry based on setup type
-                pconfig = _load_portfolio_config()
-                max_entry_gap = pconfig.get('max_entry_distance_pct', 0.10)
 
                 entry = price  # default
                 if reason == 'Near Support':
@@ -769,25 +843,14 @@ class SectorAnalyzer:
                 if stop >= entry:
                     continue
 
-                # Require minimum stop distance: 1.0x ATR for position trades, 0.7x for swing
-                stop_atr_multiple = (entry - stop) / max(atr, 0.01)
-                is_position = reason in ('Strong Momentum', 'ADX Trend')
-                min_atr = 1.0 if is_position else 0.7
-                if stop_atr_multiple < min_atr:
-                    # Widen stop to 1.5x ATR if chart S/R produced too-tight level
-                    atr_stop = entry - atr * 1.5
-                    if atr_stop < entry:
-                        stop = round(atr_stop, 2)
-                    else:
-                        continue  # can't set valid stop
-
-                rr = round((target - entry) / max(entry - stop, 0.01), 1)
+                # R:R with 2-decimal precision to prevent clustering at exact min_rr
+                rr = round((target - entry) / max(entry - stop, 0.01), 2)
                 rr = min(rr, 20.0)
 
-                # Enforce minimum R:R from config
-                pconfig = _load_portfolio_config()
-                scoring_cfg = pconfig.get('scoring', {})
-                min_rr = scoring_cfg.get('min_rr_position', 2.0) if is_position else scoring_cfg.get('min_rr_swing', 2.5)
+                # Enforce minimum R:R from config (stop_target section, not scoring)
+                is_position = reason in ('Strong Momentum', 'ADX Trend')
+                stop_cfg = pconfig.get('stop_target', {})
+                min_rr = stop_cfg.get('min_rr_position', 2.0) if is_position else stop_cfg.get('min_rr_swing', 2.5)
                 if rr < min_rr:
                     continue  # skip — R:R below minimum threshold
 
@@ -847,13 +910,10 @@ class SectorAnalyzer:
                 used_symbols.add(symbol)
 
             # Multi-factor composite scoring with score threshold
-            pcfg = _load_portfolio_config()
-            min_score = pcfg.get('scoring', {}).get('min_composite_score', 20)
+            all_candidates = [c for c in all_candidates if _composite_score(c, pconfig) >= min_score]
+            all_candidates.sort(key=lambda c: _composite_score(c, pconfig), reverse=True)
 
-            all_candidates = [c for c in all_candidates if _composite_score(c) >= min_score]
-            all_candidates.sort(key=lambda c: _composite_score(c), reverse=True)
-
-            sector.highlights = _select_diverse(all_candidates, max_picks=3)
+            sector.highlights = _select_diverse(all_candidates, max_picks=3, pconfig=pconfig)
 
             # Correlation check within sector: flag pairs with high correlation
             selected = sector.highlights
@@ -875,7 +935,7 @@ class SectorAnalyzer:
                     'stop_price': h.stop,
                     'target_price': h.target,
                     'rr': h.rr,
-                    'composite_score': _composite_score(h),
+                    'composite_score': _composite_score(h, pconfig),
                     'position_size': 0,
                     'position_cost': 0,
                     'risk_dollars': 0,

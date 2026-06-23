@@ -350,34 +350,74 @@ class DataFetcher:
             logger.error(f"Error saving {symbol} to database: {e}")
 
     def _compute_tier1_cache_for_symbol(self, symbol: str, df: pd.DataFrame):
-        """Compute tier1 cache metrics (current_price, RS_raw, etc.) and save.
+        """Compute tier1 cache metrics and save.
 
-        Args:
-            symbol: Stock symbol
-            df: DataFrame with OHLCV data
+        Computes all fields needed for setup detection: EMAs, ATR, 60d range,
+        volume ratio, 5d return, in addition to current_price and rs_raw.
         """
         if df is None or df.empty:
             return
 
         cache_data = {}
+        closes = df['close'].values
+        highs = df['high'].values
+        lows = df['low'].values
+        volumes = df['volume'].values
 
         # Current price
-        current_price = float(df['close'].iloc[-1])
+        current_price = float(closes[-1])
         cache_data['current_price'] = current_price
 
         # RS_raw: 3-month relative strength
         rs_raw = None
-        if len(df) >= 63:
-            price_63d_ago = float(df['close'].iloc[-63])
+        if len(closes) >= 63:
+            price_63d_ago = float(closes[-63])
             if price_63d_ago > 0:
                 rs_raw = (current_price / price_63d_ago - 1) * 100
         cache_data['rs_raw'] = rs_raw
 
-        # Average volume over 20 days
-        if len(df) >= 20:
-            cache_data['avg_volume_20d'] = float(df['volume'].tail(20).mean())
-        else:
-            cache_data['avg_volume_20d'] = float(df['volume'].mean())
+        # 60-day high/low
+        if len(closes) >= 60:
+            cache_data['high_60d'] = float(max(highs[-60:]))
+            cache_data['low_60d'] = float(min(lows[-60:]))
+        elif len(closes) > 0:
+            cache_data['high_60d'] = float(max(highs))
+            cache_data['low_60d'] = float(min(lows))
+
+        # EMAs
+        if len(closes) >= 21:
+            ema21_series = pd.Series(closes).ewm(span=21, adjust=False).mean()
+            cache_data['ema21'] = float(ema21_series.iloc[-1])
+        if len(closes) >= 50:
+            ema50_series = pd.Series(closes).ewm(span=50, adjust=False).mean()
+            cache_data['ema50'] = float(ema50_series.iloc[-1])
+
+        # ATR (14-day)
+        if len(closes) >= 15:
+            trs = []
+            for i in range(1, len(closes)):
+                tr = max(highs[i] - lows[i],
+                         abs(highs[i] - closes[i-1]),
+                         abs(lows[i] - closes[i-1]))
+                trs.append(tr)
+            atr = float(pd.Series(trs).tail(14).mean())
+            cache_data['atr'] = atr
+            cache_data['atr_pct'] = round(atr / current_price, 4) if current_price > 0 else 0.03
+
+        # Volume ratio (current vs 20d avg)
+        if len(volumes) >= 20:
+            avg_vol = float(pd.Series(volumes).tail(20).mean())
+            cache_data['avg_volume_20d'] = avg_vol
+            if avg_vol > 0:
+                cache_data['volume_ratio'] = round(float(volumes[-1]) / avg_vol, 2)
+            else:
+                cache_data['volume_ratio'] = 1.0
+        elif len(volumes) > 0:
+            cache_data['avg_volume_20d'] = float(volumes.mean())
+
+        # 5-day return
+        if len(closes) >= 6:
+            cache_data['ret_5d'] = round((closes[-1] / closes[-6] - 1) * 100, 1)
 
         # Save to tier1_cache
         self.db.save_tier1_cache(symbol, cache_data)
@@ -482,6 +522,73 @@ class DataFetcher:
         if failed_symbols:
             logger.warning(f"Failed symbols: {failed_symbols}")
 
+        return results
+
+    def fetch_etf_data(self, etf_symbols: List[str]) -> Dict[str, Dict]:
+        """Fetch current price and metrics for ETFs (SPY, VIX, sector ETFs).
+
+        Downloads recent data, computes daily/3m returns, RS percentile,
+        EMA status, and VIX metrics. Saves to etf_cache table.
+        """
+        import numpy as np
+        results = {}
+        for etf in etf_symbols:
+            try:
+                ticker = yf.Ticker(etf)
+                hist = ticker.history(period="6mo", interval="1d")
+                if hist.empty:
+                    logger.warning(f"ETF {etf}: no data from yfinance")
+                    continue
+
+                current_price = float(hist['Close'].iloc[-1])
+                closes = hist['Close'].values
+                ret_5d = float((closes[-1] / closes[-6] - 1) * 100) if len(closes) >= 6 else None
+                ret_3m = float((closes[-1] / closes[-63] - 1) * 100) if len(closes) >= 63 else None
+
+                ema50 = pd.Series(closes).ewm(span=50, adjust=False).mean().iloc[-1]
+                above_ema50 = bool(current_price > ema50)
+
+                etf_data = {
+                    'symbol': etf,
+                    'current_price': current_price,
+                    'ret_5d': ret_5d,
+                    'ret_3m': ret_3m,
+                    'above_ema50': above_ema50,
+                }
+
+                # VIX-specific metrics
+                if etf in ('VIX', '^VIX', 'VIXM'):
+                    vix_val = current_price
+                    if vix_val < 15:
+                        vix_status = 'low'
+                    elif vix_val < 20:
+                        vix_status = 'normal'
+                    elif vix_val < 30:
+                        vix_status = 'elevated'
+                    else:
+                        vix_status = 'high'
+                    etf_data['vix_current'] = vix_val
+                    etf_data['vix_status'] = vix_status
+
+                self.db.save_etf_cache(etf, etf_data)
+                results[etf] = etf_data
+                logger.info(f"ETF {etf}: ${current_price:.2f}, 5d={ret_5d:+.1f}%")
+
+            except Exception as e:
+                logger.warning(f"ETF {etf} fetch failed: {e}")
+
+        # Compute RS percentiles across all fetched ETFs
+        if len(results) >= 3:
+            rets = {s: d.get('ret_3m', 0) or 0 for s, d in results.items()}
+            ranked = sorted(rets.items(), key=lambda x: x[1])
+            n = len(ranked)
+            for rank, (sym, _) in enumerate(ranked):
+                rs_pct = round(rank / (n - 1) * 100, 1) if n > 1 else 50.0
+                if sym in results:
+                    results[sym]['rs_percentile'] = rs_pct
+                    self.db.save_etf_cache(sym, results[sym])
+
+        logger.info(f"ETF data updated for {len(results)}/{len(etf_symbols)} symbols")
         return results
 
     def _merge_batch_with_db_cache(self, symbol: str, batch_df: pd.DataFrame) -> pd.DataFrame:
@@ -787,4 +894,48 @@ class DataFetcher:
                 results[symbol] = {'sector': 'Unknown', 'industry': 'Unknown'}
 
         return results
+
+
+def fetch_all_pipeline_data(db: Database, symbols: List[str] = None,
+                            etf_symbols: List[str] = None) -> bool:
+    """Fetch fresh stock OHLC and ETF data for the full pipeline.
+
+    Called before a scan to ensure tier1_cache and etf_cache are fresh.
+    Returns True if fetch succeeded (even partially), False on total failure.
+    """
+    logger = logging.getLogger(__name__)
+    fetcher = DataFetcher(db=db)
+
+    # 1. Fetch stock OHLC data
+    if symbols is None:
+        conn = db.get_connection()
+        rows = conn.execute(
+            "SELECT DISTINCT symbol FROM stocks WHERE is_active = 1"
+        ).fetchall()
+        symbols = [r[0] for r in rows]
+
+    if not symbols:
+        logger.warning("No active stocks to fetch")
+        return False
+
+    logger.info(f"Auto-fetch: {len(symbols)} stocks")
+    try:
+        fetcher.fetch_multiple(symbols)
+    except Exception as e:
+        logger.error(f"Stock data fetch failed: {e}")
+
+    # 2. Fetch ETF data
+    if etf_symbols is None:
+        from core.constants import SECTOR_ETFS
+        etf_symbols = ['SPY', 'VIX', 'QQQ'] + [e for e in SECTOR_ETFS.values() if e]
+        # Deduplicate
+        etf_symbols = list(dict.fromkeys(etf_symbols))
+
+    logger.info(f"Auto-fetch: {len(etf_symbols)} ETFs")
+    try:
+        fetcher.fetch_etf_data(etf_symbols)
+    except Exception as e:
+        logger.error(f"ETF data fetch failed: {e}")
+
+    return True
 

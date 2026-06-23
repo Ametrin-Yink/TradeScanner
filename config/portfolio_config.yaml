@@ -1,10 +1,16 @@
 # config/portfolio_config.yaml
 
+# Schedule: auto-fetch and scan timing (EST, 24h format)
+schedule:
+  auto_fetch_before_scan: true # fetch fresh data when scan is triggered
+  data_fetch_time: "06:00" # daily auto-fetch time (NY trading days)
+  scan_time: "07:00" # daily auto-scan time (runs after fetch)
+
 # Stop/target computation parameters
 stop_target:
   max_stop_distance_atr: 2.5 # max stop distance in ATR units
   max_stop_distance_pct: 0.05 # max stop distance as fraction of price
-  min_rr_swing: 2.5 # minimum risk:reward for swing trades
+  min_rr_swing: 1.5 # minimum risk:reward for swing trades
   min_rr_position: 2.0 # minimum risk:reward for position trades
   fib_extension_default: 1.618 # Fibonacci extension multiplier
   atr_multiplier_swing: 1.5 # ATR multiplier for stop fallback
@@ -26,15 +32,20 @@ scoring:
   structure_weight: 0.25
   volatility_penalty_weight: 0.05
   min_composite_score: 20
+  quality_rr_mult: 5 # multiplier for R:R in quality component
+  quality_vol_mult: 5 # multiplier for volume ratio in quality component
+  structure_bonus_mult: 15 # multiplier for setup bonus in structure
+  structure_trend_mult: 10 # multiplier for trend alignment in structure
+  vol_penalty_mult: 0.5 # multiplier for volatility penalty
   setup_bonus:
     Breakout: 1.0
     Strong Momentum: 0.95
-    Near Support: 0.85
-    Resistance Test: 0.80
-    Good R/R: 0.75
-    MA Bounce: 0.85
-    Inside Day Breakout: 0.90
-    Bull Flag: 0.80
     ADX Trend: 0.90
+    Inside Day Breakout: 0.85
+    Bull Flag: 0.80
+    Near Support: 0.75
+    MA Bounce: 0.70
+    Resistance Test: 0.55
+    Good R/R: 0.60
   diversity_soft_threshold: 0.70
   max_pct_from_single_setup: 0.60

@@ -10,9 +10,11 @@ from flask import Flask, jsonify, request
 import os
 from functools import wraps
 from config.settings import settings, REPORTS_DIR, CHARTS_DIR
+from config.portfolio_config import load_config
 from data.db import Database
 from core.sector_analyzer import SectorAnalyzer
 from core.reporter import ReportGenerator
+from core.fetcher import fetch_all_pipeline_data
 from api.config_api import config_api
 
 logging.basicConfig(level=logging.INFO)
@@ -20,7 +22,18 @@ logger = logging.getLogger(__name__)
 
 _last_scan_result = None
 _last_scan_time = None
-_SCAN_CACHE_SECONDS = 3600  # 1 hour
+def _get_cache_ttl():
+    """Return cache TTL: 120s during market hours, 600s otherwise."""
+    import datetime
+    now = datetime.datetime.now()
+    # Market hours: 9:30-16:00 ET, Mon-Fri
+    if now.weekday() < 5:  # Mon-Fri
+        # Convert to ET (rough: US Eastern, this is close enough)
+        # Market hours are roughly 13:30-20:00 UTC
+        hour_utc = now.hour + now.minute / 60
+        if 13.5 <= hour_utc <= 20.0:
+            return 120
+    return 600
 
 API_KEY = os.getenv('API_KEY', 'Ametrin+1')
 
@@ -80,23 +93,34 @@ def trigger_scan():
     """Trigger a sector analysis scan."""
     global _last_scan_result, _last_scan_time
     try:
-        data = request.get_json(silent=True) or {}
-
-        # Check cache (skip if force=true)
-        if not data.get('force') and _last_scan_result and _last_scan_time:
-            age = (datetime.now() - _last_scan_time).total_seconds()
-            if age < _SCAN_CACHE_SECONDS:
-                return jsonify({**_last_scan_result, 'cached': True})
-
         logger.info("Starting sector analysis scan...")
-        scan_db = Database()
-        analyzer = SectorAnalyzer(db=Database())
+        scan_start = datetime.now()
+
+        # Auto-fetch fresh data if configured
+        pconfig = load_config()
+        schedule_cfg = pconfig.get('schedule', {})
+        if schedule_cfg.get('auto_fetch_before_scan', True):
+            logger.info("Auto-fetching pipeline data before scan...")
+            fetch_all_pipeline_data(db)
+
+        analyzer = SectorAnalyzer(db=db)
         result = analyzer.analyze()
-        report_path = ReportGenerator(db=scan_db).generate_report(result)
+        report_path = ReportGenerator(db=db).generate_report(result)
 
         sectors_count = len(result['sectors'])
         total_stocks = sum(s.stock_count for s in result['sectors'])
         highlights = sum(len(s.highlights) for s in result['sectors'])
+
+        # Update workflow_status so /reports shows correct scan time
+        db.save_workflow_status({
+            'run_date': scan_start.strftime('%Y-%m-%d'),
+            'start_time': scan_start.strftime('%H:%M:%S'),
+            'status': 'completed',
+            'total_duration': int((datetime.now() - scan_start).total_seconds()),
+            'symbols_count': total_stocks,
+            'candidates_count': highlights,
+            'report_path': report_path,
+        })
 
         response_data = {
             'status': 'success',
@@ -408,6 +432,18 @@ def get_ohlc(symbol):
     return jsonify({'symbol': symbol.upper(), 'data': data, 'supports': supports, 'resistances': resistances})
 
 
+@app.route('/api/performance', methods=['GET'])
+@require_auth
+def get_performance():
+    """Get performance metrics by setup type from evaluation harness."""
+    try:
+        from core.evaluator import evaluate_recommendations
+        days = request.args.get('days', 90, type=int)
+        result = evaluate_recommendations(db, lookback_days=days)
+        return jsonify({'status': 'ok', 'performance': result})
+    except Exception as e:
+        logger.error(f"Performance check failed: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
 def run_server(host='0.0.0.0', port=None):

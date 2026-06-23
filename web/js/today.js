@@ -11,7 +11,7 @@ export function initToday() {
     progress.textContent = "Starting scan...";
 
     try {
-      const data = await api("POST", "/scan");
+      const data = await api("POST", "/scan", { force: true });
       progress.style.display = "none";
       showToast("Scan complete: " + (data.candidates_found || 0) + " picks");
       await loadToday();

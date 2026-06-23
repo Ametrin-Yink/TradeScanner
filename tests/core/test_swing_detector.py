@@ -238,11 +238,13 @@ def test_compute_stop_target_atr_fallback_stop():
     atr = 3.0
     supports = []
     resistances = [{'level': 110.0, 'count': 2, 'range': (109.5, 110.5)}]
+    config = {'stop_target': {'min_rr_swing': 1.5, 'atr_multiplier_swing': 2.0,
+               'max_stop_distance_atr': 2.5, 'max_stop_distance_pct': 0.05}}
     stop, target, method = compute_stop_target(
         entry_price, atr, supports, resistances, pd.DataFrame(), time_horizon='swing',
-        ema21=0.0, ema50=0.0
+        ema21=0.0, ema50=0.0, config=config
     )
-    expected_stop = entry_price - 1.5 * atr  # 95.5
+    expected_stop = entry_price - 2.0 * atr  # 94.0
     assert abs(stop - expected_stop) < 0.01, f"Expected stop ~{expected_stop}, got {stop}"
     assert method.startswith('atr+')
 
@@ -258,9 +260,11 @@ def test_compute_stop_target_target_iterates_resistances():
         {'level': 108.0, 'count': 2, 'range': (107.5, 108.5)},   # rr=2.0, too low
         {'level': 115.0, 'count': 2, 'range': (114.5, 115.5)},   # rr=3.75, passes
     ]
+    config = {'stop_target': {'min_rr_swing': 2.5, 'atr_multiplier_swing': 2.0,
+               'max_stop_distance_atr': 2.5, 'max_stop_distance_pct': 0.05}}
     stop, target, method = compute_stop_target(
         entry_price, 2.0, supports, resistances, pd.DataFrame(), time_horizon='swing',
-        ema21=0.0, ema50=0.0
+        ema21=0.0, ema50=0.0, config=config
     )
     assert abs(target - 115.0) < 0.01, f"Expected target ~115.0, got {target}"
     assert 'resistance(x2)' in method
@@ -308,18 +312,20 @@ def test_compute_stop_target_atr_3x_fallback():
 
 
 def test_compute_stop_target_risk_multiple_fallback():
-    """Risk-multiple target used as final fallback."""
+    """Risk-multiple target used as final fallback (with 5% buffer to prevent R:R clustering)."""
     entry_price = 100.0
     atr = 2.0
     # Support must be within min(2.5*atr, 5% of price) = min(5.0, 5.0) = 5.0
     supports = [{'level': 95.0, 'count': 2, 'range': (94.5, 95.5)}]
     # risk = 5.0, atr=2.0 → 3*atr = 6.0, rr = 6/5 = 1.2 < 2.5 → ATR 3x fails
-    # risk multiple: target = 100 + 2.5 * 5.0 = 112.5
+    # risk multiple with 5% buffer: target = 100 + 2.5 * 1.05 * 5.0 = 113.125
+    config = {'stop_target': {'min_rr_swing': 2.5, 'atr_multiplier_swing': 2.0,
+               'max_stop_distance_atr': 2.5, 'max_stop_distance_pct': 0.05}}
     stop, target, method = compute_stop_target(
         entry_price, 2.0, supports, [], pd.DataFrame(), time_horizon='swing',
-        ema21=0.0, ema50=0.0
+        ema21=0.0, ema50=0.0, config=config
     )
-    expected_target = entry_price + 2.5 * (entry_price - stop)
+    expected_target = entry_price + 2.5 * 1.05 * (entry_price - stop)
     assert abs(target - expected_target) < 0.01, (
         f"Expected target ~{expected_target}, got {target}"
     )
@@ -331,9 +337,11 @@ def test_min_rr_swing_25():
     entry_price = 100.0
     atr = 2.0
     supports = [{'level': 96.0, 'count': 2, 'range': (95.5, 96.5)}]
+    config = {'stop_target': {'min_rr_swing': 2.5, 'atr_multiplier_swing': 2.0,
+               'max_stop_distance_atr': 2.5, 'max_stop_distance_pct': 0.05}}
     stop, target, method = compute_stop_target(
         entry_price, 2.0, supports, [], pd.DataFrame(), time_horizon='swing',
-        ema21=0.0, ema50=0.0
+        ema21=0.0, ema50=0.0, config=config
     )
     rr = (target - entry_price) / (entry_price - stop)
     assert rr >= 2.5, f"R:R {rr:.2f} should be >= 2.5, got {method}"

@@ -117,53 +117,68 @@ def compute_stop_target(
     time_horizon: str = 'swing',
     ema21: float = 0.0,
     ema50: float = 0.0,
+    config: dict = None,
 ) -> Tuple[Optional[float], Optional[float], str]:
     """Compute stop-loss and target. Returns (None, None, 'skip') if no valid R:R.
 
     Stop: tightest quality (count>=2) support/EMA within max_stop_distance.
     Target: first resistance giving R:R >= min_rr. Falls back to fib / 3xATR / risk_multiple.
     """
-    from config.portfolio_config import load_config
-    cfg = load_config()
+    if config is None:
+        from config.portfolio_config import load_config
+        config = load_config()
+    cfg = config
     sr_cfg = cfg.get('stop_target', {})
     max_dist_atr = sr_cfg.get('max_stop_distance_atr', 2.5)
     max_dist_pct = sr_cfg.get('max_stop_distance_pct', 0.05)
     min_rr = sr_cfg.get('min_rr_swing', 1.5) if time_horizon == 'swing' else sr_cfg.get('min_rr_position', 2.0)
     fib_ext = sr_cfg.get('fib_extension_default', 1.618)
-    atr_mult = sr_cfg.get('atr_multiplier_swing', 1.5)
+    atr_mult = sr_cfg.get('atr_multiplier_swing', 2.0)
 
-    max_stop_distance = min(max_dist_atr * atr, entry_price * max_dist_pct)
+    # ATR-aware distance cap: allows wider stops for high-volatility stocks
+    atr_pct_val = atr / entry_price if entry_price > 0 else 0.02
+    effective_pct = max(max_dist_pct, atr_pct_val * 1.5)
+    max_stop_distance = min(max_dist_atr * atr, entry_price * effective_pct)
 
     # -- Stop: find best valid stop --
     stop = None
     stop_method = None
 
+    # Minimum stop distance in ATR units (0.7x swing, 1.0x position)
+    min_atr = 1.0 if time_horizon == 'position' else 0.7
+    min_stop_distance = min_atr * atr
+
     # Candidates: multi-touch supports + EMAs + ATR fallback
     candidates = []
 
-    # Support zones (multi-touch only -- already filtered by cluster_levels)
+    # Support zones (multi-touch only) — always allowed, even if tight
+    # A tight stop at a real support level IS good risk management
     for z in support_zones:
         if z['level'] < entry_price and (entry_price - z['level']) <= max_stop_distance:
             quality = z.get('count', 1)
             candidates.append((z['level'], f"support(x{z['count']})", quality))
 
-    # EMA21
+    # EMA21 — only if wide enough to avoid noise
     if ema21 > 0 and ema21 < entry_price and (entry_price - ema21) <= max_stop_distance:
-        candidates.append((ema21, 'ema21', 2))
+        dist = entry_price - ema21
+        if dist >= min_stop_distance:
+            candidates.append((ema21, 'ema21', 2))
 
-    # EMA50
+    # EMA50 — only if wide enough
     if ema50 > 0 and ema50 < entry_price and (entry_price - ema50) <= max_stop_distance:
-        candidates.append((ema50, 'ema50', 2))
+        dist = entry_price - ema50
+        if dist >= min_stop_distance:
+            candidates.append((ema50, 'ema50', 2))
 
-    # ATR fallback
+    # ATR fallback (last resort, quality 0)
     atr_stop = entry_price - atr_mult * atr
     if atr_stop < entry_price:
-        candidates.append((atr_stop, 'atr', 1))
+        candidates.append((atr_stop, 'atr', 0))
 
     if not candidates:
         return None, None, 'skip:no_stop'
 
-    # Pick tightest stop among quality candidates (quality >= 2 preferred)
+    # Pick tightest QUALITY stop (count >= 2), then fall back to any stop
     quality_stops = [(l, m) for l, m, q in candidates if q >= 2]
     if quality_stops:
         stop, stop_method = min(quality_stops, key=lambda x: entry_price - x[0])
@@ -177,18 +192,22 @@ def compute_stop_target(
     if risk <= 0:
         return None, None, 'skip:zero_risk'
 
-    # Check resistance zones in ascending order -- pick first with valid R:R
+    # Check resistance zones -- pick the one with R:R closest to min_rr (tightest valid target)
     above = sorted(
         [z for z in resistance_zones if z['level'] > entry_price],
         key=lambda z: z['level']
     )
+    best_res = None
+    best_rr = float('inf')
     for z in above:
         if (z['level'] - entry_price) <= entry_price * 0.50:
             rr = (z['level'] - entry_price) / risk
-            if rr >= min_rr:
-                target = z['level']
-                target_method = f"resistance(x{z['count']})"
-                break
+            if rr >= min_rr and rr < best_rr:
+                best_rr = rr
+                best_res = z
+    if best_res:
+        target = best_res['level']
+        target_method = f"resistance(x{best_res['count']})"
 
     # Fib extension fallback
     if target is None and df is not None and len(df) >= 20:
@@ -209,7 +228,8 @@ def compute_stop_target(
 
     # Risk-multiple fallback
     if target is None:
-        target = entry_price + min_rr * risk
+        # Add 5% buffer above min_rr to prevent R:R clustering at exact minimum
+        target = entry_price + min_rr * 1.05 * risk
         target_method = f'risk_{min_rr}x'
 
     return round(stop, 2), round(target, 2), f"{stop_method}+{target_method}"

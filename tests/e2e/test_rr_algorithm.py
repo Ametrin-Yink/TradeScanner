@@ -71,7 +71,7 @@ def test_compute_stop_target_fallback_atr():
     stop, target, method = compute_stop_target(
         entry_price, atr, [], [], pd.DataFrame(), time_horizon='swing'
     )
-    expected_stop = entry_price - 1.5 * atr  # 109.0
+    expected_stop = entry_price - 1.5 * atr  # 110.5
     assert abs(stop - expected_stop) < 0.01
     assert target > entry_price
     assert method.startswith('atr+')

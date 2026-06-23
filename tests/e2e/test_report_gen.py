@@ -80,9 +80,12 @@ def test_report_embeds_ohlc_data(tmp_path, seeded_db):
     end = content.index(';</script>', start)
     ohlc_data = json.loads(content[start:end])
     assert 'NVDA' in ohlc_data
-    assert len(ohlc_data['NVDA']) > 0
-    assert 'open' in ohlc_data['NVDA'][0]
-    assert 'date' in ohlc_data['NVDA'][0]
+    # New format: {'bars': [...], 'atr': value}
+    entry = ohlc_data['NVDA']
+    bars = entry['bars'] if isinstance(entry, dict) and 'bars' in entry else entry
+    assert len(bars) > 0
+    assert 'open' in bars[0]
+    assert 'date' in bars[0]
     # showChart references embedded data first
     assert 'window._EMBEDDED_OHLC' in content.split('function showChart')[1].split('function drawCandles')[0]
 

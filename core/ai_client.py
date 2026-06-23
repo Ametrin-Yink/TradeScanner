@@ -20,6 +20,25 @@ MODEL = settings.get_secret("dashscope.model") or "deepseek-v4-pro"
 _ai_cache = {}
 
 
+def _warm_ai_cache():
+    """Load today's cached responses from DB into memory."""
+    today = datetime.now().strftime('%Y-%m-%d')
+    try:
+        rows = db.get_connection().execute(
+            "SELECT cache_key, response FROM ai_response_cache WHERE cache_key LIKE ?",
+            (f'%:{today}',)
+        ).fetchall()
+        for row in rows:
+            _ai_cache[row[0]] = row[1]
+        if rows:
+            logger.info(f"Warmed AI cache with {len(rows)} entries from DB")
+    except Exception:
+        pass
+
+
+_warm_ai_cache()
+
+
 def _execute_search(query: str) -> str:
     """Execute a DuckDuckGo web search and return formatted results."""
     try:
@@ -64,6 +83,19 @@ def chat(
     if cache_key in _ai_cache:
         logger.info(f"AI cache hit: {cache_key}")
         return _ai_cache[cache_key]
+
+    # Check DB cache
+    try:
+        row = db.get_connection().execute(
+            "SELECT response FROM ai_response_cache WHERE cache_key = ?",
+            (cache_key,)
+        ).fetchone()
+        if row:
+            logger.info(f"AI DB cache hit: {cache_key}")
+            _ai_cache[cache_key] = row[0]
+            return row[0]
+    except Exception:
+        pass  # DB cache miss is non-critical
 
     url = f"{API_BASE}/chat/completions"
     headers = {
@@ -122,6 +154,22 @@ def chat(
             data = response.json()
             content = data["choices"][0]["message"].get("content", "")
 
+            # Quality gate
+            if content:
+                quality_issues = []
+                if len(content) < 20:
+                    quality_issues.append('too_short')
+                # Check JSON parseability for json_object responses
+                if payload.get('response_format', {}).get('type') == 'json_object':
+                    try:
+                        json.loads(content)
+                    except json.JSONDecodeError:
+                        quality_issues.append('invalid_json')
+
+                if quality_issues:
+                    logger.warning(f"AI quality issues for {cache_key}: {quality_issues}")
+                    # Still return content -- just flag it
+
             # Audit logging
             usage = data.get("usage", {})
             tokens_in = usage.get("prompt_tokens", 0)
@@ -154,6 +202,15 @@ def chat(
             # Cache result
             if content:
                 _ai_cache[cache_key] = content
+                # Persist to DB cache
+                try:
+                    db.get_connection().execute(
+                        "INSERT OR REPLACE INTO ai_response_cache (cache_key, response, created_at) VALUES (?, ?, datetime('now'))",
+                        (cache_key, content)
+                    )
+                    db.get_connection().commit()
+                except Exception:
+                    pass  # DB persistence failure is non-critical
 
             return content or None
 

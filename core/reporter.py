@@ -1,4 +1,5 @@
 """Report generator - sector-first HTML reports with amber palette."""
+import html
 import json
 import logging
 import re
@@ -103,19 +104,22 @@ async function showChart(sym,tagName){
   container.innerHTML='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px"><span style="color:var(--gold);font-weight:600;font-size:13px">'+sym+'</span><span style="color:var(--ash);font-size:10px">loading...</span></div><canvas id="'+anchor+'-canvas" style="width:100%;height:400px"></canvas>';
   // Try embedded data first
   if(window._EMBEDDED_OHLC&&window._EMBEDDED_OHLC[sym]){
+    var ohlc=window._EMBEDDED_OHLC[sym];
+    var bars=ohlc.bars||ohlc;
     var sr=window._EMBEDDED_SR&&window._EMBEDDED_SR[sym]||{s:[],r:[]};
-    drawCandles(anchor+'-canvas',window._EMBEDDED_OHLC[sym],sr.s||[],sr.r||[],sym);
+    var trade=window._EMBEDDED_TRADE&&window._EMBEDDED_TRADE[sym]||null;
+    drawCandles(anchor+'-canvas',bars,sr.s||[],sr.r||[],sym,trade);
     return;
   }
   try{
     var resp=await fetch('/api/data/ohlc/'+sym,{headers:{'Authorization':'Bearer '+_key()}});
     var d=await resp.json();
     if(!d.data||d.data.length===0){container.innerHTML='';return;}
-    drawCandles(anchor+'-canvas',d.data,d.supports||[],d.resistances||[],sym);
+    drawCandles(anchor+'-canvas',d.data,d.supports||[],d.resistances||[],sym,d.trade||null);
   }catch(e){container.innerHTML='<div style="color:var(--ember)">Chart load failed</div>';}
 }
 
-function drawCandles(canvasId,data,supports,resistances,sym){
+function drawCandles(canvasId,data,supports,resistances,sym,trade){
   var c=document.getElementById(canvasId);if(!c)return;
   var ctx=c.getContext('2d');
   var W=c.parentNode.clientWidth||900;c.width=W;c.height=400;
@@ -124,13 +128,13 @@ function drawCandles(canvasId,data,supports,resistances,sym){
   ctx.fillStyle='#0b1019';ctx.fillRect(0,0,W,H);
 
   var curPrice=data[data.length-1].close;
-  var cutoff=curPrice*0.50;
-  var nearSupports=supports.filter(function(s){return curPrice-s<=cutoff;});
-  var nearResistances=resistances.filter(function(r){return r-curPrice<=cutoff;});
-
+  // Include trade levels in price range
   var prices=[];data.forEach(function(d){prices.push(d.high,d.low);});
+  var nearSupports=supports.filter(function(s){return curPrice-s<=curPrice*0.15;});
+  var nearResistances=resistances.filter(function(r){return r-curPrice<=curPrice*0.15;});
   nearSupports.forEach(function(s){prices.push(s);});
   nearResistances.forEach(function(r){prices.push(r);});
+  if(trade){prices.push(trade.entry,trade.stop,trade.target);}
   var minP=Math.min.apply(null,prices),maxP=Math.max.apply(null,prices);
   var range=maxP-minP||1;
   var barW=Math.max(1.5,(pw/data.length)*0.7);barW=Math.min(barW,8);
@@ -163,24 +167,55 @@ function drawCandles(canvasId,data,supports,resistances,sym){
     ctx.fillRect(x,Math.min(oy,cy),barW,bh);
   }
 
+  // Entry / Stop / Target lines
+  if(trade){
+    ctx.setLineDash([]);
+    // Entry — gold dashed
+    var ey=margin.top+(maxP-trade.entry)/range*ph;
+    ctx.strokeStyle='rgba(212,168,83,0.9)';ctx.lineWidth=1.5;ctx.setLineDash([6,3]);
+    ctx.beginPath();ctx.moveTo(margin.left,ey);ctx.lineTo(W-margin.right,ey);ctx.stroke();
+    ctx.fillStyle='#d4a853';ctx.font='bold 10px monospace';
+    ctx.fillText('E $'+trade.entry.toFixed(2),W-margin.right-100,ey-3);
+    ctx.setLineDash([]);
+
+    // Stop — red dotted
+    var sy=margin.top+(maxP-trade.stop)/range*ph;
+    ctx.strokeStyle='rgba(224,85,61,0.9)';ctx.lineWidth=1.5;ctx.setLineDash([3,4]);
+    ctx.beginPath();ctx.moveTo(margin.left,sy);ctx.lineTo(W-margin.right,sy);ctx.stroke();
+    ctx.fillStyle='#e0553d';ctx.font='bold 10px monospace';
+    ctx.fillText('S $'+trade.stop.toFixed(2),W-margin.right-100,sy-3);
+    ctx.setLineDash([]);
+
+    // Target — green dotted
+    var ty=margin.top+(maxP-trade.target)/range*ph;
+    ctx.strokeStyle='rgba(126,203,90,0.9)';ctx.lineWidth=1.5;ctx.setLineDash([3,4]);
+    ctx.beginPath();ctx.moveTo(margin.left,ty);ctx.lineTo(W-margin.right,ty);ctx.stroke();
+    ctx.fillStyle='#7ecb5a';ctx.font='bold 10px monospace';
+    ctx.fillText('T $'+trade.target.toFixed(2),W-margin.right-100,ty-3);
+    ctx.setLineDash([]);
+  }
+
+  // S/R levels
   ctx.setLineDash([]);
   for(var i=0;i<nearSupports.length;i++){
-    var sy=margin.top+(maxP-nearSupports[i])/range*ph;
-    ctx.strokeStyle='rgba(126,203,90,0.8)';ctx.lineWidth=1.5;
-    ctx.beginPath();ctx.moveTo(margin.left,sy);ctx.lineTo(W-margin.right,sy);ctx.stroke();
-    ctx.fillStyle='#7ecb5a';ctx.font='bold 11px monospace';
-    ctx.fillText('S'+i+': $'+nearSupports[i].toFixed(2),margin.left+2,sy-3);
+    var sy2=margin.top+(maxP-nearSupports[i])/range*ph;
+    ctx.strokeStyle='rgba(126,203,90,0.5)';ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(margin.left,sy2);ctx.lineTo(W-margin.right,sy2);ctx.stroke();
+    ctx.fillStyle='#7ecb5a';ctx.font='9px monospace';
+    ctx.fillText('s'+i+' $'+nearSupports[i].toFixed(2),margin.left+2,sy2-2);
   }
   for(var i=0;i<nearResistances.length;i++){
-    var ry=margin.top+(maxP-nearResistances[i])/range*ph;
-    ctx.strokeStyle='rgba(224,85,61,0.8)';ctx.lineWidth=1.5;
-    ctx.beginPath();ctx.moveTo(margin.left,ry);ctx.lineTo(W-margin.right,ry);ctx.stroke();
-    ctx.fillStyle='#e0553d';ctx.font='bold 11px monospace';
-    ctx.fillText('R'+i+': $'+nearResistances[i].toFixed(2),margin.left+2,ry-3);
+    var ry2=margin.top+(maxP-nearResistances[i])/range*ph;
+    ctx.strokeStyle='rgba(224,85,61,0.4)';ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(margin.left,ry2);ctx.lineTo(W-margin.right,ry2);ctx.stroke();
+    ctx.fillStyle='#e0553d';ctx.font='9px monospace';
+    ctx.fillText('r'+i+' $'+nearResistances[i].toFixed(2),margin.left+2,ry2-2);
   }
 
   var title=document.getElementById(canvasId).parentNode.querySelector('div');
-  if(title)title.innerHTML='<span style="color:var(--gold);font-weight:600;font-size:13px">'+sym+'</span><span style="color:var(--ash);font-size:10px">S:'+nearSupports.length+' | R:'+nearResistances.length+'</span>';
+  var info='S:'+nearSupports.length+' | R:'+nearResistances.length;
+  if(trade)info+=' | Entry:$'+trade.entry.toFixed(2)+' Stop:$'+trade.stop.toFixed(2)+' Target:$'+trade.target.toFixed(2);
+  if(title)title.innerHTML='<span style="color:var(--gold);font-weight:600;font-size:13px">'+sym+'</span><span style="color:var(--ash);font-size:10px">'+info+'</span>';
 }
 </script>"""
 
@@ -266,7 +301,7 @@ function setBarSort(mode) {
 
 STATS_STRIP = """<div class="stats-strip"><span class="stats-item"><b>SPY</b> ${spy_price:.2f} <span class="{spy_cls}">{spy_5d:+.2f}% 5d</span></span><span class="stats-item"><b>VIX</b> {vix:.1f}</span><span class="stats-item">{regime}</span></div>"""
 
-SECTOR_CARD = """<div class="card tag-card" id="tag-{anchor}" style="display:none">
+SECTOR_CARD = """<div class="card tag-card" id="tag-{anchor}" style="display:block">
 <div class="card-header fold-toggle" onclick="this.classList.toggle('collapsed');this.nextElementSibling.classList.toggle('hidden')"><h3>{confidence_dot}{name}</h3><span class="badge {chg_cls}">{daily_change}</span></div>
 <div class="fold-body"><div class="detail-row">{outlook}</div>
 <div class="detail-row" style="margin-top:4px"><span class="detail-label">Drivers</span></div>
@@ -277,7 +312,7 @@ SECTOR_CARD = """<div class="card tag-card" id="tag-{anchor}" style="display:non
 <div class="chart-inline" id="chart-{anchor}"></div>
 </div></div>"""
 
-HIGHLIGHT_ROW = """<tr><td class="sym sym-link" onclick="showChart('{symbol}','{tag_name}')" title="{liquidity_warning}">{symbol}</td><td class="num">${price:.2f}</td><td><span class="badge {reason_cls}" title="{horizon}">{reason}</span></td><td class="num">{rs_percentile}</td><td class="num {dist_cls}">{entry_str}</td><td class="num {stop_cls}">{stop_display}</td><td class="num">${target:.2f}</td><td class="num">{rr}</td></tr>"""
+HIGHLIGHT_ROW = """<tr><td class="sym sym-link" onclick="showChart('{symbol_js}','{tag_js}')" title="{liquidity_warning}{corr_note}">{symbol}{earnings_badge}</td><td class="num"><b>{rr}</b></td><td><span class="badge {reason_cls}" title="{horizon}">{reason}</span></td><td class="num">${price:.2f}</td><td class="num {dist_cls}">{entry_str}</td><td class="num {stop_cls}">{stop_display}</td><td class="num">${target:.2f}</td><td class="num">{rs_percentile}</td></tr>"""
 
 
 class ReportGenerator:
@@ -292,7 +327,7 @@ class ReportGenerator:
         if not yesterday_report.exists():
             return ""
         yesterday_text = yesterday_report.read_text(encoding='utf-8')
-        yesterday_symbols = set(re.findall(r'class="sym[^"]*">([A-Z]+)', yesterday_text))
+        yesterday_symbols = set(re.findall(r'class="sym[^"]*">([A-Z0-9.]+)', yesterday_text))
         today_symbols = set(h.symbol for h in highlights)
         parts = []
         new_picks = today_symbols - yesterday_symbols
@@ -346,7 +381,9 @@ class ReportGenerator:
             sign = '+' if chg >= 0 else ''
             rr_vals = [h.rr for h in s.highlights if h.rr > 0]
             avg_rr = round(sum(rr_vals) / len(rr_vals), 2) if rr_vals else 0
-            bars.append(f'<div class="bar-item" onclick="showTag(\'{s.name}\')" title="{s.name}: {sign}{chg:.2f}%" data-change="{chg}" data-rr="{avg_rr}"><span class="bar-label">{s.name}</span><div class="bar-fill" style="width:{width_pct:.0f}%;background:{bg}"></div><span class="bar-pct" style="color:{pct_clr}">{sign}{chg:.1f}%</span></div>')
+            safe_tag_name = html.escape(s.name)
+            tag_name_js = s.name.replace("'", "\\'")
+            bars.append(f'<div class="bar-item" onclick="showTag(\'{tag_name_js}\')" title="{safe_tag_name}: {sign}{chg:.2f}%" data-change="{chg}" data-rr="{avg_rr}"><span class="bar-label">{safe_tag_name}</span><div class="bar-fill" style="width:{width_pct:.0f}%;background:{bg}"></div><span class="bar-pct" style="color:{pct_clr}">{sign}{chg:.1f}%</span></div>')
         parts.append(BAR_CHART_HTML.format(bars=''.join(bars)))
         parts.append(BAR_CHART_JS)
         parts.append(BAR_SORT_JS)
@@ -362,14 +399,14 @@ function exportHighlightsCSV() {
       var cells = tr.querySelectorAll("td");
       if (cells.length >= 8) {
         rows.push([
-          cells[0].textContent,
+          cells[0].textContent.trim(),  // Symbol
           sector,
-          cells[2].textContent,
-          cells[3].textContent,
-          cells[4].textContent,
-          cells[5].textContent,
-          cells[6].textContent,
-          cells[7].textContent,
+          cells[2].textContent.trim(),  // Setup
+          cells[7].textContent.trim(),  // RS (now last column)
+          cells[4].textContent.trim(),  // Entry+Dist
+          cells[5].textContent.trim(),  // Stop
+          cells[6].textContent.trim(),  // Target
+          cells[1].textContent.trim(),  // R:R (now column 2)
         ]);
       }
     });
@@ -389,17 +426,17 @@ function exportHighlightsCSV() {
 
         # Market Overview
         if market.reasoning:
-            parts.append(f'<div class="card"><div class="detail-row">{market.reasoning}</div>')
+            parts.append(f'<div class="card"><div class="detail-row">{html.escape(market.reasoning)}</div>')
             if market.macro_drivers:
                 parts.append('<div class="detail-label" style="margin-top:6px">Drivers</div>')
                 for d in market.macro_drivers[:2]:
                     txt = d['text'] if isinstance(d, dict) else d
-                    parts.append(f'<span class="driver">{txt}</span>')
+                    parts.append(f'<span class="driver">{html.escape(txt)}</span>')
             if market.risks:
                 parts.append('<div class="detail-label" style="margin-top:6px">Risks</div>')
                 for r in market.risks[:1]:
                     txt = r['text'] if isinstance(r, dict) else r
-                    parts.append(f'<span class="risk">{txt}</span>')
+                    parts.append(f'<span class="risk">{html.escape(txt)}</span>')
             parts.append('</div>')
 
         # Positioning
@@ -420,6 +457,11 @@ function exportHighlightsCSV() {
             prior_recs = []
 
         if prior_recs:
+            # Show only resolved trades from prior days (exclude today + still-active)
+            today_str = datetime.now().strftime('%Y-%m-%d')
+            prior_recs = [r for r in prior_recs
+                          if r.get('trade_date', '') != today_str
+                          and r.get('status', 'active') != 'active']
             # Dedup: same symbol+date kept only once
             seen = set()
             deduped = []
@@ -492,18 +534,20 @@ function exportHighlightsCSV() {
             drivers_html = ''
             for d in (s.key_drivers or []):
                 txt = d['text'] if isinstance(d, dict) else d
-                drivers_html += f'<span class="driver">{txt}</span>'
+                drivers_html += f'<span class="driver">{html.escape(txt)}</span>'
             risks_html = ''
             for r in (s.risks or []):
                 txt = r['text'] if isinstance(r, dict) else r
-                risks_html += f'<span class="risk">{txt}</span>'
+                risks_html += f'<span class="risk">{html.escape(txt)}</span>'
 
             highlights_html = ''
             if s.highlights:
                 def build_row(h):
-                    reason_display = h.reason
+                    reason_display = html.escape(h.reason)
                     rr_str = f"{h.rr:.1f}x" if h.rr > 0 else "--"
                     horizon_str = getattr(h, 'time_horizon', '--')
+                    symbol_js = h.symbol.replace("'", "\\'")  # safe for JS single-quoted string
+                    tag_js = s.name.replace("'", "\\'")
                     # RS percentile column
                     rs_val = getattr(h, 'rs_percentile', None)
                     if rs_val is not None:
@@ -520,7 +564,7 @@ function exportHighlightsCSV() {
                     if entry_type == 'limit':
                         entry_str = f"{entry_price} (Limit)"
                     elif entry_type == 'stop-limit':
-                        entry_str = f"{entry_price} (Stop)"
+                        entry_str = f"{entry_price} (Stop-Lmt)"
                     else:
                         entry_str = f"{entry_price} now"
                     # Append distance to entry when not "now" or not market
@@ -541,19 +585,24 @@ function exportHighlightsCSV() {
                     else:
                         stop_display = f"${h.stop:.2f}"
                     liquidity_warning = getattr(h, 'liquidity_warning', None) or ''
+                    ew = getattr(h, 'earnings_warning', None) or ''
+                    cw = getattr(h, 'correlation_warning', None) or ''
+                    earnings_badge = f' <span class="badge badge-down" style="font-size:8px" title="Earnings risk">E</span>' if ew else ''
+                    corr_note = f' | Corr: {cw}' if cw else ''
                     return HIGHLIGHT_ROW.format(
-                        symbol=h.symbol, tag_name=s.name, price=h.price,
+                        symbol=html.escape(h.symbol), symbol_js=symbol_js, tag_js=tag_js, price=h.price,
                         reason=reason_display, reason_cls=reason_map.get(h.reason, 'badge-neutral'),
                         entry_str=entry_str, dist_cls=dist_cls,
                         stop_display=stop_display, stop_cls=stop_cls, target=h.target, rr=rr_str,
                         horizon=horizon_str, rs_percentile=rs_display,
-                        liquidity_warning=liquidity_warning)
+                        liquidity_warning=liquidity_warning,
+                        earnings_badge=earnings_badge, corr_note=corr_note)
 
                 active_threshold = 0.05
                 active = [h for h in s.highlights if getattr(h, 'entry_distance_pct', 0) <= active_threshold * 100]
                 watch = [h for h in s.highlights if getattr(h, 'entry_distance_pct', 0) > active_threshold * 100]
 
-                table_header = '<table style="margin-top:8px"><thead><tr><th>Symbol</th><th>Price</th><th>Setup</th><th>RS</th><th>Entry+Dist</th><th>Stop</th><th>Target</th><th>R:R</th></tr></thead><tbody>'
+                table_header = '<table style="margin-top:8px"><thead><tr><th>Symbol</th><th>R:R</th><th>Setup</th><th>Price</th><th>Entry+Dist</th><th>Stop</th><th>Target</th><th>RS</th></tr></thead><tbody>'
 
                 parts_html = []
                 if active:
@@ -564,8 +613,9 @@ function exportHighlightsCSV() {
                     parts_html.append(table_header + ''.join(build_row(h) for h in watch) + '</tbody></table>')
                 highlights_html = ''.join(parts_html)
 
-            outlook_html = s.outlook
-            if not s.outlook or s.outlook == f"{s.name} sector: no AI analysis available.":
+            outlook_html = html.escape(s.outlook) if s.outlook else s.outlook
+            safe_sector_name = html.escape(s.name)
+            if not s.outlook or outlook_html == f"{safe_sector_name} sector: no AI analysis available.":
                 outlook_html = '<span style="color:var(--ash);font-style:italic">AI analysis unavailable -- using fallback data</span>'
 
             if s.outlook and 'unavailable' not in s.outlook:
@@ -577,7 +627,7 @@ function exportHighlightsCSV() {
                 confidence_dot = '<span style="color:var(--ash)" title="AI unavailable">●</span> '
 
             parts.append(SECTOR_CARD.format(
-                name=s.name, anchor=anchor, chg_cls=chg_cls, daily_change=chg_str,
+                name=safe_sector_name, anchor=anchor, chg_cls=chg_cls, daily_change=chg_str,
                 confidence_dot=confidence_dot, outlook=outlook_html,
                 drivers=drivers_html or '<span class="dim">--</span>',
                 risks=risks_html or '<span class="dim">--</span>',
@@ -618,6 +668,16 @@ function exportHighlightsCSV() {
                                     'close': float(row['close'])
                                 })
                             all_ohlc[h.symbol] = records
+                            # Add ATR for chart cutoff
+                            cache = self.db.get_tier1_cache(h.symbol)
+                            atr_value = 0
+                            if cache:
+                                try:
+                                    atr_pct = float(cache.get('atr_pct', 0) or 0)
+                                    atr_value = atr_pct * float(df_tail.iloc[-1]['close'])
+                                except (ValueError, TypeError):
+                                    pass
+                            all_ohlc[h.symbol] = {'bars': records, 'atr': atr_value}
 
         parts.append('<script>window._EMBEDDED_OHLC = ')
         parts.append(json.dumps(all_ohlc))
@@ -640,6 +700,18 @@ function exportHighlightsCSV() {
                                 pass
         parts.append('<script>window._EMBEDDED_SR = ')
         parts.append(json.dumps(all_sr))
+        parts.append(';</script>')
+
+        # Embed entry/stop/target per symbol for chart trade lines
+        all_trade = {}
+        for sector in sectors:
+            for h in sector.highlights:
+                if h.symbol not in all_trade:
+                    all_trade[h.symbol] = {
+                        'entry': h.entry, 'stop': h.stop, 'target': h.target
+                    }
+        parts.append('<script>window._EMBEDDED_TRADE = ')
+        parts.append(json.dumps(all_trade))
         parts.append(';</script>')
         parts.append('<script src="../js/table-utils.js"></script>')
         parts.append('</body></html>')
